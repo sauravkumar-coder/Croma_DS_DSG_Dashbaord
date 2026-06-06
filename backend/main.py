@@ -108,6 +108,84 @@ def health():
     return {"status": "ok"}
 
 
+@app.post("/api/demo/load")
+def load_demo_data():
+    """Generate deterministic demo data and write it to the data directory.
+
+    Returns the same shape as /api/upload/sales so the frontend can
+    treat both responses identically.
+    """
+    import random
+
+    rng = random.Random(42)
+
+    states = [
+        "Maharashtra", "Delhi", "Karnataka", "Tamil Nadu",
+        "Gujarat", "Rajasthan", "West Bengal", "Telangana",
+    ]
+    categories = [
+        "Electronics", "Large Appliances", "Mobile & Tablets",
+        "Computers", "Small Appliances",
+    ]
+    city_map = {
+        "Maharashtra": ["Mumbai", "Pune", "Nagpur", "Nashik"],
+        "Delhi":       ["Connaught Place", "Lajpat Nagar", "Rohini", "Dwarka"],
+        "Karnataka":   ["Bengaluru", "Mysuru", "Hubballi", "Mangaluru"],
+        "Tamil Nadu":  ["Chennai", "Coimbatore", "Madurai", "Salem"],
+        "Gujarat":     ["Ahmedabad", "Surat", "Vadodara", "Rajkot"],
+        "Rajasthan":   ["Jaipur", "Jodhpur", "Kota", "Udaipur"],
+        "West Bengal": ["Kolkata", "Howrah", "Siliguri", "Durgapur"],
+        "Telangana":   ["Hyderabad", "Warangal", "Karimnagar", "Nizamabad"],
+    }
+    months = [
+        "Jan-2024", "Feb-2024", "Mar-2024", "Apr-2024",
+        "May-2024", "Jun-2024", "Jul-2024", "Aug-2024",
+        "Sep-2024", "Oct-2024", "Nov-2024", "Dec-2024",
+    ]
+
+    sales_rows = []
+    target_rows = []
+
+    for i in range(1, 31):
+        state = states[(i - 1) % len(states)]
+        cat = categories[(i - 1) % len(categories)]
+        city = city_map[state][(i - 1) % len(city_map[state])]
+        store_id = f"CR{i:03d}"
+        base = rng.randint(400_000, 2_000_000)
+
+        row: dict = {
+            "Store_ID":   store_id,
+            "Store_Name": f"Croma {city} {(i - 1) // len(states) + 1}",
+            "State":      state,
+            "Category":   cat,
+        }
+        for m in months:
+            row[m] = round(base * rng.uniform(0.65, 1.40) / 1000) * 1000
+
+        sales_rows.append(row)
+        target_rows.append({
+            "Store_ID":       store_id,
+            "Monthly_Target": round(base * 1.10 / 100_000) * 100_000,
+        })
+
+    sales_df = pd.DataFrame(sales_rows)
+    sales_df.to_excel(SALES_FILE, index=False)
+
+    target_df = pd.DataFrame(target_rows)
+    target_df.to_excel(TARGETS_FILE, index=False)
+
+    try:
+        stores = parse_sales(SALES_FILE)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "stores": len(stores),
+        "months": _extract_months(stores),
+    }
+
+
 @app.post("/api/upload/sales")
 async def upload_sales(file: UploadFile = File(...)):
     """Save sales XLSX and return a summary."""
