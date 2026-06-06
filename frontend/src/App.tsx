@@ -19,6 +19,7 @@ import StateAnalytics from './components/tabs/StateAnalytics'
 import RisingStars from './components/tabs/RisingStars'
 import FallenStars from './components/tabs/FallenStars'
 import RevenueMovers from './components/tabs/RevenueMovers'
+import StoreDeepDive from './components/tabs/StoreDeepDive'
 import { cn } from './lib/utils'
 
 // ── Tab registry ──────────────────────────────────────────────────────────────
@@ -367,7 +368,9 @@ export default function App() {
                           ? <FallenStars filters={filters} />
                           : activeTab === 'revenue-movers'
                             ? <RevenueMovers filters={filters} />
-                            : <TabPlaceholder label={currentTab.label} filters={filters} />
+                            : activeTab === 'store-deep-dive'
+                              ? <StoreDeepDive filters={filters} />
+                              : <TabPlaceholder label={currentTab.label} filters={filters} />
             }
           </motion.div>
         </AnimatePresence>
