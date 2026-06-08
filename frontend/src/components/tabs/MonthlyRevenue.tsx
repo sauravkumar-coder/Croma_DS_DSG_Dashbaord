@@ -27,6 +27,78 @@ const PHASE_COLOR = {
   recent: '#3b82f6',  // blue-500
 } as const
 
+// ── Box-plot statistical helpers ──────────────────────────────────────────────
+
+function pctile(sorted: number[], p: number): number {
+  const idx = (p / 100) * (sorted.length - 1)
+  const lo = Math.floor(idx), hi = Math.ceil(idx)
+  return lo === hi ? sorted[lo] : sorted[lo] + (idx - lo) * (sorted[hi] - sorted[lo])
+}
+
+/** Format a number using Indian comma notation (e.g. ₹2,98,450) */
+function fmtIndian(n: number): string {
+  const abs = Math.round(Math.abs(n))
+  const sign = n < 0 ? '-' : ''
+  const s = abs.toString()
+  if (s.length <= 3) return `${sign}₹${s}`
+  const last3 = s.slice(-3)
+  const rest = s.slice(0, -3)
+  const groups: string[] = []
+  for (let i = rest.length; i > 0; i -= 2) groups.unshift(rest.slice(Math.max(0, i - 2), i))
+  return `${sign}₹${groups.join(',')},${last3}`
+}
+
+interface MonthStats {
+  n: number; q1: number; median: number; q3: number; mean: number
+  iqr: number; minR: number; maxR: number; outliers: number
+}
+
+function computeMonthStats(values: number[]): MonthStats | null {
+  const sorted = [...values].sort((a, b) => a - b)
+  const n = sorted.length
+  if (n === 0) return null
+  const q1 = pctile(sorted, 25)
+  const median = pctile(sorted, 50)
+  const q3 = pctile(sorted, 75)
+  const mean = sorted.reduce((s, v) => s + v, 0) / n
+  const iqr = q3 - q1
+  const lf = q1 - 1.5 * iqr
+  const uf = q3 + 1.5 * iqr
+  const minR = sorted.find(v => v >= lf) ?? sorted[0]
+  const maxR = [...sorted].reverse().find(v => v <= uf) ?? sorted[n - 1]
+  const outliers = sorted.filter(v => v < lf || v > uf).length
+  return { n, q1, median, q3, mean, iqr, minR, maxR, outliers }
+}
+
+function buildBoxHover(month: string, stats: MonthStats | null): string {
+  if (!stats) return `<b>${month}</b><extra></extra>`
+  const skew = stats.mean > stats.median * 1.15
+    ? 'Right-skewed: Mean > Median (large stores inflate average)'
+    : stats.mean < stats.median * 0.85
+      ? 'Left-skewed: Mean < Median'
+      : 'Balanced: Mean ≈ Median (evenly distributed stores)'
+  const wideIqr = stats.iqr > stats.median ? ' · Wide IQR — high variation across stores' : ''
+  const outlierLine = stats.outliers > 0
+    ? `Outliers in raw data: <b>${stats.outliers} Stores</b>`
+    : 'No outliers detected'
+  return [
+    `<b>${month}</b>`,
+    `<b>Store Coverage</b>`,
+    `Total Stores: <b>${stats.n}</b>`,
+    `<b>Distribution Statistics</b>`,
+    `Min Revenue:    <b>${fmtIndian(stats.minR)}</b>`,
+    `Q1 (25th pct):  <b>${fmtIndian(stats.q1)}</b>`,
+    `Median Revenue: <b>${fmtIndian(stats.median)}</b>`,
+    `Mean Revenue:   <b>${fmtIndian(stats.mean)}</b>`,
+    `Q3 (75th pct):  <b>${fmtIndian(stats.q3)}</b>`,
+    `Max Revenue:    <b>${fmtIndian(stats.maxR)}</b>`,
+    `<b>Spread</b>`,
+    `IQR: <b>${fmtIndian(stats.iqr)}</b>`,
+    outlierLine,
+    `<i>${skew}${wideIqr}</i>`,
+  ].join('<br>') + '<extra></extra>'
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 interface Props { filters: FilterState }
@@ -138,19 +210,62 @@ export default function MonthlyRevenue({ filters }: Props) {
     return anns
   }, [early, mid, recent])
 
+  // ── Box-plot y-axis with Indian number formatting ──────────────────────────
+  const boxYAxis = useMemo(() => {
+    const allVals = fm.flatMap(m => fs.map(s => s.monthly_sales[m] ?? 0))
+    const maxVal = allVals.length > 0 ? Math.max(...allVals) : 0
+    if (maxVal === 0) return { ...PT_AXIS, title: { text: 'Store Revenue' } }
+    const rough = maxVal / 5
+    const exp = Math.pow(10, Math.floor(Math.log10(rough)))
+    const norm = rough / exp
+    const step = (norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10) * exp
+    const tickvals: number[] = []
+    for (let t = 0; t <= maxVal * 1.05; t += step) tickvals.push(Math.round(t))
+    return {
+      ...PT_AXIS,
+      title: { text: 'Store Revenue' },
+      tickmode: 'array' as const,
+      tickvals,
+      ticktext: tickvals.map(fmtIndian),
+    }
+  }, [fs, fm])
+
   // ── Box-plot traces ────────────────────────────────────────────────────────
-  const boxTraces = useMemo(() =>
-    fm.map((month, i) => ({
-      type: 'box' as const,
-      y: fs.map(s => s.monthly_sales[month] ?? 0),
-      name: month,
-      boxpoints: false as const,
-      marker:    { color: STATE_PALETTE[i % STATE_PALETTE.length] },
-      line:      { color: STATE_PALETTE[i % STATE_PALETTE.length], width: 1.5 },
-      fillcolor: `${STATE_PALETTE[i % STATE_PALETTE.length]}28`,
-      hovertemplate: `%{y:,.0f}<extra>${month}</extra>`,
-    })),
-  [fs, fm])
+  const boxTraces = useMemo(() => {
+    const traces: object[] = fm.map((month, i) => {
+      const values = fs.map(s => s.monthly_sales[month] ?? 0)
+      const stats = computeMonthStats(values)
+      const color = STATE_PALETTE[i % STATE_PALETTE.length]
+      return {
+        type: 'box' as const,
+        y: values,
+        name: month,
+        boxpoints: false as const,
+        marker: { color },
+        line: { color, width: 2 },
+        fillcolor: `${color}3a`,
+        hovertemplate: buildBoxHover(month, stats),
+      }
+    })
+
+    // Mean diamond markers as a separate scatter trace
+    const means = fm.map(m => {
+      const vals = fs.map(s => s.monthly_sales[m] ?? 0)
+      return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0
+    })
+    traces.push({
+      type: 'scatter' as const,
+      mode: 'markers' as const,
+      name: 'Mean',
+      x: fm,
+      y: means,
+      marker: { symbol: 'diamond', size: 8, color: '#f59e0b', line: { width: 2, color: '#b45309' } },
+      hoverinfo: 'skip' as const,
+      showlegend: true,
+    })
+
+    return traces
+  }, [fs, fm])
 
   // PT_AXIS is imported from @/lib/plotlyTheme — shared axis style
 
@@ -283,22 +398,45 @@ export default function MonthlyRevenue({ filters }: Props) {
       {/* ── Store Revenue Distribution ── */}
       <motion.div {...panelSpring(0.22)} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
         <h3 className="text-sm font-semibold text-gray-800">Store Revenue Distribution by Month</h3>
-        <p className="text-[11px] text-gray-500 mt-0.5 mb-3">Box plot showing how revenues spread across individual stores each month — outlier-free view of the core distribution</p>
+        <p className="text-[11px] text-gray-500 mt-0.5 mb-3">
+          Box plot showing how revenues spread across individual stores each month — outlier-free view of the core distribution
+        </p>
         <Plot
-          data={boxTraces}
+          data={boxTraces as any}
           layout={{
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor:  'rgba(0,0,0,0)',
             font:       { color: PT.font, family: 'Inter, sans-serif', size: 11 },
-            showlegend: false,
-            xaxis:  { ...PT_AXIS },
-            yaxis:  { ...PT_AXIS, title: { text: 'Revenue (₹)' }, tickformat: ',.0f' },
-            margin: { l: 70, r: 16, t: 8, b: 60 },
-            height: 300,
+            showlegend: true,
+            legend: {
+              bgcolor: 'rgba(0,0,0,0)',
+              font: { color: PT.font, size: 10 },
+              orientation: 'h' as const,
+              y: -0.22,
+              x: 0.5,
+              xanchor: 'center' as const,
+            },
+            xaxis: { ...PT_AXIS },
+            yaxis: boxYAxis,
+            margin: { l: 90, r: 16, t: 12, b: 90 },
+            height: 360,
+            hoverlabel: {
+              bgcolor: '#ffffff',
+              bordercolor: '#e5e7eb',
+              font: { size: 12, family: 'Inter, sans-serif', color: '#374151' },
+            },
           }}
           config={{ displayModeBar: false, responsive: true }}
           style={{ width: '100%' }}
         />
+        {/* Interpretation footer */}
+        <div className="mt-2 rounded-lg bg-gray-50 border border-gray-100 px-3 py-2 text-[10px] text-gray-500 leading-relaxed">
+          <span className="font-semibold text-gray-600">How to read: </span>
+          Box = middle 50% of stores (Q1–Q3) &nbsp;·&nbsp;
+          Line inside box = Median Revenue &nbsp;·&nbsp;
+          <span className="font-semibold text-amber-500">♦</span> = Mean Revenue &nbsp;·&nbsp;
+          Whiskers = Min &amp; Max Revenue (excluding outliers)
+        </div>
       </motion.div>
 
     </div>

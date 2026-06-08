@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { BarChart2, ArrowUpRight, ArrowDownRight, Minus } from 'lucide-react'
+import { BarChart2, ArrowUpRight, ArrowDownRight, Minus, TrendingUp, TrendingDown } from 'lucide-react'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import createPlotlyComponent from 'react-plotly.js/factory'
 // @ts-ignore — plotly.js-dist-min does not ship its own .d.ts
@@ -7,7 +7,8 @@ import Plotly from 'plotly.js-dist-min'
 import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
-import { allocatePhases } from '@/lib/classificationEngine'
+import { allocatePhases, classifyAllStores } from '@/lib/classificationEngine'
+import type { StoreCategory } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
 import { fmtInr, fmtPct } from '@/lib/formatting'
 
@@ -15,23 +16,32 @@ const Plot = createPlotlyComponent(Plotly)
 
 type TableSort = 'change' | 'pct' | 'recentAvg' | 'name'
 type TableDir  = 'asc' | 'desc'
-type TopN      = 5 | 10
+type TopN      = 5 | 10 | 20
+type ShowMode  = 'both' | 'growing' | 'declining'
 
 interface MoverRow {
   store: StoreRecord
   recentAvg: number
+  midAvg: number
   earlyAvg: number
   absChange: number
   pctChange: number | null
+  earlyPlanCount: number
+  midPlanCount: number
+  recentPlanCount: number
+  category: StoreCategory
 }
 
-
-function phaseAvg(store: StoreRecord, ms: string[]) {
-  return ms.length ? ms.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0) / ms.length : 0
+function phasePlanSum(store: StoreRecord, ms: string[]) {
+  return ms.reduce((s, m) => s + (store.monthly_plans_count?.[m] ?? 0), 0)
 }
 function abbr(m: string) {
-  // "Jan-2024" → "Jan'24"
   return m.replace(/-20(\d{2})$/, "'$1")
+}
+function fmtCount(n: number): string {
+  if (n >= 1e5) return `${(n / 1e5).toFixed(1)}L`
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`
+  return n.toLocaleString('en-IN')
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
@@ -41,11 +51,13 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
   const [tableSort, setTableSort] = useState<TableSort>('change')
   const [tableDir,  setTableDir]  = useState<TableDir>('desc')
   const [topN,      setTopN]      = useState<TopN>(5)
+  const [showMode,  setShowMode]  = useState<ShowMode>('both')
 
   const {
-    earlyRange, recentRange,
-    gainers, losers, allMovers, maxAbsChange, netChange,
-    topGainer, topLoser, insufficient,
+    earlyRange, midRange, recentRange,
+    growingStores, decliningStores, allMovers, maxAbsChange, netChange,
+    topGrowing, topDeclining, insufficient,
+    avgGrowthPct, avgDeclinePct,
   } = useMemo(() => {
     let fs: StoreRecord[] = stores
     if (filters.state)    fs = fs.filter(s => s.state    === filters.state)
@@ -63,41 +75,67 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
 
     if (fm.length < 2) {
       return {
-        earlyRange: '—', recentRange: '—',
-        gainers: [], losers: [], allMovers: [], maxAbsChange: 1, netChange: 0,
-        topGainer: null, topLoser: null, insufficient: true,
+        earlyRange: '—', midRange: '—', recentRange: '—',
+        growingStores: [], decliningStores: [], allMovers: [],
+        maxAbsChange: 1, netChange: 0,
+        topGrowing: null, topDeclining: null, insufficient: true,
+        avgGrowthPct: 0, avgDeclinePct: 0,
       }
     }
 
-    const { earlyMonths: early, recentMonths: recent } = allocatePhases(fm)
+    // Use classifyAllStores so category comes from the same engine as the rest of the app
+    const classResult = classifyAllStores(fs, fm)
+    const { earlyMonths: early, midMonths: mid, recentMonths: recent } = classResult.phases
 
     const earlyRange  = `${abbr(early[0])} – ${abbr(early[early.length - 1])}`
+    const midRange    = mid.length > 0 ? `${abbr(mid[0])} – ${abbr(mid[mid.length - 1])}` : '—'
     const recentRange = `${abbr(recent[0])} – ${abbr(recent[recent.length - 1])}`
 
-    const allMovers: MoverRow[] = fs
-      .map(store => {
-        const earlyAvg  = phaseAvg(store, early)
-        const recentAvg = phaseAvg(store, recent)
+    // Build allMovers from classification metrics — avoids recomputing phases
+    const allMovers: MoverRow[] = classResult.metrics
+      .filter(m => m.earlyTotal > 0 || m.recentTotal > 0)
+      .map(m => {
+        const earlyAvg  = early.length  > 0 ? m.earlyTotal  / early.length  : 0
+        const midAvg    = mid.length    > 0 ? m.midTotal    / mid.length    : 0
+        const recentAvg = recent.length > 0 ? m.recentTotal / recent.length : 0
         const absChange = recentAvg - earlyAvg
-        const pctChange = earlyAvg > 0 ? absChange / earlyAvg * 100 : null
-        return { store, recentAvg, earlyAvg, absChange, pctChange }
+        // growthPct from engine = (recentTotal-earlyTotal)/earlyTotal×100 — same ratio as avg-based pctChange
+        const pctChange = m.growthPct
+        return {
+          store: m.store, recentAvg, midAvg, earlyAvg, absChange, pctChange,
+          earlyPlanCount:  phasePlanSum(m.store, early),
+          midPlanCount:    phasePlanSum(m.store, mid),
+          recentPlanCount: phasePlanSum(m.store, recent),
+          category: m.category,
+        }
       })
-      .filter(m => m.earlyAvg > 0 || m.recentAvg > 0)
       .sort((a, b) => b.absChange - a.absChange)
 
-    const gainers      = allMovers.filter(m => m.absChange > 0)
-    const losers       = allMovers.filter(m => m.absChange < 0)
+    // Growing = Rising Star + Growing Store (≥15% growth by classification rules)
+    // Declining = Declining Store + Fallen Star (≥15% decline by classification rules)
+    const growingStores   = allMovers.filter(m => m.category === 'Rising Star' || m.category === 'Growing Store')
+    const decliningStores = allMovers.filter(m => m.category === 'Declining Store' || m.category === 'Fallen Star')
+
     const maxAbsChange = Math.max(...allMovers.map(m => Math.abs(m.absChange)), 1)
     const netChange    = allMovers.reduce((s, m) => s + m.absChange, 0)
-    const topGainer    = gainers[0] ?? null
-    const topLoser     = losers.length > 0
-      ? losers.reduce((w, m) => m.absChange < w.absChange ? m : w)
+
+    const topGrowing   = growingStores[0] ?? null
+    const topDeclining = decliningStores.length > 0
+      ? [...decliningStores].sort((a, b) => a.absChange - b.absChange)[0]
       : null
 
+    const avgGrowthPct  = growingStores.length > 0
+      ? growingStores.reduce((s, m) => s + (m.pctChange ?? 0), 0) / growingStores.length
+      : 0
+    const avgDeclinePct = decliningStores.length > 0
+      ? decliningStores.reduce((s, m) => s + (m.pctChange ?? 0), 0) / decliningStores.length
+      : 0
+
     return {
-      earlyRange, recentRange,
-      gainers, losers, allMovers, maxAbsChange, netChange,
-      topGainer, topLoser, insufficient: false,
+      earlyRange, midRange, recentRange,
+      growingStores, decliningStores, allMovers, maxAbsChange, netChange,
+      topGrowing, topDeclining, insufficient: false,
+      avgGrowthPct, avgDeclinePct,
     }
   }, [stores, months, filters])
 
@@ -105,15 +143,20 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
   const slopeTraces = useMemo(() => {
     if (allMovers.length === 0) return []
 
-    const topGainers = gainers.slice(0, topN)
-    const topLosers  = [...losers].sort((a, b) => a.absChange - b.absChange).slice(0, topN)
-    const showStores = [...topGainers, ...topLosers]
+    const showGrowing   = showMode !== 'declining'
+    const showDeclining = showMode !== 'growing'
+
+    // top N growing sorted by absChange desc; top N declining sorted by most decline first
+    const topGrowingSlope   = showGrowing   ? growingStores.slice(0, topN) : []
+    const topDecliningSlope = showDeclining
+      ? [...decliningStores].sort((a, b) => a.absChange - b.absChange).slice(0, topN)
+      : []
+    const showStores = [...topGrowingSlope, ...topDecliningSlope]
     if (showStores.length === 0) return []
 
     const maxAbs = Math.max(...showStores.map(m => Math.abs(m.absChange)), 1)
     const maxRev = Math.max(...showStores.map(m => Math.max(m.recentAvg, m.earlyAvg)), 1)
 
-    // Colour scales: mint → deep emerald | blush → deep crimson
     function lerpHex(c1: string, c2: string, t: number): string {
       const p = (s: string, o: number) => parseInt(s.slice(o, o + 2), 16)
       const r = Math.round(p(c1, 1) + (p(c2, 1) - p(c1, 1)) * t)
@@ -126,90 +169,90 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
 
     const traces: object[] = []
 
-    // ① Translucent delta-fill triangles (rendered behind lines)
+    // ① Very subtle delta-fill triangles (rendered behind lines)
     for (const m of showStores) {
-      const isGainer = m.absChange > 0
-      const mag      = Math.abs(m.absChange) / maxAbs
+      const isGrowing = m.absChange > 0
+      const mag       = Math.abs(m.absChange) / maxAbs
       traces.push({
         type: 'scatter', mode: 'lines',
         x: [0, 1, 1, 0],
         y: [m.earlyAvg, m.recentAvg, m.earlyAvg, m.earlyAvg],
         fill: 'toself',
-        fillcolor: isGainer
-          ? `rgba(16,185,129,${(0.04 + mag * 0.1).toFixed(2)})`
-          : `rgba(239,68,68,${(0.04 + mag * 0.1).toFixed(2)})`,
+        fillcolor: isGrowing
+          ? `rgba(16,185,129,${(0.02 + mag * 0.06).toFixed(2)})`
+          : `rgba(239,68,68,${(0.02 + mag * 0.06).toFixed(2)})`,
         line: { color: 'rgba(0,0,0,0)', width: 0 },
         showlegend: false,
         hoverinfo: 'none',
       })
     }
 
-    // ② Spline lines — thickness, opacity, colour all scale with magnitude
+    // ② Thin spline lines — range 0.8→1.8 px (was 1.8→5 px)
     for (const m of showStores) {
-      const isGainer = m.absChange > 0
-      const mag      = Math.abs(m.absChange) / maxAbs
+      const isGrowing = m.absChange > 0
+      const mag       = Math.abs(m.absChange) / maxAbs
       traces.push({
         type: 'scatter', mode: 'lines',
         x: [0, 1],
         y: [m.earlyAvg, m.recentAvg],
         line: {
-          color:     isGainer ? gColor(mag) : lColor(mag),
-          width:     1.8 + mag * 3.2,          // 1.8 → 5 px
+          color:     isGrowing ? gColor(mag) : lColor(mag),
+          width:     0.8 + mag * 1.0,   // max ~1.8 px
           shape:     'spline',
           smoothing: 1.2,
         },
-        opacity: 0.55 + mag * 0.45,            // 0.55 → 1.0
+        opacity: 0.65 + mag * 0.35,
         showlegend: false,
         hoverinfo: 'none',
       })
     }
 
-    // ③ Left dots — rank badge + store name + state (dot size ∝ early revenue)
+    // ③ Left dots — rank badge + store name + state
     const leftRows = [
-      ...topGainers.map((m, i) => ({ m, rank: i + 1, isGainer: true  })),
-      ...topLosers .map((m, i) => ({ m, rank: i + 1, isGainer: false })),
+      ...topGrowingSlope  .map((m, i) => ({ m, rank: i + 1, isGrowing: true  })),
+      ...topDecliningSlope.map((m, i) => ({ m, rank: i + 1, isGrowing: false })),
     ]
     traces.push({
       type: 'scatter', mode: 'markers+text',
       x: leftRows.map(() => 0),
       y: leftRows.map(({ m }) => m.earlyAvg),
       marker: {
-        size:  leftRows.map(({ m }) => 7 + (m.earlyAvg / maxRev) * 7),
-        color: leftRows.map(({ m, isGainer }) => {
+        size:  leftRows.map(({ m }) => 5 + (m.earlyAvg / maxRev) * 5),
+        color: leftRows.map(({ m, isGrowing }) => {
           const mag = Math.abs(m.absChange) / maxAbs
-          return isGainer ? gColor(mag) : lColor(mag)
+          return isGrowing ? gColor(mag) : lColor(mag)
         }),
-        line: { color: '#fff', width: 1.5 },
+        line: { color: '#fff', width: 1 },
       },
-      text: leftRows.map(({ m, rank, isGainer }) => {
-        const name  = (m.store.store_name ?? m.store.store_id).slice(0, 14)
+      text: leftRows.map(({ m, rank, isGrowing }) => {
+        const name  = (m.store.store_name ?? m.store.store_id).slice(0, 12)
         const state = m.store.state ? ` · ${m.store.state}` : ''
-        return `${isGainer ? '▲' : '▼'}${rank} ${name}${state}  `
+        return `${isGrowing ? '▲' : '▼'}${rank} ${name}${state}  `
       }),
       textposition: 'middle left',
       textfont: {
         size:  9,
-        color: leftRows.map(({ isGainer }) => isGainer ? '#065f46' : '#7f1d1d'),
+        color: leftRows.map(({ isGrowing }) => isGrowing ? '#065f46' : '#7f1d1d'),
       },
       showlegend: false,
       hoverinfo: 'none',
     })
 
-    // ④ Right dots — % + recent revenue label + rich hover (dot size ∝ recent revenue)
+    // ④ Right dots — % + recent revenue label + rich hover
     traces.push({
       type: 'scatter', mode: 'markers+text',
       x: showStores.map(() => 1),
       y: showStores.map(m => m.recentAvg),
       marker: {
-        size:  showStores.map(m => 8 + (m.recentAvg / maxRev) * 8),
+        size:  showStores.map(m => 6 + (m.recentAvg / maxRev) * 6),
         color: showStores.map(m => {
           const mag = Math.abs(m.absChange) / maxAbs
           return m.absChange > 0 ? gColor(mag) : lColor(mag)
         }),
-        line: { color: '#fff', width: 1.5 },
+        line: { color: '#fff', width: 1 },
       },
       text: showStores.map(m =>
-        `  ${fmtPct(m.pctChange ?? 0)}`
+        `  ${fmtPct(m.pctChange ?? 0)}  ${fmtInr(m.recentAvg)}`
       ),
       textposition: 'middle right',
       textfont: {
@@ -223,9 +266,11 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
         fmtInr(m.earlyAvg),
         fmtInr(m.absChange),
         fmtPct(m.pctChange ?? 0),
+        m.category,
       ]),
       hovertemplate:
         '<b>%{customdata[0]}</b>  <i>%{customdata[1]}</i><br>' +
+        '<i>%{customdata[6]}</i><br>' +
         `Recent (${recentRange}): ` + '%{customdata[2]}<br>' +
         `Early  (${earlyRange}): `  + '%{customdata[3]}<br>' +
         'Avg Δ: %{customdata[4]}  (%{customdata[5]})<extra></extra>',
@@ -233,21 +278,25 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
     })
 
     // ⑤ Legend entries
-    traces.push({
-      type: 'scatter', mode: 'lines',
-      name: `▲ Gainers — top ${topGainers.length}`,
-      x: [null], y: [null],
-      line: { color: '#10b981', width: 3 },
-    })
-    traces.push({
-      type: 'scatter', mode: 'lines',
-      name: `▼ Losers — top ${topLosers.length}`,
-      x: [null], y: [null],
-      line: { color: '#ef4444', width: 3 },
-    })
+    if (topGrowingSlope.length > 0) {
+      traces.push({
+        type: 'scatter', mode: 'lines',
+        name: `▲ Growing — top ${topGrowingSlope.length}`,
+        x: [null], y: [null],
+        line: { color: '#10b981', width: 2 },
+      })
+    }
+    if (topDecliningSlope.length > 0) {
+      traces.push({
+        type: 'scatter', mode: 'lines',
+        name: `▼ Declining — top ${topDecliningSlope.length}`,
+        x: [null], y: [null],
+        line: { color: '#ef4444', width: 2 },
+      })
+    }
 
     return traces
-  }, [gainers, losers, topN, earlyRange, recentRange])
+  }, [growingStores, decliningStores, topN, showMode, earlyRange, recentRange])
 
   // ── Table sort ────────────────────────────────────────────────────────────
   const sortedTable = useMemo(() => {
@@ -280,9 +329,23 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
   const topNOptions: { value: TopN; label: string }[] = [
     { value: 5,  label: 'Top 5'  },
     { value: 10, label: 'Top 10' },
+    { value: 20, label: 'Top 20' },
+  ]
+
+  const modeOptions: { value: ShowMode; label: string }[] = [
+    { value: 'both',      label: 'Both'      },
+    { value: 'growing',   label: 'Growing'   },
+    { value: 'declining', label: 'Declining' },
   ]
 
   const scopeLabel = filters.state ? filters.state : 'All India'
+  // Height scales with both topN and whether we're showing one or both sides
+  const chartHeight = (() => {
+    const base = showMode === 'both' ? topN * 2 : topN
+    if (base <= 10) return 460
+    if (base <= 20) return 600
+    return 760
+  })()
 
   return (
     <div className="space-y-6">
@@ -294,7 +357,7 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
           Biggest Revenue Swings
         </h2>
         <p className="text-sm text-gray-500 mt-1">
-          Ranks stores by absolute change in average monthly revenue · Early{' '}
+          Ranks stores by avg monthly revenue shift between phases · Early{' '}
           <span className="text-gray-600 font-medium">({earlyRange})</span>
           {' vs '}
           Recent <span className="text-gray-600 font-medium">({recentRange})</span>
@@ -308,21 +371,29 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
       {/* KPI Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
 
+        {/* Growing Stores — Rising Star + Growing Store (≥15% growth threshold) */}
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm flex items-start gap-3">
           <div className="mt-0.5"><ArrowUpRight className="w-4 h-4 text-emerald-500" /></div>
-          <div>
-            <p className="text-[10px] font-semibold text-emerald-600 uppercase tracking-wider mb-1">Gainers</p>
-            <p className="text-3xl font-bold text-gray-900 tabular-nums leading-tight">{gainers.length}</p>
-            <p className="text-xs text-emerald-600 mt-1">stores grew phase-on-phase</p>
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold text-emerald-600 uppercase tracking-wider mb-1">Growing Stores</p>
+            <p className="text-3xl font-bold text-gray-900 tabular-nums leading-tight">{growingStores.length}</p>
+            <p className="text-xs text-emerald-700 font-semibold mt-1 tabular-nums">
+              Avg {fmtPct(avgGrowthPct)} growth
+            </p>
+            <p className="text-[10px] text-emerald-500 mt-0.5">Rising Star + Growing Store</p>
           </div>
         </div>
 
+        {/* Declining Stores — Declining Store + Fallen Star (≥15% drop threshold) */}
         <div className="rounded-xl border border-red-200 bg-red-50 p-4 shadow-sm flex items-start gap-3">
           <div className="mt-0.5"><ArrowDownRight className="w-4 h-4 text-red-500" /></div>
-          <div>
-            <p className="text-[10px] font-semibold text-red-600 uppercase tracking-wider mb-1">Losers</p>
-            <p className="text-3xl font-bold text-gray-900 tabular-nums leading-tight">{losers.length}</p>
-            <p className="text-xs text-red-500 mt-1">stores fell phase-on-phase</p>
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold text-red-600 uppercase tracking-wider mb-1">Declining Stores</p>
+            <p className="text-3xl font-bold text-gray-900 tabular-nums leading-tight">{decliningStores.length}</p>
+            <p className="text-xs text-red-700 font-semibold mt-1 tabular-nums">
+              Avg {fmtPct(avgDeclinePct)} change
+            </p>
+            <p className="text-[10px] text-red-400 mt-0.5">Declining Store + Fallen Star</p>
           </div>
         </div>
 
@@ -330,14 +401,22 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
           'rounded-xl border p-4 shadow-sm flex items-start gap-3',
           netChange >= 0 ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50',
         )}>
-          <div className="mt-0.5"><Minus className="w-4 h-4 text-gray-400" /></div>
+          <div className="mt-0.5">
+            {netChange >= 0
+              ? <TrendingUp className="w-4 h-4 text-emerald-500" />
+              : <TrendingDown className="w-4 h-4 text-red-500" />
+            }
+          </div>
           <div>
             <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1">Net Direction</p>
             <p className={cn('text-xl font-bold leading-tight', netChange >= 0 ? 'text-emerald-700' : 'text-red-700')}>
               {netChange >= 0 ? 'Growing ↑' : 'Declining ↓'}
             </p>
-            <p className="text-xs text-gray-400 mt-1">
-              {gainers.length} up · {losers.length} down
+            <p className="text-xs font-semibold tabular-nums mt-1" style={{ color: netChange >= 0 ? '#047857' : '#b91c1c' }}>
+              Net {fmtInr(netChange)}/mo
+            </p>
+            <p className="text-[10px] text-gray-400 mt-0.5">
+              {growingStores.length} growing · {decliningStores.length} declining
             </p>
           </div>
         </div>
@@ -345,45 +424,50 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
         <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm flex items-start gap-3">
           <div className="mt-0.5"><Minus className="w-4 h-4 text-gray-400" /></div>
           <div>
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Flat / No Data</p>
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Flat / Other</p>
             <p className="text-3xl font-bold text-gray-900 tabular-nums leading-tight">
-              {allMovers.filter(m => m.absChange === 0).length}
+              {allMovers.filter(m =>
+                m.category !== 'Growing Store' &&
+                m.category !== 'Rising Star' &&
+                m.category !== 'Declining Store' &&
+                m.category !== 'Fallen Star'
+              ).length}
             </p>
-            <p className="text-xs text-gray-400 mt-1">unchanged</p>
+            <p className="text-xs text-gray-400 mt-1">Constant / New Bloomer</p>
           </div>
         </div>
 
       </div>
 
-      {/* Spotlight — biggest gainer & loser */}
-      {(topGainer || topLoser) && (
+      {/* Spotlight — best growing & worst declining */}
+      {(topGrowing || topDeclining) && (
         <div className="grid grid-cols-2 gap-3">
-          {topGainer && (
+          {topGrowing && (
             <div className="rounded-xl border border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-white p-4 shadow-sm">
               <p className="text-[10px] font-semibold text-emerald-600 uppercase tracking-wider mb-2">
-                Biggest Gainer · {scopeLabel}
+                Best Performer · {scopeLabel}
               </p>
               <p className="text-sm font-bold text-gray-900 truncate">
-                {topGainer.store.store_name ?? topGainer.store.store_id}
+                {topGrowing.store.store_name ?? topGrowing.store.store_id}
               </p>
-              <p className="text-xs text-gray-400 mt-0.5">{topGainer.store.state ?? '—'}</p>
+              <p className="text-xs text-gray-400 mt-0.5">{topGrowing.store.state ?? '—'} · {topGrowing.category}</p>
               <p className="text-2xl font-bold text-emerald-600 mt-2 tabular-nums">
-                {fmtPct(topGainer.pctChange ?? 0)}
+                {fmtPct(topGrowing.pctChange ?? 0)}
               </p>
               <p className="text-[10px] text-gray-400 mt-1">{earlyRange} → {recentRange}</p>
             </div>
           )}
-          {topLoser && (
+          {topDeclining && (
             <div className="rounded-xl border border-red-100 bg-gradient-to-br from-red-50 via-white to-white p-4 shadow-sm">
               <p className="text-[10px] font-semibold text-red-600 uppercase tracking-wider mb-2">
-                Biggest Loser · {scopeLabel}
+                Steepest Decline · {scopeLabel}
               </p>
               <p className="text-sm font-bold text-gray-900 truncate">
-                {topLoser.store.store_name ?? topLoser.store.store_id}
+                {topDeclining.store.store_name ?? topDeclining.store.store_id}
               </p>
-              <p className="text-xs text-gray-400 mt-0.5">{topLoser.store.state ?? '—'}</p>
+              <p className="text-xs text-gray-400 mt-0.5">{topDeclining.store.state ?? '—'} · {topDeclining.category}</p>
               <p className="text-2xl font-bold text-red-500 mt-2 tabular-nums">
-                {fmtPct(topLoser.pctChange ?? 0)}
+                {fmtPct(topDeclining.pctChange ?? 0)}
               </p>
               <p className="text-[10px] text-gray-400 mt-1">{earlyRange} → {recentRange}</p>
             </div>
@@ -394,32 +478,58 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
       {/* Slope Chart */}
       <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
 
-        <div className="flex items-start justify-between gap-4 mb-4">
+        <div className="flex items-start justify-between gap-4 mb-4 flex-wrap">
           <div>
             <h3 className="text-sm font-semibold text-gray-700">
               Phase Revenue Slope — {scopeLabel}
             </h3>
             <p className="text-xs text-gray-400 mt-0.5">
-              Top N <span className="text-emerald-600 font-medium">gainers</span> &amp;{' '}
-              <span className="text-red-500 font-medium">losers</span> by avg monthly revenue shift ·
-              Thicker + darker line = bigger move · Dot size = revenue scale · Hover for details.
+              <span className="text-emerald-600 font-medium">Growing</span> &amp;{' '}
+              <span className="text-red-500 font-medium">Declining</span> stores by avg monthly revenue shift ·
+              Darker = bigger move · Right label shows % change + recent avg · Hover for details.
             </p>
           </div>
-          <div className="flex items-center gap-1 shrink-0">
-            {topNOptions.map(opt => (
-              <button
-                key={String(opt.value)}
-                onClick={() => setTopN(opt.value)}
-                className={cn(
-                  'px-3 py-1 rounded-lg text-xs font-semibold transition-colors',
-                  topN === opt.value
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-500 hover:bg-gray-200',
-                )}
-              >
-                {opt.label}
-              </button>
-            ))}
+
+          <div className="flex items-center gap-3 shrink-0 flex-wrap">
+            {/* Growing / Declining / Both toggle */}
+            <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5">
+              {modeOptions.map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => setShowMode(opt.value)}
+                  className={cn(
+                    'px-2.5 py-1 rounded-md text-xs font-semibold transition-colors',
+                    showMode === opt.value
+                      ? opt.value === 'growing'
+                        ? 'bg-emerald-600 text-white'
+                        : opt.value === 'declining'
+                          ? 'bg-red-600 text-white'
+                          : 'bg-blue-600 text-white'
+                      : 'text-gray-500 hover:bg-white hover:text-gray-700',
+                  )}
+                >
+                  {opt.value === 'growing' ? '▲ ' : opt.value === 'declining' ? '▼ ' : ''}{opt.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Top N selector */}
+            <div className="flex items-center gap-1">
+              {topNOptions.map(opt => (
+                <button
+                  key={String(opt.value)}
+                  onClick={() => setTopN(opt.value)}
+                  className={cn(
+                    'px-3 py-1 rounded-lg text-xs font-semibold transition-colors',
+                    topN === opt.value
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200',
+                  )}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -429,8 +539,9 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
           layout={{
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor:  'rgba(249,250,251,0.6)',
-            height: topN === 5 ? 430 : 540,
-            margin: { l: 260, r: 120, t: 44, b: 50 },
+            height: chartHeight,
+            // Smaller left margin = more horizontal space for slopes; wider right margin for % + revenue label
+            margin: { l: 220, r: 175, t: 44, b: 50 },
             font: { color: '#6b7280', family: 'Inter, sans-serif', size: 11 },
             xaxis: {
               tickvals: [0, 1],
@@ -478,32 +589,51 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
               Full Phase Ranking — {allMovers.length} stores
               {filters.state && <span className="text-blue-600"> · {filters.state}</span>}
             </h3>
-            <p className="text-[11px] text-gray-400 mt-0.5">Click column headers to sort</p>
+            <p className="text-[11px] text-gray-400 mt-0.5">
+              Click column headers to sort · Plan counts = total policies sold per phase
+            </p>
           </div>
-          <span className="text-xs text-gray-400">{earlyRange} vs {recentRange}</span>
+          <div className="text-right">
+            <p className="text-xs text-gray-400">{earlyRange} · {midRange} · {recentRange}</p>
+          </div>
         </div>
 
         <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
-          <table className="w-full text-xs min-w-[660px]">
+          <table className="w-full text-xs min-w-[960px]">
             <thead>
               <tr className="border-b border-gray-200 bg-gray-50">
-                <th className="px-4 py-3 text-left font-semibold uppercase tracking-wider text-gray-500 w-8">#</th>
+                <th className="px-3 py-3 text-left font-semibold uppercase tracking-wider text-gray-500 w-8">#</th>
                 <th
                   className={cn('px-3 py-3 text-left font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap', tableSort === 'name' ? 'text-gray-800' : 'text-gray-500 hover:text-gray-800')}
                   onClick={() => toggleTable('name')}
                 >
                   Store {tableSort === 'name' && (tableDir === 'desc' ? '↓' : '↑')}
                 </th>
-                <th className="px-3 py-3 text-left font-semibold uppercase tracking-wider text-gray-500 hidden sm:table-cell">State</th>
+                <th className="px-3 py-3 text-left font-semibold uppercase tracking-wider text-gray-500 hidden sm:table-cell">
+                  State
+                </th>
+
+                {/* Early Phase */}
+                <th className="px-3 py-3 text-right font-semibold uppercase tracking-wider text-blue-500 whitespace-nowrap">
+                  <span className="block">Early Avg</span>
+                  <span className="block text-[9px] font-normal text-gray-400 normal-case tracking-normal">{earlyRange}</span>
+                </th>
+
+                {/* Mid Phase */}
+                <th className="px-3 py-3 text-right font-semibold uppercase tracking-wider text-purple-500 whitespace-nowrap hidden md:table-cell">
+                  <span className="block">Mid Avg</span>
+                  <span className="block text-[9px] font-normal text-gray-400 normal-case tracking-normal">{midRange}</span>
+                </th>
+
+                {/* Recent Phase */}
                 <th
-                  className={cn('px-3 py-3 text-right font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap', tableSort === 'recentAvg' ? 'text-gray-800' : 'text-gray-500 hover:text-gray-800')}
+                  className={cn('px-3 py-3 text-right font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap', tableSort === 'recentAvg' ? 'text-gray-800' : 'text-emerald-600 hover:text-gray-800')}
                   onClick={() => toggleTable('recentAvg')}
                 >
-                  Recent Avg {tableSort === 'recentAvg' && (tableDir === 'desc' ? '↓' : '↑')}
+                  <span className="block">Recent Avg {tableSort === 'recentAvg' && (tableDir === 'desc' ? '↓' : '↑')}</span>
+                  <span className="block text-[9px] font-normal text-gray-400 normal-case tracking-normal">{recentRange}</span>
                 </th>
-                <th className="px-3 py-3 text-right font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap">
-                  Early Avg
-                </th>
+
                 <th
                   className={cn('px-3 py-3 text-right font-semibold uppercase tracking-wider cursor-pointer select-none whitespace-nowrap', tableSort === 'change' ? 'text-gray-800' : 'text-gray-500 hover:text-gray-800')}
                   onClick={() => toggleTable('change')}
@@ -516,55 +646,74 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
                 >
                   Δ % {tableSort === 'pct' && (tableDir === 'desc' ? '↓' : '↑')}
                 </th>
-                <th className="px-3 py-3 text-left font-semibold uppercase tracking-wider text-gray-500 hidden lg:table-cell w-28">
+                <th className="px-3 py-3 text-left font-semibold uppercase tracking-wider text-gray-500 hidden lg:table-cell w-24">
                   Bar
                 </th>
               </tr>
             </thead>
             <tbody>
               {sortedTable.map((row, i) => {
-                const isGainer = row.absChange > 0
-                const isLoser  = row.absChange < 0
-                const barW     = (Math.abs(row.absChange) / maxAbsChange) * 100
+                const isGrowing   = row.category === 'Rising Star' || row.category === 'Growing Store'
+                const isDeclining = row.category === 'Declining Store' || row.category === 'Fallen Star'
+                const barW        = (Math.abs(row.absChange) / maxAbsChange) * 100
                 return (
                   <tr
                     key={row.store.store_id}
                     className={cn(
                       'border-b border-gray-100 transition-colors',
                       i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50',
-                      'hover:bg-gray-50',
+                      'hover:bg-blue-50/30',
                     )}
                   >
-                    <td className="px-4 py-2 text-gray-400">{i + 1}</td>
+                    <td className="px-3 py-2 text-gray-400">{i + 1}</td>
                     <td className="px-3 py-2 font-semibold text-gray-800 max-w-[140px] truncate">
                       {row.store.store_name ?? row.store.store_id}
                     </td>
                     <td className="px-3 py-2 text-gray-500 hidden sm:table-cell">
                       {row.store.state ?? '—'}
                     </td>
-                    <td className="px-3 py-2 text-right text-gray-700 font-medium tabular-nums">
-                      {fmtInr(row.recentAvg)}
+
+                    {/* Early Phase: avg revenue + plan count */}
+                    <td className="px-3 py-2 text-right">
+                      <span className="block text-blue-700 font-medium tabular-nums">{fmtInr(row.earlyAvg)}</span>
+                      {row.earlyPlanCount > 0 && (
+                        <span className="block text-[10px] text-blue-400 tabular-nums">{fmtCount(row.earlyPlanCount)} plans</span>
+                      )}
                     </td>
-                    <td className="px-3 py-2 text-right text-gray-400 tabular-nums">
-                      {fmtInr(row.earlyAvg)}
+
+                    {/* Mid Phase: avg revenue + plan count */}
+                    <td className="px-3 py-2 text-right hidden md:table-cell">
+                      <span className="block text-purple-700 font-medium tabular-nums">{fmtInr(row.midAvg)}</span>
+                      {row.midPlanCount > 0 && (
+                        <span className="block text-[10px] text-purple-400 tabular-nums">{fmtCount(row.midPlanCount)} plans</span>
+                      )}
                     </td>
+
+                    {/* Recent Phase: avg revenue + plan count */}
+                    <td className="px-3 py-2 text-right">
+                      <span className="block text-emerald-700 font-medium tabular-nums">{fmtInr(row.recentAvg)}</span>
+                      {row.recentPlanCount > 0 && (
+                        <span className="block text-[10px] text-emerald-500 tabular-nums">{fmtCount(row.recentPlanCount)} plans</span>
+                      )}
+                    </td>
+
                     <td className={cn(
                       'px-3 py-2 text-right font-semibold tabular-nums',
-                      isGainer ? 'text-emerald-600' : isLoser ? 'text-red-500' : 'text-gray-400',
+                      isGrowing ? 'text-emerald-600' : isDeclining ? 'text-red-500' : 'text-gray-400',
                     )}>
-                      <span className="mr-0.5">{isGainer ? '▲' : isLoser ? '▼' : '—'}</span>
+                      <span className="mr-0.5">{isGrowing ? '▲' : isDeclining ? '▼' : '—'}</span>
                       {fmtInr(Math.abs(row.absChange))}
                     </td>
                     <td className={cn(
                       'px-3 py-2 text-right tabular-nums hidden md:table-cell',
-                      isGainer ? 'text-emerald-500' : isLoser ? 'text-red-400' : 'text-gray-400',
+                      isGrowing ? 'text-emerald-500' : isDeclining ? 'text-red-400' : 'text-gray-400',
                     )}>
                       {row.pctChange !== null ? fmtPct(row.pctChange) : '—'}
                     </td>
                     <td className="px-3 py-2 hidden lg:table-cell">
                       <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden w-full">
                         <div
-                          className={cn('h-full rounded-full', isGainer ? 'bg-emerald-500' : 'bg-red-500')}
+                          className={cn('h-full rounded-full', isGrowing ? 'bg-emerald-500' : isDeclining ? 'bg-red-500' : 'bg-gray-300')}
                           style={{ width: `${barW}%` }}
                         />
                       </div>
