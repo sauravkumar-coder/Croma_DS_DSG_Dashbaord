@@ -185,7 +185,7 @@ export default function MonthlyRevenue({ filters }: Props) {
         type: 'scatter' as const, mode: 'lines+markers' as const,
         name: 'Active stores', x: monthlyData.map(d => d.m), y: monthlyData.map(d => d.active),
         yaxis: 'y2' as const,
-        line: { color: '#14b8a6', width: 2 }, marker: { color: '#14b8a6', size: 5 },
+        line: { color: '#14b8a6', width: 2, shape: 'spline' as const }, marker: { color: '#14b8a6', size: 5 },
         hovertemplate: '<b>%{x}</b><br>Active stores: %{y}<extra></extra>',
       },
     ]

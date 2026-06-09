@@ -83,6 +83,8 @@ app.add_middleware(
 
 _in_memory_sales: list[dict] | None = None
 _sales_session_meta: dict[str, Any] | None = None
+_in_memory_sales_raw: bytes | None = None  # raw bytes for reload without restart
+_in_memory_sales_is_demo: bool = False
 
 # Used only by the generic /api/upload → /api/data/{sheet} flow
 _uploaded_file: str | None = None
@@ -230,6 +232,8 @@ def load_demo_data():
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     _in_memory_sales = stores
+    _in_memory_sales_raw = buf.getvalue()
+    _in_memory_sales_is_demo = True
     _sales_session_meta = {
         "filename":     "demo_data.xlsx",
         "uploaded_at":  datetime.now().isoformat(timespec="seconds"),
@@ -281,6 +285,8 @@ async def upload_sales(
         raise HTTPException(status_code=422, detail=f"Parse error: {exc}") from exc
 
     _in_memory_sales = stores
+    _in_memory_sales_raw = content
+    _in_memory_sales_is_demo = False
     _sales_session_meta = {
         "filename":     file.filename or "upload.xlsx",
         "uploaded_at":  datetime.now().isoformat(timespec="seconds"),
@@ -408,12 +414,55 @@ def get_storage_status():
 @app.delete("/api/storage/sales")
 def delete_combined_sales():
     """Clear the in-memory sales data."""
-    global _in_memory_sales, _sales_session_meta
+    global _in_memory_sales, _sales_session_meta, _in_memory_sales_raw, _in_memory_sales_is_demo
     if _in_memory_sales is None:
         raise HTTPException(status_code=404, detail="No sales data is currently loaded.")
     _in_memory_sales = None
     _sales_session_meta = None
+    _in_memory_sales_raw = None
+    _in_memory_sales_is_demo = False
     return {"ok": True}
+
+
+@app.post("/api/sales/reload")
+def reload_sales():
+    """Re-parse the currently stored raw bytes without a new upload."""
+    global _in_memory_sales
+    if _in_memory_sales_raw is None:
+        raise HTTPException(status_code=404, detail="No sales data to reload. Upload a file first.")
+    try:
+        stores = _parse_bytes_as_sales(_in_memory_sales_raw)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Reload error: {exc}") from exc
+    _in_memory_sales = stores
+    return {"ok": True, "stores": len(stores), "months": _extract_months(stores)}
+
+
+@app.get("/api/sales/meta")
+def get_sales_meta():
+    """Return summary metadata for the currently loaded sales dataset."""
+    if _in_memory_sales is None or _sales_session_meta is None:
+        return {"loaded": False}
+
+    months = _extract_months(_in_memory_sales)
+    total_revenue = sum(
+        sum(s.get("monthly_sales", {}).values())
+        for s in _in_memory_sales
+    )
+
+    return {
+        "loaded":       True,
+        "filename":     _sales_session_meta.get("filename", "unknown"),
+        "uploaded_at":  _sales_session_meta.get("uploaded_at", ""),
+        "file_size_kb": _sales_session_meta.get("file_size_kb", 0),
+        "store_count":  len(_in_memory_sales),
+        "record_count": len(_in_memory_sales),
+        "date_from":    months[0] if months else None,
+        "date_to":      months[-1] if months else None,
+        "month_count":  len(months),
+        "total_revenue": total_revenue,
+        "is_demo":      _in_memory_sales_is_demo,
+    }
 
 
 # ── Target management endpoints ───────────────────────────────────────────────

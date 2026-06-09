@@ -114,11 +114,21 @@ function avgRev(store: StoreRecord, ms: string[]): number {
   return ms.length ? revForMonths(store, ms) / ms.length : 0
 }
 
-function rollingAvg(values: number[], window: number): (number | null)[] {
-  return values.map((_, i) => {
-    if (i < window - 1) return null
-    const sl = values.slice(i - window + 1, i + 1)
-    return sl.reduce((a, b) => a + b, 0) / window
+function daysInMonth(monthLabel: string): number {
+  const parts = monthLabel.split('-')
+  if (parts.length !== 2) return 30
+  const [mon, yr] = parts
+  const idx = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']
+    .indexOf(mon.toLowerCase())
+  const year = parseInt(yr, 10)
+  if (idx === -1 || isNaN(year)) return 30
+  return new Date(year, idx + 1, 0).getDate()
+}
+
+function avgDailyRevenue(months: string[], revenues: number[]): number[] {
+  return revenues.map((rev, i) => {
+    const days = daysInMonth(months[i])
+    return rev > 0 ? rev / days : 0
   })
 }
 
@@ -460,7 +470,17 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
     const totalRev     = revByMonth.reduce((a, b) => a + b, 0)
     const avgMonthRev  = totalRev / fm.length
     const activeMonths = revByMonth.filter(v => v > 0).length
-    const rolling      = rollingAvg(revByMonth, 3)
+    const dailyRevByMonth = avgDailyRevenue(fm, revByMonth)
+
+    // Current / previous month avg daily revenue for KPI display
+    const lastIdx         = fm.length - 1
+    const currMonthLabel  = fm[lastIdx]
+    const prevMonthLabel  = lastIdx > 0 ? fm[lastIdx - 1] : null
+    const currDailyRev    = dailyRevByMonth[lastIdx] ?? 0
+    const prevDailyRev    = prevMonthLabel !== null ? (dailyRevByMonth[lastIdx - 1] ?? 0) : null
+    const dailyRevMoM     = prevDailyRev !== null && prevDailyRev > 0
+      ? (currDailyRev - prevDailyRev) / prevDailyRev * 100
+      : null
 
     let maxIdx = 0, minIdx = 0
     revByMonth.forEach((v, i) => {
@@ -506,12 +526,13 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
     const selectorLabel = `${selectedStore.store_id} · ${fmtInr(totalRev)} · ${tag}`
 
     return {
-      revByMonth, rolling, maxIdx, minIdx, hs, t, growthVal, tag,
+      revByMonth, dailyRevByMonth, maxIdx, minIdx, hs, t, growthVal, tag,
       totalRev, avgMonthRev, activeMonths,
       earlyAvgVal, recentAvgVal, earlyHalf, recentHalf,
       rankEarly, rankMid, rankRecent, rankImprovement,
       networkRank, stateRank, stateTotal: stateStores.length,
       tableRows, waterfallData, selectorLabel,
+      currMonthLabel, prevMonthLabel, currDailyRev, prevDailyRev, dailyRevMoM,
     }
   }, [selectedStore, stores, fm])
 
@@ -587,11 +608,12 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
   }
 
   const {
-    revByMonth, rolling, maxIdx, minIdx, hs, t, growthVal, tag,
+    revByMonth, dailyRevByMonth, maxIdx, minIdx, hs, t, growthVal, tag,
     totalRev, avgMonthRev, activeMonths,
     rankEarly, rankMid, rankRecent, rankImprovement,
     networkRank, stateRank, stateTotal,
     tableRows, waterfallData, selectorLabel,
+    currMonthLabel, prevMonthLabel, currDailyRev, prevDailyRev, dailyRevMoM,
   } = derived
 
   const healthColor = HEALTH_HEX[t]
@@ -762,15 +784,15 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
             <motion.div {...panelSpring(0.08)} className={cardBase}>
               <div className="h-[3px] bg-gradient-to-r from-indigo-500 to-indigo-300" />
               <div className="p-4">
-                <h3 className="text-sm font-semibold text-gray-800">Revenue Trend & Moving Average</h3>
+                <h3 className="text-sm font-semibold text-gray-800">Revenue Trend & Avg Daily Revenue</h3>
                 <p className="text-[11px] text-gray-500 mt-0.5 mb-3">
-                  Monthly revenue with 3-month moving average · trend direction &amp; seasonality below
+                  Monthly revenue (bars) with avg daily revenue line · selling days normalised
                 </p>
                 <Plot
                   data={[
                     {
                       type: 'bar',
-                      name: 'Revenue',
+                      name: 'Monthly Revenue',
                       x: fm,
                       y: revByMonth,
                       marker: { color: barColors, opacity: 0.9 },
@@ -779,12 +801,13 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
                     {
                       type: 'scatter',
                       mode: 'lines+markers',
-                      name: '3-mo MA',
-                      x: fm.filter((_, i) => rolling[i] !== null),
-                      y: rolling.filter((v): v is number => v !== null),
-                      line: { color: '#f59e0b', width: 2.5, dash: 'dot' as const },
-                      marker: { color: '#f59e0b', size: 4 },
-                      hovertemplate: '<b>%{x}</b><br>3M Avg: ₹%{y:,.0f}<extra></extra>',
+                      name: 'Avg Daily Rev',
+                      x: fm,
+                      y: dailyRevByMonth,
+                      yaxis: 'y2' as const,
+                      line: { color: '#f59e0b', width: 2.5, shape: 'spline' as const },
+                      marker: { color: '#f59e0b', size: 5 },
+                      hovertemplate: '<b>%{x}</b><br>Daily Avg: ₹%{y:,.0f}<extra></extra>',
                     },
                   ]}
                   layout={{
@@ -795,10 +818,11 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
                       bgcolor: 'rgba(0,0,0,0)', font: { color: PT.font, size: 10 },
                       orientation: 'h' as const, x: 0, y: -0.22,
                     },
-                    xaxis: { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true },
-                    yaxis: { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true, tickformat: ',.0s', title: { text: '' } },
+                    xaxis:  { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true },
+                    yaxis:  { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true, tickformat: ',.0s', title: { text: 'Monthly Rev (₹)' } },
+                    yaxis2: { gridcolor: 'transparent', linecolor: PT.line, tickcolor: PT.line, overlaying: 'y' as const, side: 'right' as const, tickformat: ',.0s', title: { text: 'Daily Avg (₹)' } },
                     hovermode: 'x unified' as const,
-                    margin: { l: 52, r: 12, t: 12, b: 80 },
+                    margin: { l: 52, r: 62, t: 12, b: 80 },
                     height: 270,
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     annotations: annotations as any[],
@@ -806,7 +830,43 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
                   config={{ displayModeBar: false, responsive: true }}
                   style={{ width: '100%' }}
                 />
-                <div className="flex items-center gap-4 mt-1 text-[11px] text-gray-500 flex-wrap">
+
+                {/* Avg Daily Revenue KPIs */}
+                <div className="mt-3 grid grid-cols-3 gap-2">
+                  <div className="rounded-lg bg-amber-50 border border-amber-100 px-2.5 py-2">
+                    <p className="text-[9px] font-bold uppercase tracking-wider text-amber-600">{currMonthLabel}</p>
+                    <p className="text-sm font-bold text-amber-800 mt-0.5">{fmtInr(currDailyRev)}</p>
+                    <p className="text-[9px] text-amber-500 mt-0.5">avg / day</p>
+                  </div>
+                  {prevMonthLabel !== null && prevDailyRev !== null ? (
+                    <div className="rounded-lg bg-slate-50 border border-slate-100 px-2.5 py-2">
+                      <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">{prevMonthLabel}</p>
+                      <p className="text-sm font-bold text-slate-700 mt-0.5">{fmtInr(prevDailyRev)}</p>
+                      <p className="text-[9px] text-slate-400 mt-0.5">avg / day</p>
+                    </div>
+                  ) : (
+                    <div className="rounded-lg bg-slate-50 border border-slate-100 px-2.5 py-2 flex items-center justify-center">
+                      <p className="text-[9px] text-slate-400">No prev month</p>
+                    </div>
+                  )}
+                  <div className={cn(
+                    'rounded-lg border px-2.5 py-2',
+                    dailyRevMoM === null ? 'bg-gray-50 border-gray-100' :
+                    dailyRevMoM >= 0 ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100',
+                  )}>
+                    <p className="text-[9px] font-bold uppercase tracking-wider text-gray-500">MoM Change</p>
+                    <p className={cn(
+                      'text-sm font-bold mt-0.5',
+                      dailyRevMoM === null ? 'text-gray-400' :
+                      dailyRevMoM >= 0 ? 'text-emerald-700' : 'text-red-600',
+                    )}>
+                      {dailyRevMoM !== null ? fmtPct(dailyRevMoM) : '—'}
+                    </p>
+                    <p className="text-[9px] text-gray-400 mt-0.5">daily avg</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4 mt-2 text-[11px] text-gray-500 flex-wrap">
                   <span>Trend: <span className={cn('font-semibold',
                     growthVal !== null && growthVal >= 0 ? 'text-emerald-600' : 'text-red-500')}>
                     {growthVal !== null ? (growthVal >= 0 ? '↑ Upward' : '↓ Downward') : 'N/A'}
@@ -854,7 +914,7 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     textposition: ['top center', 'top center', 'bottom center'] as any,
                     textfont: { color: '#374151', size: 11, family: 'Inter, sans-serif' },
-                    line: { color: '#10b981', width: 3 },
+                    line: { color: '#10b981', width: 3, shape: 'spline' as const },
                     marker: {
                       color: ['#6366f1', '#8b5cf6', '#10b981'],
                       size: 14,

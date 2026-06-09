@@ -308,7 +308,56 @@ export default function ExecutiveOverview({ filters }: Props) {
   const phaseShift  = totalEarly > 0 ? (totalRecent - totalEarly) / totalEarly * 100 : null
 
   const earlyLabel  = early.length  ? `${early[0]} – ${early[early.length - 1]}`    : ''
+  const midLabel    = barMid.length ? `${barMid[0].m} – ${barMid[barMid.length - 1].m}` : ''
   const recentLabel = recent.length ? `${recent[0]} – ${recent[recent.length - 1]}` : ''
+
+  // ── Revenue Context Narrative ───────────────────────────────────────────────
+  const phaseNarrative = useMemo(() => {
+    const totalAll = totalEarly + totalMid + totalRecent
+    if (totalAll === 0 || fs.length === 0) return null
+
+    const earlyShare  = totalAll > 0 ? (totalEarly / totalAll * 100) : 0
+    const midShare    = totalAll > 0 ? (totalMid   / totalAll * 100) : 0
+    const recentShare = totalAll > 0 ? (totalRecent / totalAll * 100) : 0
+
+    const earlyMonthAvg  = early.length  ? totalEarly  / early.length  : 0
+    const midMonthAvg    = barMid.length ? totalMid    / barMid.length : 0
+    const recentMonthAvg = recent.length ? totalRecent / recent.length : 0
+
+    // How many stores contributed revenue in each phase
+    const earlyActive  = fs.filter(s => early.some(m => (s.monthly_sales[m] ?? 0) > 0)).length
+    const midActive    = fs.filter(s => barMid.some(d => (s.monthly_sales[d.m] ?? 0) > 0)).length
+    const recentActive = fs.filter(s => recent.some(m => (s.monthly_sales[m] ?? 0) > 0)).length
+
+    // Month-over-month momentum within early phase
+    const earlyMomArr = barEarly.map((d, i) => i === 0 ? null : earlyMonthAvg === 0 ? null : (d.rev - barEarly[i-1].rev) / Math.max(barEarly[i-1].rev, 1) * 100)
+    const earlyMomAvg = earlyMomArr.filter((v): v is number => v !== null).reduce((s, v) => s + v, 0) / Math.max(earlyMomArr.filter(v => v !== null).length, 1)
+
+    const recentMomArr = barRecent.map((d, i) => i === 0 ? null : (d.rev - barRecent[i-1].rev) / Math.max(barRecent[i-1].rev, 1) * 100)
+    const recentMomAvg = recentMomArr.filter((v): v is number => v !== null).reduce((s, v) => s + v, 0) / Math.max(recentMomArr.filter(v => v !== null).length, 1)
+
+    const earlyPeak  = barEarly.length  ? Math.max(...barEarly.map(d => d.rev))  : 0
+    const recentPeak = barRecent.length ? Math.max(...barRecent.map(d => d.rev)) : 0
+
+    const earlyLow   = barEarly.filter(d => d.rev > 0).length ? Math.min(...barEarly.filter(d => d.rev > 0).map(d => d.rev))  : 0
+    const recentLow  = barRecent.filter(d => d.rev > 0).length ? Math.min(...barRecent.filter(d => d.rev > 0).map(d => d.rev)) : 0
+
+    const networkGrowthPct = phaseShift
+
+    // Mid vs early
+    const midGrowth = earlyMonthAvg > 0 ? (midMonthAvg - earlyMonthAvg) / earlyMonthAvg * 100 : null
+    const recentGrowth = earlyMonthAvg > 0 ? (recentMonthAvg - earlyMonthAvg) / earlyMonthAvg * 100 : null
+
+    const fmt = (n: number) => {
+      if (n >= 1e7) return `₹${(n / 1e7).toFixed(1)}Cr`
+      if (n >= 1e5) return `₹${(n / 1e5).toFixed(1)}L`
+      if (n >= 1e3) return `₹${(n / 1e3).toFixed(0)}K`
+      return `₹${n.toFixed(0)}`
+    }
+    const pct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
+
+    return { earlyShare, midShare, recentShare, earlyMonthAvg, midMonthAvg, recentMonthAvg, earlyActive, midActive, recentActive, earlyMomAvg, recentMomAvg, earlyPeak, recentPeak, earlyLow, recentLow, networkGrowthPct, midGrowth, recentGrowth, fmt, pct, totalAll }
+  }, [barEarly, barMid, barRecent, totalEarly, totalMid, totalRecent, fs, early, recent, phaseShift])
 
   const n       = kpis.scope || 1
   const cardCls = 'rounded-xl border border-gray-200 bg-white p-4 shadow-sm'
@@ -557,6 +606,218 @@ export default function ExecutiveOverview({ filters }: Props) {
           />
         )}
       </motion.div>
+
+      {/* ── Revenue Context Narrative ── */}
+      {phaseNarrative && (totalEarly + totalMid + totalRecent) > 0 && (
+        <motion.div {...panelSpring(0.36)} className={cardCls}>
+          <h3 className="text-sm font-semibold text-gray-800 mb-1">Revenue Context — Executive Narrative</h3>
+          <p className="text-[11px] text-gray-500 mb-4">
+            Phase-by-phase business interpretation of network revenue performance
+          </p>
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+
+            {/* Early Phase */}
+            {barEarly.length > 0 && (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-slate-400 shrink-0" />
+                  <p className="text-xs font-bold text-slate-700 uppercase tracking-wider">Early Phase</p>
+                </div>
+                {earlyLabel && <p className="text-[10px] text-slate-500 font-mono">{earlyLabel}</p>}
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-lg bg-white border border-slate-100 px-2.5 py-2">
+                    <p className="text-[9px] text-slate-400 uppercase tracking-wider">Revenue</p>
+                    <p className="text-sm font-bold text-slate-800">{phaseNarrative.fmt(totalEarly)}</p>
+                  </div>
+                  <div className="rounded-lg bg-white border border-slate-100 px-2.5 py-2">
+                    <p className="text-[9px] text-slate-400 uppercase tracking-wider">Network Share</p>
+                    <p className="text-sm font-bold text-slate-800">{phaseNarrative.earlyShare.toFixed(1)}%</p>
+                  </div>
+                  <div className="rounded-lg bg-white border border-slate-100 px-2.5 py-2">
+                    <p className="text-[9px] text-slate-400 uppercase tracking-wider">Active Stores</p>
+                    <p className="text-sm font-bold text-slate-800">{phaseNarrative.earlyActive} / {fs.length}</p>
+                  </div>
+                  <div className="rounded-lg bg-white border border-slate-100 px-2.5 py-2">
+                    <p className="text-[9px] text-slate-400 uppercase tracking-wider">Avg / Month</p>
+                    <p className="text-sm font-bold text-slate-800">{phaseNarrative.fmt(phaseNarrative.earlyMonthAvg)}</p>
+                  </div>
+                </div>
+
+                <div className="space-y-2 text-[11px] text-slate-600 leading-relaxed">
+                  <p><span className="font-semibold text-slate-700">Performance:</span>{' '}
+                    {phaseNarrative.earlyMomAvg > 5
+                      ? 'The early phase showed accelerating momentum with positive month-on-month growth across most months.'
+                      : phaseNarrative.earlyMomAvg > 0
+                        ? 'The early phase maintained modest but consistent growth, establishing a stable revenue baseline.'
+                        : 'The early phase reflected a contracting trend with revenue declining month-on-month in most periods.'}
+                  </p>
+                  <p><span className="font-semibold text-slate-700">Store Contribution:</span>{' '}
+                    {phaseNarrative.earlyActive === fs.length
+                      ? 'All stores in scope contributed revenue — full network activation in this phase.'
+                      : `${phaseNarrative.earlyActive} of ${fs.length} stores were active, suggesting ${fs.length - phaseNarrative.earlyActive} store${fs.length - phaseNarrative.earlyActive > 1 ? 's were' : ' was'} yet to ramp up.`}
+                  </p>
+                  <p><span className="font-semibold text-slate-700">Key Drivers:</span>{' '}
+                    Revenue range spanned {phaseNarrative.fmt(phaseNarrative.earlyLow)}–{phaseNarrative.fmt(phaseNarrative.earlyPeak)} across early months.
+                    {phaseNarrative.earlyPeak > phaseNarrative.earlyMonthAvg * 1.3
+                      ? ' Significant month spikes indicate event-driven or seasonal peaks in this window.'
+                      : ' Revenue was broadly stable without sharp seasonal distortion.'}
+                  </p>
+                  <p><span className="font-semibold text-slate-700">Risk:</span>{' '}
+                    {phaseNarrative.earlyShare > 40
+                      ? 'A high early-phase revenue share relative to other phases may indicate the network is past its peak growth window.'
+                      : phaseNarrative.earlyShare < 25
+                        ? 'Lower early share suggests the network was still ramping — subsequent phases carry more weight in evaluation.'
+                        : 'Early share is balanced, indicating a normal ramp across the dataset period.'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Mid Phase */}
+            {barMid.length > 0 && (
+              <div className="rounded-xl border border-violet-200 bg-violet-50 p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-violet-400 shrink-0" />
+                  <p className="text-xs font-bold text-violet-700 uppercase tracking-wider">Mid Phase</p>
+                </div>
+                {midLabel && <p className="text-[10px] text-violet-500 font-mono">{midLabel}</p>}
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-lg bg-white border border-violet-100 px-2.5 py-2">
+                    <p className="text-[9px] text-violet-400 uppercase tracking-wider">Revenue</p>
+                    <p className="text-sm font-bold text-violet-800">{phaseNarrative.fmt(totalMid)}</p>
+                  </div>
+                  <div className="rounded-lg bg-white border border-violet-100 px-2.5 py-2">
+                    <p className="text-[9px] text-violet-400 uppercase tracking-wider">Network Share</p>
+                    <p className="text-sm font-bold text-violet-800">{phaseNarrative.midShare.toFixed(1)}%</p>
+                  </div>
+                  <div className="rounded-lg bg-white border border-violet-100 px-2.5 py-2">
+                    <p className="text-[9px] text-violet-400 uppercase tracking-wider">Active Stores</p>
+                    <p className="text-sm font-bold text-violet-800">{phaseNarrative.midActive} / {fs.length}</p>
+                  </div>
+                  <div className="rounded-lg bg-white border border-violet-100 px-2.5 py-2">
+                    <p className="text-[9px] text-violet-400 uppercase tracking-wider">Avg / Month</p>
+                    <p className="text-sm font-bold text-violet-800">{phaseNarrative.fmt(phaseNarrative.midMonthAvg)}</p>
+                  </div>
+                </div>
+
+                <div className="space-y-2 text-[11px] text-violet-700 leading-relaxed">
+                  <p><span className="font-semibold text-violet-800">vs Early Phase:</span>{' '}
+                    {phaseNarrative.midGrowth === null ? 'No early phase data for comparison.' :
+                     phaseNarrative.midGrowth > 10
+                       ? `Mid-phase average monthly revenue grew ${phaseNarrative.pct(phaseNarrative.midGrowth)} over early phase — a strong acceleration signal.`
+                       : phaseNarrative.midGrowth > 0
+                         ? `Mid-phase saw modest improvement of ${phaseNarrative.pct(phaseNarrative.midGrowth)} over early — steady but not accelerating.`
+                         : `Mid-phase contracted by ${phaseNarrative.pct(Math.abs(phaseNarrative.midGrowth))} vs early — the network faced headwinds during this window.`}
+                  </p>
+                  <p><span className="font-semibold text-violet-800">Network Engagement:</span>{' '}
+                    {phaseNarrative.midActive > phaseNarrative.earlyActive
+                      ? `Mid phase brought ${phaseNarrative.midActive - phaseNarrative.earlyActive} additional store${phaseNarrative.midActive - phaseNarrative.earlyActive > 1 ? 's' : ''} online compared to the early window — network expansion in progress.`
+                      : phaseNarrative.midActive === phaseNarrative.earlyActive
+                        ? 'Same number of stores active as early phase — stable network coverage.'
+                        : `${phaseNarrative.earlyActive - phaseNarrative.midActive} fewer stores active than early phase — some stores may have gone dormant mid-period.`}
+                  </p>
+                  <p><span className="font-semibold text-violet-800">Observation:</span>{' '}
+                    Mid-phase revenue share of {phaseNarrative.midShare.toFixed(1)}% of the full-period total
+                    {phaseNarrative.midShare > phaseNarrative.earlyShare && phaseNarrative.midShare > phaseNarrative.recentShare
+                      ? ' represents the peak phase — the network performed best in this window.'
+                      : phaseNarrative.midShare > phaseNarrative.earlyShare
+                        ? ' shows improvement from early phase, though recent phase has overtaken it.'
+                        : ' reflects a transitional period — performance will be judged by whether the recent phase recovers or further contracts.'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Recent Phase */}
+            {barRecent.length > 0 && (
+              <div className={`rounded-xl border p-4 space-y-3 ${
+                phaseNarrative.recentGrowth !== null && phaseNarrative.recentGrowth >= 0
+                  ? 'border-blue-200 bg-blue-50'
+                  : 'border-orange-200 bg-orange-50'
+              }`}>
+                <div className="flex items-center gap-2">
+                  <span className={`inline-block h-2.5 w-2.5 rounded-full shrink-0 ${
+                    phaseNarrative.recentGrowth !== null && phaseNarrative.recentGrowth >= 0
+                      ? 'bg-blue-500'
+                      : 'bg-orange-400'
+                  }`} />
+                  <p className={`text-xs font-bold uppercase tracking-wider ${
+                    phaseNarrative.recentGrowth !== null && phaseNarrative.recentGrowth >= 0
+                      ? 'text-blue-700'
+                      : 'text-orange-700'
+                  }`}>Recent Phase</p>
+                </div>
+                {recentLabel && <p className={`text-[10px] font-mono ${
+                  phaseNarrative.recentGrowth !== null && phaseNarrative.recentGrowth >= 0
+                    ? 'text-blue-500'
+                    : 'text-orange-500'
+                }`}>{recentLabel}</p>}
+
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { label: 'Revenue', val: phaseNarrative.fmt(totalRecent) },
+                    { label: 'Network Share', val: `${phaseNarrative.recentShare.toFixed(1)}%` },
+                    { label: 'Active Stores', val: `${phaseNarrative.recentActive} / ${fs.length}` },
+                    { label: 'Avg / Month', val: phaseNarrative.fmt(phaseNarrative.recentMonthAvg) },
+                  ].map(({ label, val }) => (
+                    <div key={label} className="rounded-lg bg-white border border-white/70 px-2.5 py-2">
+                      <p className="text-[9px] text-gray-400 uppercase tracking-wider">{label}</p>
+                      <p className="text-sm font-bold text-gray-800">{val}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="space-y-2 text-[11px] leading-relaxed text-gray-700">
+                  <p><span className="font-semibold text-gray-800">vs Early Phase:</span>{' '}
+                    {phaseNarrative.recentGrowth === null
+                      ? 'Insufficient data for cross-phase comparison.'
+                      : phaseNarrative.recentGrowth > 20
+                        ? `Exceptional trajectory — recent average monthly revenue is ${phaseNarrative.pct(phaseNarrative.recentGrowth)} higher than early phase. Management should identify and replicate these drivers.`
+                        : phaseNarrative.recentGrowth > 5
+                          ? `Positive momentum — recent phase average is ${phaseNarrative.pct(phaseNarrative.recentGrowth)} ahead of early baseline, indicating healthy network progression.`
+                          : phaseNarrative.recentGrowth > -5
+                            ? 'Revenue is broadly flat versus the early phase. Growth has stalled — further diagnosis needed to distinguish structural ceiling from temporary slowdown.'
+                            : `Concerning reversal — recent phase is ${phaseNarrative.pct(Math.abs(phaseNarrative.recentGrowth))} below early baseline. Immediate review of underperforming stores is recommended.`}
+                  </p>
+                  <p><span className="font-semibold text-gray-800">MoM Trend:</span>{' '}
+                    {phaseNarrative.recentMomAvg > 3
+                      ? `Within the recent phase, month-on-month growth averaged ${phaseNarrative.recentMomAvg.toFixed(1)}% — an accelerating close to the period.`
+                      : phaseNarrative.recentMomAvg > -3
+                        ? 'Month-on-month variation within recent phase was minimal — the network is in a holding pattern.'
+                        : `Recent phase showed a declining month-on-month trajectory averaging ${phaseNarrative.recentMomAvg.toFixed(1)}% — momentum is fading and proactive intervention is advisable.`}
+                  </p>
+                  <p><span className="font-semibold text-gray-800">Store Health Signal:</span>{' '}
+                    {phaseNarrative.recentActive === fs.length
+                      ? `All ${fs.length} stores are active in recent phase — full network engagement, a positive indicator.`
+                      : phaseNarrative.recentActive >= phaseNarrative.earlyActive
+                        ? `${phaseNarrative.recentActive} stores active in recent phase — same or better coverage than early period.`
+                        : `${fs.length - phaseNarrative.recentActive} store${fs.length - phaseNarrative.recentActive > 1 ? 's have' : ' has'} gone dormant since the early phase — review store viability and re-engagement strategies.`}
+                  </p>
+                  <p><span className="font-semibold text-gray-800">Peak vs Low:</span>{' '}
+                    Recent phase revenue swung from {phaseNarrative.fmt(phaseNarrative.recentLow)} to {phaseNarrative.fmt(phaseNarrative.recentPeak)}.
+                    {(phaseNarrative.recentPeak / Math.max(phaseNarrative.recentLow, 1)) > 1.4
+                      ? ' High intra-phase volatility suggests uneven store performance or seasonal demand patterns — investigate outlier months.'
+                      : ' Intra-phase revenue was broadly consistent, suggesting stable demand without sharp seasonal swings.'}
+                  </p>
+                  {phaseNarrative.networkGrowthPct !== null && (
+                    <p><span className="font-semibold text-gray-800">Overall Verdict:</span>{' '}
+                      {phaseNarrative.networkGrowthPct > 15
+                        ? `The network has grown significantly — ${phaseNarrative.pct(phaseNarrative.networkGrowthPct)} improvement from early to recent phase. Protect and scale the top performers driving this result.`
+                        : phaseNarrative.networkGrowthPct > 0
+                          ? `Moderate network growth of ${phaseNarrative.pct(phaseNarrative.networkGrowthPct)} over the period. Focus on converting mid-tier stores to outperformers to accelerate the trajectory.`
+                          : `Network revenue has declined ${phaseNarrative.pct(Math.abs(phaseNarrative.networkGrowthPct))} from early to recent phase. Immediate diagnosis of structural vs operational causes is critical.`}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
+          </div>
+        </motion.div>
+      )}
 
     </div>
   )

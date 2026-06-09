@@ -3,6 +3,7 @@ import { Routes, Route, Link } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Database, ExternalLink, RotateCcw, Target } from 'lucide-react'
 import { useDataContext } from './contexts/DataContext'
+import SalesDataManager from './components/SalesDataManager'
 import { useFilters, type FilterState } from './hooks/useFilters'
 import {
   Select,
@@ -227,6 +228,7 @@ export default function App() {
     useDataContext()
 
   const [activeTab, setActiveTab]         = useState<TabId>('executive')
+  const [showDataManager, setShowDataManager] = useState(false)
   const [deepDiveStoreId, setDeepDiveStoreId] = useState<string | null>(null)
   const [journeyPrefilter, setJourneyPrefilter] = useState<StoreCategory | null>(null)
 
@@ -312,6 +314,13 @@ export default function App() {
               storeCount={stores.length}
               monthCount={months.length}
             />
+            <button
+              onClick={() => setShowDataManager(true)}
+              className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-600 hover:border-blue-400 hover:text-blue-600 shadow-sm transition-colors"
+            >
+              <Database className="h-3.5 w-3.5" />
+              Manage Data
+            </button>
             <Link
               to="/target-tracker"
               className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-600 hover:border-blue-400 hover:text-blue-600 shadow-sm transition-colors"
@@ -408,6 +417,19 @@ export default function App() {
           Croma Analytics · DS &amp; DSG Store Intelligence Platform
         </span>
       </footer>
+
+      {/* ── Sales Data Manager Drawer ── */}
+      <AnimatePresence>
+        {showDataManager && (
+          <SalesDataManager
+            onClose={() => setShowDataManager(false)}
+            onDataChanged={() => {
+              setShowDataManager(false)
+              refetchData()
+            }}
+          />
+        )}
+      </AnimatePresence>
 
     </div>
       } />

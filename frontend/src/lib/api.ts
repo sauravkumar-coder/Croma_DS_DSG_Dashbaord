@@ -95,6 +95,26 @@ export const getStorageStatus = () =>
 export const deleteCombinedSales = () =>
   api.delete<{ ok: boolean }>('/api/storage/sales')
 
+export interface SalesMetaResult {
+  loaded: boolean
+  filename?: string
+  uploaded_at?: string
+  file_size_kb?: number
+  store_count?: number
+  record_count?: number
+  date_from?: string | null
+  date_to?: string | null
+  month_count?: number
+  total_revenue?: number
+  is_demo?: boolean
+}
+
+export const getSalesMeta = () =>
+  api.get<SalesMetaResult>('/api/sales/meta')
+
+export const reloadSales = () =>
+  api.post<{ ok: boolean; stores: number; months: string[] }>('/api/sales/reload')
+
 // ── Target management ─────────────────────────────────────────────────────────
 
 export interface TargetFileRecord {
