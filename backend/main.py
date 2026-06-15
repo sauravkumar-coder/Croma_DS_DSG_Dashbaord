@@ -632,6 +632,7 @@ def get_tracker_data(month: str):
     has_sales  = sales_path is not None
 
     targets: list[dict] = []
+    raw_target_row_count: int = 0
     sales_result: dict = {
         "sales_rows":     [],
         "detected_month": month,
@@ -641,7 +642,7 @@ def get_tracker_data(month: str):
 
     if has_target:
         try:
-            targets = trk.parse_tracker_target(target_path)  # type: ignore[arg-type]
+            targets, raw_target_row_count = trk.parse_tracker_target(target_path)  # type: ignore[arg-type]
         except Exception as exc:
             logger.warning("Could not parse target file: %s", exc)
             has_target = False
@@ -654,13 +655,14 @@ def get_tracker_data(month: str):
             has_sales = False
 
     return {
-        "month":          month,
-        "has_target":     has_target,
-        "has_sales":      has_sales,
-        "targets":        targets,
-        "sales_rows":     sales_result["sales_rows"],
-        "max_elapsed":    sales_result["max_elapsed"],
-        "detected_month": sales_result.get("detected_month", month),
+        "month":                month,
+        "has_target":           has_target,
+        "has_sales":            has_sales,
+        "targets":              targets,
+        "raw_target_row_count": raw_target_row_count,
+        "sales_rows":           sales_result["sales_rows"],
+        "max_elapsed":          sales_result["max_elapsed"],
+        "detected_month":       sales_result.get("detected_month", month),
     }
 
 

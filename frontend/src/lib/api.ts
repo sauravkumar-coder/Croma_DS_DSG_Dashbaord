@@ -204,6 +204,7 @@ export interface TrackerData {
   has_target: boolean
   has_sales: boolean
   targets: TrackerTargetRow[]
+  raw_target_row_count: number   // rows in OW Budget before deduplication
   sales_rows: TrackerSalesRow[]
   max_elapsed: number
   detected_month: string | null

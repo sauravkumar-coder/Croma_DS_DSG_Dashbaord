@@ -3,7 +3,7 @@ import { AnimatePresence, motion, useMotionValue, useTransform, animate } from '
 import {
   Activity, AlertCircle, BarChart2,
   Calendar, ChevronDown, ChevronUp,
-  Download, FileSpreadsheet, Loader2, Minus, RefreshCw, Search, Settings, Target,
+  Download, FileSpreadsheet, Info, Loader2, Minus, RefreshCw, Search, Settings, Target,
   TrendingDown, TrendingUp, UploadCloud, X, XCircle, Zap,
 } from 'lucide-react'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -15,6 +15,7 @@ import {
   type TrackerStatus,
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { useDataContext } from '@/contexts/DataContext'
 import {
   Select,
   SelectContent,
@@ -249,9 +250,9 @@ function DaySlider({ value, onChange, targetMonth }: {
   )
 }
 
-function SortBtn({ col, sortKey, sortDir, onSort, label }: {
+function SortBtn({ col, sortKey, sortDir, onSort, label, info }: {
   col: TableSortKey; sortKey: TableSortKey; sortDir: 'asc' | 'desc'
-  onSort: (c: TableSortKey) => void; label: string
+  onSort: (c: TableSortKey) => void; label: string; info?: boolean
 }) {
   return (
     <button
@@ -259,6 +260,7 @@ function SortBtn({ col, sortKey, sortDir, onSort, label }: {
       className="flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-gray-500 hover:text-gray-900 transition-colors whitespace-nowrap"
     >
       {label}
+      {info && <Info className="h-3 w-3 text-blue-400 opacity-70 shrink-0" />}
       {sortKey === col
         ? sortDir === 'asc'
           ? <ChevronUp className="h-3 w-3 text-blue-400" />
@@ -375,6 +377,9 @@ function SalesUploadZone({ phase, onFile, onReset }: {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function TargetCommandCenter() {
+  // ── Dashboard store master (for reconciliation against OW Budget) ─────────
+  const { stores: dashboardStores } = useDataContext()
+
   // ── Tracker init / lifecycle ──────────────────────────────────────────────
   const [initStatus,     setInitStatus]     = useState<TrackerInitStatus>('loading')
   const [trackerStatus,  setTrackerStatus]  = useState<TrackerStatus | null>(null)
@@ -382,9 +387,10 @@ export default function TargetCommandCenter() {
   const [salesPhase,     setSalesPhase]     = useState<SalesPhase>({ kind: 'idle' })
   const [showNewSales,   setShowNewSales]   = useState(false)
 
-  // ── Tracker data (own store — never touches DataContext) ──────────────────
-  const [targetMap,       setTargetMap]       = useState<Map<string, number>>(new Map())
-  const [targetKeyToName, setTargetKeyToName] = useState<Map<string, string>>(new Map())
+  // ── Tracker data (own store — never touches global filter bar) ────────────
+  const [targetMap,        setTargetMap]        = useState<Map<string, number>>(new Map())
+  const [targetKeyToName,  setTargetKeyToName]  = useState<Map<string, string>>(new Map())
+  const [rawTargetRowCount,setRawTargetRowCount] = useState(0)  // rows before dedup in OW Budget
   const [rawSalesRows,    setRawSalesRows]    = useState<{ storeName: string; sales: number; day: number }[]>([])
   const [salesMap,        setSalesMap]        = useState<Map<string, number>>(new Map())
   const [storeStateMap,   setStoreStateMap]   = useState<Map<string, string>>(new Map())
@@ -397,6 +403,7 @@ export default function TargetCommandCenter() {
 
   // ── UI state ──────────────────────────────────────────────────────────────
   const [showDrawer,    setShowDrawer]    = useState(false)
+  const [showAudit,     setShowAudit]     = useState(false)
   const [tableSearch,   setTableSearch]   = useState('')
   const [tableSortKey,      setTableSortKey]      = useState<TableSortKey>('achPct')
   const [tableSortDir,      setTableSortDir]      = useState<'asc' | 'desc'>('asc')
@@ -418,6 +425,7 @@ export default function TargetCommandCenter() {
     }
     setTargetMap(tm)
     setTargetKeyToName(knm)
+    setRawTargetRowCount(data.raw_target_row_count ?? data.targets.length)
 
     const rawRows: { storeName: string; sales: number; day: number }[] = []
     const stateMapNew = new Map<string, string>()
@@ -737,6 +745,37 @@ export default function TargetCommandCenter() {
     ]
   }, [stateData])
 
+  // ── Store Population Reconciliation ──────────────────────────────────────
+  // Compares the dashboard store master (from sales file) against the OW Budget
+  // target population to surface missing stores, unknown keys, and duplicates.
+
+  const reconciliation = useMemo(() => {
+    const dashboardIds  = new Set(dashboardStores.map(s => s.store_id))
+    const trackerKeys   = new Set([...targetMap.keys()])
+    const matched       = [...trackerKeys].filter(k => dashboardIds.has(k))
+    const extraInTracker    = [...trackerKeys].filter(k => !dashboardIds.has(k))
+    const missingFromTracker = dashboardStores
+      .filter(s => !trackerKeys.has(s.store_id))
+      .map(s => ({ id: s.store_id, name: s.store_name || s.store_id }))
+    const duplicateCount = Math.max(0, rawTargetRowCount - trackerKeys.size)
+    return {
+      dashboardCount:       dashboardIds.size,
+      trackerCount:         trackerKeys.size,
+      rawOWBudgetRows:      rawTargetRowCount,
+      duplicateCount,
+      matchedCount:         matched.length,
+      storesWithTargets:    matched.length,
+      storesWithoutTargets: missingFromTracker.length,
+      extraInTracker,
+      missingFromTracker,
+      reconciliationDiff:   dashboardIds.size - trackerKeys.size,
+      isClean:
+        extraInTracker.length === 0 &&
+        missingFromTracker.length === 0 &&
+        duplicateCount === 0,
+    }
+  }, [dashboardStores, targetMap, rawTargetRowCount])
+
   // ── Achievement buckets + donut chart ────────────────────────────────────
 
   const achBuckets = useMemo(() =>
@@ -1015,7 +1054,9 @@ export default function TargetCommandCenter() {
           <h2 className="text-base font-bold text-gray-900">Target Command Center</h2>
           <p className="text-[11px] text-gray-500 mt-0.5">
             Target month: <span className="text-blue-600 font-semibold">{targetMonth || '—'}</span>
-            {' · '}{storeCalcs.length} stores · OOW Budget · Day {dayOfMonth} of {totalDays}
+            {' · '}{storeCalcs.length} stores (OW Budget){' · '}
+            {reconciliation.dashboardCount} stores (Dashboard){' · '}
+            Day {dayOfMonth} of {totalDays}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -1029,6 +1070,27 @@ export default function TargetCommandCenter() {
               {statesList.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
             </SelectContent>
           </Select>
+
+          {/* Store Audit toggle */}
+          <button
+            onClick={() => setShowAudit(v => !v)}
+            className={cn(
+              'flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-medium transition-colors shadow-sm',
+              showAudit
+                ? 'bg-amber-600 text-white border-amber-600'
+                : reconciliation.isClean
+                  ? 'bg-white border-gray-200 text-gray-600 hover:text-gray-900 hover:border-gray-400'
+                  : 'bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100',
+            )}
+          >
+            <Activity className="h-3.5 w-3.5" />
+            Store Audit
+            {!reconciliation.isClean && !showAudit && (
+              <span className="ml-0.5 inline-flex items-center justify-center h-4 w-4 rounded-full bg-amber-500 text-white text-[10px] font-bold leading-none">
+                {reconciliation.extraInTracker.length + (reconciliation.duplicateCount > 0 ? 1 : 0)}
+              </span>
+            )}
+          </button>
 
           {/* Upload Sales toggle */}
           <button
@@ -1048,6 +1110,105 @@ export default function TargetCommandCenter() {
         </div>
       </motion.div>
 
+      {/* ── Store Population Audit Panel ── */}
+      <AnimatePresence>
+        {showAudit && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.25, ease: 'easeInOut' }}
+            className="overflow-hidden"
+          >
+            <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4 space-y-4">
+
+              {/* Header */}
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <Activity className="h-4 w-4 text-amber-600 shrink-0" />
+                  <p className="text-sm font-semibold text-gray-800">Store Population Audit</p>
+                  <span className="text-[10px] text-gray-500">Reconciliation between Dashboard store master and OW Budget target file</span>
+                </div>
+                <button onClick={() => setShowAudit(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Summary grid */}
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
+                {[
+                  { label: 'Dashboard Stores',     value: reconciliation.dashboardCount,       sub: 'from sales file',        color: 'text-gray-800'    },
+                  { label: 'OW Budget Stores',      value: reconciliation.trackerCount,         sub: 'unique store keys',      color: 'text-blue-700'    },
+                  { label: 'OW Budget Raw Rows',    value: reconciliation.rawOWBudgetRows,      sub: 'before deduplication',   color: 'text-gray-600'    },
+                  { label: 'Duplicate Keys Merged', value: reconciliation.duplicateCount,       sub: 'targets summed',         color: reconciliation.duplicateCount > 0 ? 'text-amber-700' : 'text-emerald-700' },
+                  { label: 'Matched',               value: reconciliation.matchedCount,         sub: 'in both files',          color: 'text-emerald-700' },
+                  { label: 'Missing from OW Budget',value: reconciliation.storesWithoutTargets, sub: 'dashboard stores w/o target', color: reconciliation.storesWithoutTargets > 0 ? 'text-amber-700' : 'text-emerald-700' },
+                  { label: 'Unknown OW Keys',       value: reconciliation.extraInTracker.length,sub: 'not in dashboard',        color: reconciliation.extraInTracker.length > 0 ? 'text-red-700' : 'text-emerald-700' },
+                ].map(({ label, value, sub, color }) => (
+                  <div key={label} className="rounded-lg border border-amber-100 bg-white px-3 py-2 space-y-0.5">
+                    <p className="text-[10px] font-medium uppercase tracking-wider text-gray-500">{label}</p>
+                    <p className={cn('text-xl font-bold tabular-nums', color)}>{value}</p>
+                    <p className="text-[10px] text-gray-400">{sub}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Reconciliation Difference */}
+              <div className={cn(
+                'rounded-lg border px-3 py-2 text-xs font-medium',
+                reconciliation.reconciliationDiff === 0
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : 'border-amber-200 bg-amber-50 text-amber-800',
+              )}>
+                Reconciliation Difference: {reconciliation.reconciliationDiff > 0 ? '+' : ''}{reconciliation.reconciliationDiff} stores
+                {' '}(Dashboard {reconciliation.dashboardCount} vs OW Budget {reconciliation.trackerCount})
+                {reconciliation.reconciliationDiff === 0 && ' — store counts reconcile ✓'}
+              </div>
+
+              {/* Dashboard stores missing from OW Budget */}
+              {reconciliation.missingFromTracker.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-amber-800">
+                    Dashboard stores without OW Budget targets ({reconciliation.missingFromTracker.length}):
+                  </p>
+                  <div className="max-h-40 overflow-y-auto rounded-lg border border-amber-100 bg-white divide-y divide-gray-50">
+                    {reconciliation.missingFromTracker.map(s => (
+                      <div key={s.id} className="flex items-center gap-3 px-3 py-1.5">
+                        <span className="text-[10px] font-mono text-gray-400 w-20 shrink-0">{s.id}</span>
+                        <span className="text-xs text-gray-700 truncate">{s.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* OW Budget keys not in dashboard */}
+              {reconciliation.extraInTracker.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-red-700">
+                    OW Budget store keys not found in Dashboard ({reconciliation.extraInTracker.length}) — possible key mismatch:
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {reconciliation.extraInTracker.map(k => (
+                      <span key={k} className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-mono bg-red-50 text-red-700 border border-red-200">
+                        {k}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {reconciliation.isClean && (
+                <p className="text-xs text-emerald-700 font-medium">
+                  ✓ All OW Budget store keys match the Dashboard store master. No duplicates detected.
+                </p>
+              )}
+
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* ── Day Slider ── */}
       <DaySlider value={dayOfMonth} onChange={setDayOfMonth} targetMonth={targetMonth} />
 
@@ -1059,7 +1220,7 @@ export default function TargetCommandCenter() {
         animate="show"
       >
         <KPICard label="OOW Target" value={fmtInr(national.totalTarget)}
-          sub={`${storeCalcs.length} stores`}
+          sub={`${storeCalcs.length} / ${reconciliation.dashboardCount} stores`}
           icon={<Target className="h-4 w-4" />} />
         <KPICard label="Sales" value={fmtInr(national.totalSales)}
           sub={`Day ${dayOfMonth} of ${totalDays}`}
@@ -1388,6 +1549,56 @@ export default function TargetCommandCenter() {
         </div>
       </motion.div>
 
+      {/* ── Metric Definitions ── */}
+      <motion.div {...panelSpring(0.34)}
+        className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
+          <Info className="h-4 w-4 text-blue-500 shrink-0" />
+          <div>
+            <h3 className="text-sm font-semibold text-gray-800">Metric Definitions</h3>
+            <p className="text-[11px] text-gray-500 mt-0.5">How the key performance columns in the table below are calculated</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 p-4">
+          {[
+            {
+              label:   'Run Rate Ach %',
+              formula: 'Current Sales ÷ Expected Till Date × 100',
+              sub:     `Expected Till Date = Monthly Target × (Day ${dayOfMonth} ÷ ${totalDays} days)`,
+              meaning: 'Whether the store is ahead of or behind the daily pace needed to hit its target by today. Above 100% means running ahead of schedule.',
+            },
+            {
+              label:   'Monthly Ach %',
+              formula: 'Current Sales ÷ Monthly Target × 100',
+              sub:     'Raw progress toward the full-month OOW budget',
+              meaning: 'Percentage of the monthly target already achieved. Does not factor in how much of the month has passed.',
+            },
+            {
+              label:   'Status',
+              formula: 'Driven by Projected Ach %',
+              sub:     'Hit ≥ 100%  ·  At Risk 75 – 99%  ·  Miss < 75%',
+              meaning: 'Performance classification based on whether the store is projected to meet its target at month-end.',
+            },
+            {
+              label:   'Projected Ach %',
+              formula: `(Current Sales ÷ Day ${dayOfMonth}) × ${totalDays} ÷ Target × 100`,
+              sub:     'Estimated month-end achievement at the current daily run rate',
+              meaning: 'If today\'s daily pace holds for the rest of the month, this is the achievement % the store will reach at month-end.',
+            },
+          ].map(({ label, formula, sub, meaning }) => (
+            <div key={label} className="rounded-lg border border-gray-100 bg-gray-50/60 px-3 py-2.5 space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <Info className="h-3 w-3 text-blue-400 shrink-0" />
+                <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600">{label}</p>
+              </div>
+              <p className="text-[11px] font-mono text-gray-700 bg-white rounded border border-gray-200 px-2 py-1 leading-snug">{formula}</p>
+              <p className="text-[10px] text-gray-400 leading-snug">{sub}</p>
+              <p className="text-[11px] text-gray-500 leading-relaxed">{meaning}</p>
+            </div>
+          ))}
+        </div>
+      </motion.div>
+
       {/* ── ROW 7: Store Performance Table ── */}
       <motion.div {...panelSpring(0.35)}
         className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
@@ -1431,18 +1642,18 @@ export default function TargetCommandCenter() {
               <tr className="border-b border-gray-200 bg-gray-50">
                 <th className="px-3 py-2.5 text-left text-xs text-gray-400 w-8 sticky top-0 bg-gray-50">#</th>
                 {([
-                  { col: 'name'            as TableSortKey, label: 'Store Name',        tip: 'Store name'                                                                              },
-                  { col: 'sales'           as TableSortKey, label: 'Current Sales',     tip: `Actual cumulative sales recorded through Day ${dayOfMonth}`                             },
-                  { col: 'target'          as TableSortKey, label: 'Monthly Target',    tip: 'Full-month OOW budget target'                                                            },
-                  { col: 'dailyTarget'     as TableSortKey, label: 'Daily Target',      tip: `Monthly Target ÷ ${totalDays} days — average daily sales required`                      },
-                  { col: 'expectedTillDate'as TableSortKey, label: 'Expected Till Date',tip: `Pro-rated target by Day ${dayOfMonth} = Monthly Target × (${dayOfMonth} / ${totalDays})`},
-                  { col: 'runRateAch'      as TableSortKey, label: 'Run Rate Ach %',    tip: 'Current Sales ÷ Expected Till Date × 100. >100% means ahead of pace'                    },
-                  { col: 'achPct'          as TableSortKey, label: 'Monthly Ach %',     tip: 'Current Sales ÷ Monthly Target × 100 — raw progress towards the full-month target'      },
-                  { col: 'remainingStatus' as TableSortKey, label: 'Status',            tip: 'Hit ≥ 100% projected · At Risk 75–99% · Miss < 75%'                                     },
-                  { col: 'projAchPct'      as TableSortKey, label: 'Projected Ach %',   tip: `Estimated month-end = (Current Sales ÷ Day ${dayOfMonth}) × ${totalDays} ÷ Target × 100`},
-                ] as const).map(({ col, label, tip }) => (
+                  { col: 'name'            as TableSortKey, label: 'Store Name',        tip: 'Store name'                                                                               },
+                  { col: 'sales'           as TableSortKey, label: 'Current Sales',     tip: `Actual cumulative sales recorded through Day ${dayOfMonth}`                              },
+                  { col: 'target'          as TableSortKey, label: 'Monthly Target',    tip: 'Full-month OOW budget target'                                                             },
+                  { col: 'dailyTarget'     as TableSortKey, label: 'Daily Target',      tip: `Monthly Target ÷ ${totalDays} days — average daily sales required`                       },
+                  { col: 'expectedTillDate'as TableSortKey, label: 'Expected Till Date',tip: `Pro-rated target by Day ${dayOfMonth} = Monthly Target × (${dayOfMonth} / ${totalDays})` },
+                  { col: 'runRateAch'      as TableSortKey, label: 'Run Rate Ach %',    tip: 'Current Sales ÷ Expected Till Date × 100 — see Metric Definitions above',    info: true  },
+                  { col: 'achPct'          as TableSortKey, label: 'Monthly Ach %',     tip: 'Current Sales ÷ Monthly Target × 100 — see Metric Definitions above',        info: true  },
+                  { col: 'remainingStatus' as TableSortKey, label: 'Status',            tip: 'Hit ≥ 100% projected · At Risk 75–99% · Miss < 75% — see Metric Definitions above', info: true },
+                  { col: 'projAchPct'      as TableSortKey, label: 'Projected Ach %',   tip: `(Current Sales ÷ Day ${dayOfMonth}) × ${totalDays} ÷ Target × 100 — see Metric Definitions above`, info: true },
+                ]).map(({ col, label, tip, info }) => (
                   <th key={col} className="px-3 py-2.5 text-left sticky top-0 bg-gray-50" title={tip}>
-                    <SortBtn col={col} sortKey={tableSortKey} sortDir={tableSortDir} onSort={toggleSort} label={label} />
+                    <SortBtn col={col} sortKey={tableSortKey} sortDir={tableSortDir} onSort={toggleSort} label={label} info={info} />
                   </th>
                 ))}
               </tr>

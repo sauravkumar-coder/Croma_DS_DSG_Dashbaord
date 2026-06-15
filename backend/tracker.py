@@ -88,11 +88,16 @@ def validate_sales_file(filepath: str) -> list[str]:
 # ── Target parser ──────────────────────────────────────────────────────────────
 
 
-def parse_tracker_target(filepath: str) -> list[dict[str, Any]]:
+def parse_tracker_target(filepath: str) -> tuple[list[dict[str, Any]], int]:
     """Parse target file for the Target Tracker (OW-Budget format).
 
-    Returns a list of:
-      {store_key, store_name, head_operations, zonal_manager, cluster_manager, target}
+    Returns (deduplicated_rows, raw_row_count) where:
+      - deduplicated_rows: one entry per unique store_key; targets are SUMMED
+        when the same key appears multiple times (e.g. DS + DSG split rows).
+      - raw_row_count: total rows parsed before deduplication, used by callers
+        to detect duplicate-key situations in the source file.
+
+    Each entry: {store_key, store_name, head_operations, zonal_manager, cluster_manager, target}
     """
     df = pd.read_excel(filepath)
     df.columns = [str(c).strip() for c in df.columns]
@@ -112,13 +117,13 @@ def parse_tracker_target(filepath: str) -> list[dict[str, Any]]:
     df[c_target] = pd.to_numeric(df[c_target], errors="coerce").fillna(0)
     df = df[df[c_target] > 0].copy()
 
-    results: list[dict[str, Any]] = []
+    raw_rows: list[dict[str, Any]] = []
     for _, row in df.iterrows():
         key  = str(row[c_key]).strip()  if c_key  and pd.notna(row[c_key])  else ""
         name = str(row[c_name]).strip() if c_name and pd.notna(row[c_name]) else ""
         if not key and not name:
             continue
-        results.append({
+        raw_rows.append({
             "store_key":       key or name,
             "store_name":      name or key,
             "head_operations": str(row[c_head]).strip() if c_head and pd.notna(row[c_head]) else "",
@@ -126,7 +131,29 @@ def parse_tracker_target(filepath: str) -> list[dict[str, Any]]:
             "cluster_manager": str(row[c_cm]).strip()   if c_cm   and pd.notna(row[c_cm])   else "",
             "target":          float(row[c_target]),
         })
-    return results
+
+    raw_row_count = len(raw_rows)
+
+    # Deduplicate by store_key: sum targets, keep first occurrence's metadata.
+    # This handles OW Budget files where the same store appears on multiple rows
+    # (e.g. one row per product line or zone split).
+    deduped: dict[str, dict[str, Any]] = {}
+    for entry in raw_rows:
+        sk = entry["store_key"]
+        if sk in deduped:
+            deduped[sk]["target"] += entry["target"]
+            logger.debug("Duplicate store_key '%s' in target file — targets summed", sk)
+        else:
+            deduped[sk] = dict(entry)
+
+    if raw_row_count != len(deduped):
+        logger.warning(
+            "parse_tracker_target: %d duplicate store key(s) collapsed in '%s' "
+            "(raw rows: %d → unique: %d)",
+            raw_row_count - len(deduped), filepath, raw_row_count, len(deduped),
+        )
+
+    return list(deduped.values()), raw_row_count
 
 
 # ── Sales parser ───────────────────────────────────────────────────────────────
