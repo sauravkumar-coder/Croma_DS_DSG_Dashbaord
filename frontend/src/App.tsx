@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Routes, Route, Link } from 'react-router-dom'
+import { Routes, Route } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Database, ExternalLink, RotateCcw, Target } from 'lucide-react'
+import { Database, RotateCcw } from 'lucide-react'
 import { useDataContext } from './contexts/DataContext'
 import SalesDataManager from './components/SalesDataManager'
 import { useFilters, type FilterState } from './hooks/useFilters'
@@ -362,14 +362,6 @@ export default function App() {
               <Database className="h-3.5 w-3.5" />
               Manage Data
             </button>
-            <Link
-              to="/target-tracker"
-              className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-600 hover:border-blue-400 hover:text-blue-600 shadow-sm transition-colors"
-            >
-              <Target className="h-3.5 w-3.5" />
-              Target Tracker
-              <ExternalLink className="h-3 w-3 opacity-50" />
-            </Link>
           </div>
         </div>
       </header>
