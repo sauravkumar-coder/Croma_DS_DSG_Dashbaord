@@ -62,9 +62,11 @@ const PF = { font: '#6b7280', legend: '#6b7280' }
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type RiskStatus = 'Champion' | 'On Track' | 'Watchlist' | 'At Risk'
+type RemainingStatus = 'Hit' | 'At Risk' | 'Miss'
 type TableSortKey =
   | 'name' | 'state' | 'target' | 'sales'
   | 'achPct' | 'gapPct' | 'reqDRR' | 'projected' | 'projAchPct' | 'status'
+  | 'dailyTarget' | 'expectedTillDate' | 'runRateAch' | 'remainingStatus'
 type TrackerInitStatus = 'loading' | 'needs_upload' | 'ready'
 type SalesPhase =
   | { kind: 'idle' }
@@ -84,6 +86,20 @@ const RISK_CFG: Record<RiskStatus, { color: string; badge: string; zone: string 
   'At Risk':   { color: '#ef4444', badge: 'bg-red-100 text-red-700',         zone: 'rgba(239,68,68,0.05)'  },
 }
 
+const ACH_BUCKETS = [
+  { label: '0–25%',   min: 0,   max: 25,       color: '#ef4444', textClass: 'text-red-600',     borderClass: 'border-red-200',     bgClass: 'bg-red-50'     },
+  { label: '25–50%',  min: 25,  max: 50,        color: '#f97316', textClass: 'text-orange-600',  borderClass: 'border-orange-200',  bgClass: 'bg-orange-50'  },
+  { label: '50–75%',  min: 50,  max: 75,        color: '#f59e0b', textClass: 'text-amber-600',   borderClass: 'border-amber-200',   bgClass: 'bg-amber-50'   },
+  { label: '75–100%', min: 75,  max: 100,       color: '#3b82f6', textClass: 'text-blue-600',    borderClass: 'border-blue-200',    bgClass: 'bg-blue-50'    },
+  { label: '100%+',   min: 100, max: Infinity,  color: '#10b981', textClass: 'text-emerald-600', borderClass: 'border-emerald-200', bgClass: 'bg-emerald-50' },
+]
+
+const REMAINING_CFG: Record<string, { badge: string }> = {
+  'Hit':     { badge: 'bg-emerald-100 text-emerald-700' },
+  'At Risk': { badge: 'bg-amber-100 text-amber-700'     },
+  'Miss':    { badge: 'bg-red-100 text-red-700'         },
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function getRisk(projAchPct: number): RiskStatus {
@@ -91,6 +107,20 @@ function getRisk(projAchPct: number): RiskStatus {
   if (projAchPct >= 95)  return 'On Track'
   if (projAchPct >= 80)  return 'Watchlist'
   return 'At Risk'
+}
+
+function getRemainingStatus(projAchPct: number): RemainingStatus {
+  if (projAchPct >= 100) return 'Hit'
+  if (projAchPct >= 75)  return 'At Risk'
+  return 'Miss'
+}
+
+function getBucketIdx(achPct: number): number {
+  if (achPct >= 100) return 4
+  if (achPct >= 75)  return 3
+  if (achPct >= 50)  return 2
+  if (achPct >= 25)  return 1
+  return 0
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -368,11 +398,13 @@ export default function TargetCommandCenter() {
   // ── UI state ──────────────────────────────────────────────────────────────
   const [showDrawer,    setShowDrawer]    = useState(false)
   const [tableSearch,   setTableSearch]   = useState('')
-  const [tableSortKey,  setTableSortKey]  = useState<TableSortKey>('achPct')
-  const [tableSortDir,  setTableSortDir]  = useState<'asc' | 'desc'>('asc')
-  const [tablePage,     setTablePage]     = useState(1)
+  const [tableSortKey,      setTableSortKey]      = useState<TableSortKey>('achPct')
+  const [tableSortDir,      setTableSortDir]      = useState<'asc' | 'desc'>('asc')
+  const [tablePage,         setTablePage]         = useState(1)
+  const [selectedBucketIdx, setSelectedBucketIdx] = useState<number | null>(null)
 
-  useEffect(() => { setTablePage(1) }, [tableSearch, tableSortKey, tableSortDir])
+  useEffect(() => { setTablePage(1) }, [tableSearch, tableSortKey, tableSortDir, selectedBucketIdx])
+  useEffect(() => { setSelectedBucketIdx(null) }, [filterState])
 
   // ── Apply tracker API data to local state ─────────────────────────────────
 
@@ -511,8 +543,11 @@ export default function TargetCommandCenter() {
       const projAchPct   = target > 0 ? (projected / target) * 100 : 0
       const reqDRR       = remaining > 0 && gap > 0 ? gap / remaining : 0
       const expectedSales = target * (elapsed / totalDays)
-      const status        = getRisk(projAchPct)
-      return { store, target, currentSales, achPct, expectedPct, gap, gapPct, projected, projAchPct, reqDRR, expectedSales, status }
+      const status          = getRisk(projAchPct)
+      const dailyTarget     = totalDays > 0 ? target / totalDays : 0
+      const runRateAchPct   = expectedSales > 0 ? (currentSales / expectedSales) * 100 : 0
+      const remainingStatus = getRemainingStatus(projAchPct)
+      return { store, target, currentSales, achPct, expectedPct, gap, gapPct, projected, projAchPct, reqDRR, expectedSales, status, dailyTarget, runRateAchPct, remainingStatus }
     })
   }, [filteredEntries, dayOfMonth, totalDays, activeSalesMap, storeStateMap, targetKeyToName])
 
@@ -702,30 +737,66 @@ export default function TargetCommandCenter() {
     ]
   }, [stateData])
 
+  // ── Achievement buckets + donut chart ────────────────────────────────────
+
+  const achBuckets = useMemo(() =>
+    ACH_BUCKETS.map(b => {
+      const stores = storeCalcs.filter(d => d.achPct >= b.min && (b.max === Infinity ? true : d.achPct < b.max))
+      return {
+        ...b,
+        count: stores.length,
+        pct: storeCalcs.length > 0 ? (stores.length / storeCalcs.length) * 100 : 0,
+      }
+    }),
+  [storeCalcs])
+
+  const donutTrace = useMemo(() => ({
+    type:      'pie' as const,
+    hole:      0.64,
+    values:    achBuckets.map(b => b.count),
+    labels:    achBuckets.map(b => b.label),
+    marker:    { colors: ACH_BUCKETS.map(b => b.color), line: { color: '#ffffff', width: 2.5 } },
+    textinfo:  'none' as const,
+    hovertemplate: '<b>%{label}</b><br>%{value} stores (%{percent:.0%})<extra></extra>',
+    pull:      ACH_BUCKETS.map((_, i) => selectedBucketIdx === i ? 0.07 : 0),
+    sort:      false,
+  }), [achBuckets, selectedBucketIdx])
+
   // ── Store table ───────────────────────────────────────────────────────────
 
   const storeTableData = useMemo(() => {
     let rows = [...storeCalcs]
     const q = tableSearch.trim().toLowerCase()
     if (q) rows = rows.filter(r => r.store.store_name.toLowerCase().includes(q) || r.store.state.toLowerCase().includes(q))
+
+    if (selectedBucketIdx !== null) {
+      const b = ACH_BUCKETS[selectedBucketIdx]
+      rows = rows.filter(r => r.achPct >= b.min && (b.max === Infinity ? true : r.achPct < b.max))
+    }
+
     rows.sort((a, b) => {
       let diff = 0
+      const REMAINING_ORDER: Record<RemainingStatus, number> = { 'Hit': 2, 'At Risk': 1, 'Miss': 0 }
       switch (tableSortKey) {
-        case 'name':       diff = a.store.store_name.localeCompare(b.store.store_name); break
-        case 'state':      diff = a.store.state.localeCompare(b.store.state); break
-        case 'target':     diff = a.target - b.target; break
-        case 'sales':      diff = a.currentSales - b.currentSales; break
-        case 'achPct':     diff = a.achPct - b.achPct; break
-        case 'gapPct':     diff = a.gapPct - b.gapPct; break
-        case 'reqDRR':     diff = a.reqDRR - b.reqDRR; break
-        case 'projected':  diff = a.projected - b.projected; break
-        case 'projAchPct': diff = a.projAchPct - b.projAchPct; break
-        case 'status':     diff = a.projAchPct - b.projAchPct; break
+        case 'name':             diff = a.store.store_name.localeCompare(b.store.store_name); break
+        case 'state':            diff = a.store.state.localeCompare(b.store.state); break
+        case 'target':           diff = a.target - b.target; break
+        case 'sales':            diff = a.currentSales - b.currentSales; break
+        case 'achPct':           diff = a.achPct - b.achPct; break
+        case 'gapPct':           diff = a.gapPct - b.gapPct; break
+        case 'reqDRR':           diff = a.reqDRR - b.reqDRR; break
+        case 'projected':        diff = a.projected - b.projected; break
+        case 'projAchPct':       diff = a.projAchPct - b.projAchPct; break
+        case 'status':           diff = a.projAchPct - b.projAchPct; break
+        case 'dailyTarget':      diff = a.dailyTarget - b.dailyTarget; break
+        case 'expectedTillDate': diff = a.expectedSales - b.expectedSales; break
+        case 'runRateAch':       diff = a.runRateAchPct - b.runRateAchPct; break
+        case 'remainingStatus':  diff = REMAINING_ORDER[a.remainingStatus] - REMAINING_ORDER[b.remainingStatus]; break
       }
       return tableSortDir === 'asc' ? diff : -diff
     })
     return rows
-  }, [storeCalcs, tableSearch, tableSortKey, tableSortDir])
+  }, [storeCalcs, tableSearch, tableSortKey, tableSortDir, selectedBucketIdx])
 
   const totalPages = Math.max(1, Math.ceil(storeTableData.length / TABLE_PAGE_SIZE))
   const pagedRows  = storeTableData.slice((tablePage - 1) * TABLE_PAGE_SIZE, tablePage * TABLE_PAGE_SIZE)
@@ -736,12 +807,16 @@ export default function TargetCommandCenter() {
   }, [tableSortKey])
 
   const exportCsv = useCallback(() => {
-    const headers = ['Store Name', 'State', 'Target (₹)', 'Current Sales (₹)', 'Achievement %', 'Gap (₹)', 'Gap %', 'Req Daily Sales (₹)', 'Projected Month-End (₹)', 'Projected %', 'Risk Status']
-    const rows = storeTableData.map(r => [
+    const headers = ['Rank', 'Store Name', 'State', 'Current Sales (₹)', 'Monthly Target (₹)', 'Daily Target (₹)', 'Expected Till Date (₹)', 'Run Rate Ach %', 'Monthly Ach %', 'Remaining Status', 'Projected Ach %']
+    const rows = storeTableData.map((r, i) => [
+      String(i + 1),
       r.store.store_name, r.store.state,
-      r.target.toFixed(0), r.currentSales.toFixed(0),
-      r.achPct.toFixed(1) + '%', r.gap.toFixed(0), r.gapPct.toFixed(1) + '%',
-      r.reqDRR.toFixed(0), r.projected.toFixed(0), r.projAchPct.toFixed(1) + '%', r.status,
+      r.currentSales.toFixed(0), r.target.toFixed(0),
+      r.dailyTarget.toFixed(0), r.expectedSales.toFixed(0),
+      r.runRateAchPct.toFixed(1) + '%',
+      r.achPct.toFixed(1) + '%',
+      r.remainingStatus,
+      r.projAchPct.toFixed(1) + '%',
     ])
     const csv = [headers, ...rows].map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
     const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
@@ -753,12 +828,16 @@ export default function TargetCommandCenter() {
   }, [storeTableData, dayOfMonth, targetMonth])
 
   const exportXlsx = useCallback(() => {
-    const headers = ['Store Name', 'State', 'Target (₹)', 'Current Sales (₹)', 'Achievement %', 'Gap (₹)', 'Gap %', 'Req Daily Sales (₹)', 'Projected Month-End (₹)', 'Projected %', 'Risk Status']
-    const rows = storeTableData.map(r => [
+    const headers = ['Rank', 'Store Name', 'State', 'Current Sales (₹)', 'Monthly Target (₹)', 'Daily Target (₹)', 'Expected Till Date (₹)', 'Run Rate Ach %', 'Monthly Ach %', 'Remaining Status', 'Projected Ach %']
+    const rows = storeTableData.map((r, i) => [
+      i + 1,
       r.store.store_name, r.store.state,
-      r.target, r.currentSales,
-      r.achPct.toFixed(1) + '%', r.gap, r.gapPct.toFixed(1) + '%',
-      r.reqDRR.toFixed(0), r.projected.toFixed(0), r.projAchPct.toFixed(1) + '%', r.status,
+      r.currentSales, r.target,
+      r.dailyTarget, r.expectedSales,
+      r.runRateAchPct.toFixed(1) + '%',
+      r.achPct.toFixed(1) + '%',
+      r.remainingStatus,
+      r.projAchPct.toFixed(1) + '%',
     ])
     exportExcel(`target-tracker-day${dayOfMonth}-${targetMonth}`, headers, rows)
   }, [storeTableData, dayOfMonth, targetMonth])
@@ -1211,14 +1290,114 @@ export default function TargetCommandCenter() {
         </div>
       </motion.div>
 
-      {/* ── ROW 6: Store Command Center Table ── */}
+      {/* ── ROW 6: Achievement Distribution ── */}
+      <motion.div {...panelSpring(0.32)}
+        className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
+        <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-800">Achievement Distribution</h3>
+            <p className="text-[11px] text-gray-500 mt-0.5">
+              Store count by Monthly Achievement % · Click a segment or card to filter the performance table
+            </p>
+          </div>
+          {selectedBucketIdx !== null && (
+            <button
+              onClick={() => setSelectedBucketIdx(null)}
+              className="flex items-center gap-1.5 h-7 px-3 rounded-lg bg-blue-50 border border-blue-200 text-xs font-medium text-blue-600 hover:bg-blue-100 transition-colors"
+            >
+              <X className="h-3 w-3" /> Clear filter: {ACH_BUCKETS[selectedBucketIdx].label}
+            </button>
+          )}
+        </div>
+
+        {/* Bucket KPI Cards */}
+        <div className="px-4 pt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
+          {achBuckets.map((b, i) => (
+            <button
+              key={b.label}
+              onClick={() => setSelectedBucketIdx(selectedBucketIdx === i ? null : i)}
+              className={cn(
+                'rounded-xl border p-3 text-left transition-all cursor-pointer',
+                selectedBucketIdx === i
+                  ? `${b.borderClass} ${b.bgClass} shadow-sm ring-2 ring-offset-1`
+                  : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm',
+              )}
+            >
+              <p className="text-[10px] font-medium uppercase tracking-wider text-gray-500">{b.label}</p>
+              <p className={cn('text-2xl font-bold tabular-nums mt-0.5', b.textClass)}>{b.count}</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">{b.pct.toFixed(1)}% of stores</p>
+            </button>
+          ))}
+        </div>
+
+        {/* Donut chart + legend */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-2 p-4 items-center">
+          <div className="relative">
+            <Plot
+              data={[donutTrace]}
+              layout={{
+                paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+                font: { color: PF.font, family: 'Inter,sans-serif', size: 11 },
+                showlegend: false,
+                margin: { l: 20, r: 20, t: 12, b: 12 },
+                height: 240,
+                annotations: [{
+                  text: `<b>${storeCalcs.length}</b><br><span style="font-size:10px;color:#6b7280">stores</span>`,
+                  x: 0.5, y: 0.5, xref: 'paper' as const, yref: 'paper' as const,
+                  showarrow: false,
+                  font: { size: 20, color: '#111827', family: 'Inter,sans-serif' },
+                  align: 'center',
+                }],
+              }}
+              config={{ displayModeBar: false, responsive: true }}
+              style={{ width: '100%' }}
+              onClick={(data: { points?: Array<{ pointIndex: number }> }) => {
+                const idx = data.points?.[0]?.pointIndex
+                if (idx !== undefined) setSelectedBucketIdx(v => v === idx ? null : idx)
+              }}
+            />
+          </div>
+          <div className="space-y-1.5 px-2">
+            {ACH_BUCKETS.map((b, i) => {
+              const bucket = achBuckets[i]
+              const isActive = selectedBucketIdx === i
+              return (
+                <button
+                  key={b.label}
+                  onClick={() => setSelectedBucketIdx(isActive ? null : i)}
+                  className={cn(
+                    'w-full flex items-center justify-between rounded-lg px-3 py-2 transition-colors text-left',
+                    isActive ? `${b.bgClass} border ${b.borderClass}` : 'bg-gray-50 hover:bg-gray-100 border border-transparent',
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: b.color }} />
+                    <span className="text-xs font-medium text-gray-700">{b.label} Achievement</span>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className={cn('text-sm font-bold tabular-nums', b.textClass)}>{bucket.count}</span>
+                    <div className="w-20 h-1.5 rounded-full bg-gray-200 overflow-hidden">
+                      <div className="h-full rounded-full transition-all" style={{ width: `${bucket.pct}%`, backgroundColor: b.color }} />
+                    </div>
+                    <span className="text-[10px] text-gray-400 w-8 text-right">{bucket.pct.toFixed(0)}%</span>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      </motion.div>
+
+      {/* ── ROW 7: Store Performance Table ── */}
       <motion.div {...panelSpring(0.35)}
         className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
         <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
           <div>
-            <h3 className="text-sm font-semibold text-gray-800">Store Command Center</h3>
+            <h3 className="text-sm font-semibold text-gray-800">Store Performance</h3>
             <p className="text-[11px] text-gray-500 mt-0.5">
-              {storeTableData.length} store{storeTableData.length !== 1 ? 's' : ''} · sortable · searchable · Page {tablePage} of {totalPages}
+              {storeTableData.length} store{storeTableData.length !== 1 ? 's' : ''}
+              {selectedBucketIdx !== null ? ` · Filtered: ${ACH_BUCKETS[selectedBucketIdx].label} Achievement` : ''}
+              {' · '}Page {tablePage} of {totalPages}
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -1246,23 +1425,23 @@ export default function TargetCommandCenter() {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="max-h-[640px] overflow-auto">
           <table className="w-full text-sm">
-            <thead>
+            <thead className="sticky top-0 z-10">
               <tr className="border-b border-gray-200 bg-gray-50">
-                <th className="px-3 py-2.5 text-left text-xs text-gray-400 w-8">#</th>
+                <th className="px-3 py-2.5 text-left text-xs text-gray-400 w-8 sticky top-0 bg-gray-50">#</th>
                 {([
-                  { col: 'name'       as TableSortKey, label: 'Store'       },
-                  { col: 'state'      as TableSortKey, label: 'State'       },
-                  { col: 'target'     as TableSortKey, label: 'OOW Target'  },
-                  { col: 'sales'      as TableSortKey, label: 'Sales'       },
-                  { col: 'achPct'     as TableSortKey, label: 'Ach %'       },
-                  { col: 'gapPct'     as TableSortKey, label: 'Gap %'       },
-                  { col: 'reqDRR'     as TableSortKey, label: 'Req Daily'   },
-                  { col: 'projected'  as TableSortKey, label: 'Projection'  },
-                  { col: 'status'     as TableSortKey, label: 'Risk Status' },
-                ] as const).map(({ col, label }) => (
-                  <th key={col} className="px-3 py-2.5 text-left">
+                  { col: 'name'            as TableSortKey, label: 'Store Name',        tip: 'Store name'                                                                              },
+                  { col: 'sales'           as TableSortKey, label: 'Current Sales',     tip: `Actual cumulative sales recorded through Day ${dayOfMonth}`                             },
+                  { col: 'target'          as TableSortKey, label: 'Monthly Target',    tip: 'Full-month OOW budget target'                                                            },
+                  { col: 'dailyTarget'     as TableSortKey, label: 'Daily Target',      tip: `Monthly Target ÷ ${totalDays} days — average daily sales required`                      },
+                  { col: 'expectedTillDate'as TableSortKey, label: 'Expected Till Date',tip: `Pro-rated target by Day ${dayOfMonth} = Monthly Target × (${dayOfMonth} / ${totalDays})`},
+                  { col: 'runRateAch'      as TableSortKey, label: 'Run Rate Ach %',    tip: 'Current Sales ÷ Expected Till Date × 100. >100% means ahead of pace'                    },
+                  { col: 'achPct'          as TableSortKey, label: 'Monthly Ach %',     tip: 'Current Sales ÷ Monthly Target × 100 — raw progress towards the full-month target'      },
+                  { col: 'remainingStatus' as TableSortKey, label: 'Status',            tip: 'Hit ≥ 100% projected · At Risk 75–99% · Miss < 75%'                                     },
+                  { col: 'projAchPct'      as TableSortKey, label: 'Projected Ach %',   tip: `Estimated month-end = (Current Sales ÷ Day ${dayOfMonth}) × ${totalDays} ÷ Target × 100`},
+                ] as const).map(({ col, label, tip }) => (
+                  <th key={col} className="px-3 py-2.5 text-left sticky top-0 bg-gray-50" title={tip}>
                     <SortBtn col={col} sortKey={tableSortKey} sortDir={tableSortDir} onSort={toggleSort} label={label} />
                   </th>
                 ))}
@@ -1272,38 +1451,67 @@ export default function TargetCommandCenter() {
               {pagedRows.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="px-3 py-10 text-center text-gray-400 text-sm">
-                    No stores match "{tableSearch}"
+                    {tableSearch ? `No stores match "${tableSearch}"` : 'No stores in this filter.'}
                   </td>
                 </tr>
               ) : pagedRows.map((row, i) => {
                 const globalIdx = (tablePage - 1) * TABLE_PAGE_SIZE + i + 1
+                const rowBg =
+                  row.achPct >= 100 ? 'bg-emerald-50/50 hover:bg-emerald-50' :
+                  row.achPct >= 75  ? 'bg-amber-50/50 hover:bg-amber-50'     :
+                                      'bg-red-50/40 hover:bg-red-50/70'
+                const runColor =
+                  row.runRateAchPct >= 100 ? 'text-emerald-600' :
+                  row.runRateAchPct >= 75  ? 'text-amber-600'   : 'text-red-600'
+                const monthColor =
+                  row.achPct >= 100 ? 'text-emerald-600' :
+                  row.achPct >= 75  ? 'text-amber-600'   : 'text-red-600'
+                const projColor =
+                  row.projAchPct >= 100 ? 'text-emerald-600' :
+                  row.projAchPct >= 75  ? 'text-amber-600'   : 'text-red-600'
+                const bucketDot = ACH_BUCKETS[getBucketIdx(row.achPct)].color
                 return (
-                  <tr key={row.store.store_id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
-                    <td className="px-3 py-2.5 text-gray-400 tabular-nums text-xs">{globalIdx}</td>
-                    <td className="px-3 py-2.5">
-                      <p className="text-gray-900 font-medium text-xs truncate max-w-[180px]" title={row.store.store_name}>
-                        {row.store.store_name}
-                      </p>
+                  <tr key={row.store.store_id} className={cn('border-b border-gray-100 transition-colors', rowBg)}>
+                    <td className="px-3 py-2 text-gray-400 tabular-nums text-xs">{globalIdx}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: bucketDot }} />
+                        <p className="text-gray-900 font-medium text-xs truncate max-w-[160px]" title={row.store.store_name}>
+                          {row.store.store_name}
+                        </p>
+                      </div>
+                      {row.store.state && <p className="text-[10px] text-gray-400 pl-3.5">{row.store.state}</p>}
                     </td>
-                    <td className="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">{row.store.state || '—'}</td>
-                    <td className="px-3 py-2.5 text-gray-700 tabular-nums text-xs whitespace-nowrap">{fmtInr(row.target)}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap">
-                      <p className="text-gray-900 tabular-nums text-xs font-medium">{fmtInr(row.currentSales)}</p>
+                    <td className="px-3 py-2 text-gray-800 tabular-nums text-xs font-medium whitespace-nowrap">{fmtInr(row.currentSales)}</td>
+                    <td className="px-3 py-2 text-gray-600 tabular-nums text-xs whitespace-nowrap">{fmtInr(row.target)}</td>
+                    <td className="px-3 py-2 text-gray-500 tabular-nums text-xs whitespace-nowrap">{fmtInr(row.dailyTarget)}</td>
+                    <td className="px-3 py-2 text-gray-500 tabular-nums text-xs whitespace-nowrap">{fmtInr(row.expectedSales)}</td>
+                    <td className={cn('px-3 py-2 tabular-nums text-xs font-semibold whitespace-nowrap', runColor)}>
+                      {row.runRateAchPct.toFixed(1)}%
+                      <div className="w-16 h-1 rounded-full bg-gray-200 mt-0.5 overflow-hidden">
+                        <div className="h-full rounded-full" style={{
+                          width: `${Math.min(row.runRateAchPct, 150) / 150 * 100}%`,
+                          backgroundColor: row.runRateAchPct >= 100 ? '#10b981' : row.runRateAchPct >= 75 ? '#f59e0b' : '#ef4444',
+                        }} />
+                      </div>
                     </td>
-                    <td className={cn('px-3 py-2.5 tabular-nums text-xs font-semibold whitespace-nowrap', row.achPct >= 95 ? 'text-emerald-600' : row.achPct >= 80 ? 'text-amber-600' : 'text-red-600')}>
+                    <td className={cn('px-3 py-2 tabular-nums text-xs font-semibold whitespace-nowrap', monthColor)}>
                       {row.achPct.toFixed(1)}%
+                      <div className="w-16 h-1 rounded-full bg-gray-200 mt-0.5 overflow-hidden">
+                        <div className="h-full rounded-full" style={{
+                          width: `${Math.min(row.achPct, 150) / 150 * 100}%`,
+                          backgroundColor: ACH_BUCKETS[getBucketIdx(row.achPct)].color,
+                        }} />
+                      </div>
                     </td>
-                    <td className={cn('px-3 py-2.5 tabular-nums text-xs whitespace-nowrap', row.gapPct <= 0 ? 'text-emerald-600' : row.gapPct <= 20 ? 'text-amber-600' : 'text-red-600')}>
-                      {row.gap <= 0 ? `+${fmtPct(-row.gapPct)}` : fmtPct(row.gapPct)}
+                    <td className="px-3 py-2">
+                      <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap', REMAINING_CFG[row.remainingStatus]?.badge ?? '')}>
+                        {row.remainingStatus}
+                      </span>
                     </td>
-                    <td className="px-3 py-2.5 text-amber-600 tabular-nums text-xs whitespace-nowrap">
-                      {row.reqDRR > 0 ? fmtInr(row.reqDRR) : '—'}
+                    <td className={cn('px-3 py-2 tabular-nums text-xs font-bold whitespace-nowrap', projColor)}>
+                      {row.projAchPct.toFixed(1)}%
                     </td>
-                    <td className={cn('px-3 py-2.5 tabular-nums text-xs font-medium whitespace-nowrap', row.projected >= row.target ? 'text-emerald-600' : 'text-red-600')}>
-                      {fmtInr(row.projected)}
-                      <span className="text-[10px] text-gray-400 ml-1">({row.projAchPct.toFixed(0)}%)</span>
-                    </td>
-                    <td className="px-3 py-2.5"><RiskBadge status={row.status} /></td>
                   </tr>
                 )
               })}
