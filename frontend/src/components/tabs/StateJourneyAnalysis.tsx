@@ -1,9 +1,9 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   ChevronUp, ChevronDown,
   TrendingUp, TrendingDown,
-  Star, ShieldAlert, Zap, MapPin, Store,
+  Star, ShieldAlert, Zap, MapPin, Store, Info,
 } from 'lucide-react'
 import createPlotlyComponent from 'react-plotly.js/factory'
 // @ts-ignore — plotly.js-dist-min does not ship its own .d.ts
@@ -22,7 +22,7 @@ const Plot = createPlotlyComponent(Plotly)
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type SortKey = 'state' | 'stores' | 'active' | 'growth' | 'revenue' | 'health' | 'risk' | 'opp'
+type SortKey = 'state' | 'stores' | 'active' | 'inactive' | 'growth' | 'revenue' | 'health' | 'risk' | 'opp'
 
 interface StateRow {
   state:      string
@@ -325,8 +325,6 @@ export default function StateJourneyAnalysis({ filters }: Props) {
     const rows: StateRow[] = []
     for (const [state, data] of map) {
       const total     = data.length
-      const active    = data.filter(d => d.isRecentActive).length
-      const inactive  = total - active
       const earlyRev  = data.reduce((s, d) => s + d.earlyR, 0)
       const recentRev = data.reduce((s, d) => s + d.recentR, 0)
       const totalRevV = data.reduce((s, d) => s + d.rev, 0)
@@ -335,6 +333,7 @@ export default function StateJourneyAnalysis({ filters }: Props) {
       const netPct    = totalPortfolioRev > 0 ? totalRevV / totalPortfolioRev * 100 : null
       const avgStore  = total > 0 ? totalRevV / total : 0
 
+      // Lifecycle categories are exhaustive and mutually exclusive — they always sum to total
       const newBloomer    = data.filter(d => d.category === 'New Bloomer').length
       const rising        = data.filter(d => d.category === 'Rising Star').length
       const growing       = data.filter(d => d.category === 'Growing Store').length
@@ -342,6 +341,11 @@ export default function StateJourneyAnalysis({ filters }: Props) {
       const declining     = data.filter(d => d.category === 'Declining Store').length
       const fallen        = data.filter(d => d.category === 'Fallen Star').length
       const inactiveStore = data.filter(d => d.category === 'Inactive Store').length
+
+      // Active = all stores except the "Inactive Store" classification
+      // Equivalent to: newBloomer + rising + growing + constant + declining + fallen
+      const active   = total - inactiveStore
+      const inactive = inactiveStore
 
       const activeRatio  = total > 0 ? active / total : 0
       const growthHealth = growthPct !== null
@@ -351,7 +355,7 @@ export default function StateJourneyAnalysis({ filters }: Props) {
       const health = Math.round((activeRatio * 0.5 + growthHealth * 0.3 + risingRatio * 0.2) * 100 * 10) / 10
 
       const risk = Math.round(
-        total > 0 ? (fallen * 1.0 + inactive * 0.5) / total * 100 * 10 / 10 : 0
+        total > 0 ? (fallen * 1.0 + inactiveStore * 0.5) / total * 100 * 10 / 10 : 0
       )
 
       const opp = rising
@@ -689,7 +693,8 @@ export default function StateJourneyAnalysis({ filters }: Props) {
       switch (sortKey) {
         case 'state':   d = a.state.localeCompare(b.state); break
         case 'stores':  d = a.total     - b.total;          break
-        case 'active':  d = a.active    - b.active;         break
+        case 'active':  d = a.active        - b.active;         break
+        case 'inactive':d = a.inactiveStore - b.inactiveStore; break
         case 'growth':  d = (a.growthPct ?? -1e9) - (b.growthPct ?? -1e9); break
         case 'revenue': d = a.totalRevV - b.totalRevV;      break
         case 'health':  d = a.health    - b.health;         break
@@ -706,15 +711,55 @@ export default function StateJourneyAnalysis({ filters }: Props) {
     else { setSortKey(key); setSortDir('desc') }
   }
 
+  // ── Temporary validation: reconciliation check per state ──────────────────
+  useEffect(() => {
+    if (!stateMetrics.length) return
+    console.group('[StateRanking] Reconciliation Validation')
+    let totalPortfolioRev = 0
+    stateMetrics.forEach(r => { totalPortfolioRev += r.totalRevV })
+    stateMetrics.forEach(r => {
+      const activeFromCats = r.newBloomer + r.rising + r.growing + r.constant + r.declining + r.fallen
+      const activeFromTotal = r.total - r.inactiveStore
+      const catSum  = activeFromCats + r.inactiveStore
+      const catDiff = r.total - catSum
+      const activeDiff = r.active - activeFromCats
+      const netPctCalc = totalPortfolioRev > 0 ? (r.totalRevV / totalPortfolioRev * 100).toFixed(2) + '%' : 'N/A'
+      if (catDiff !== 0 || activeDiff !== 0) {
+        console.warn(`[MISMATCH] ${r.state}`, {
+          stores:          r.total,
+          active:          r.active,
+          inactive:        r.inactiveStore,
+          activeFromTotal,
+          activeFromCats,
+          activeDiff,
+          new:      r.newBloomer,
+          rising:   r.rising,
+          growing:  r.growing,
+          stable:   r.constant,
+          decline:  r.declining,
+          fallen:   r.fallen,
+          catSum,
+          catDiff,
+          netPctCalc,
+        })
+      } else {
+        console.log(`[OK] ${r.state}`, {
+          stores: r.total, active: r.active, inactive: r.inactiveStore, catSum, netPctCalc,
+        })
+      }
+    })
+    console.groupEnd()
+  }, [stateMetrics])
+
   const handleExportCsv = useCallback(() => {
     const headers = [
-      'State', 'Stores', 'Active', 'Inactive',
+      'State', 'Stores', 'Active',
       'Early Rev', 'Recent Rev', 'Growth %', 'Avg/Store', 'Net %',
-      'New Bloomer', 'Rising Star', 'Growing', 'Stable', 'Declining', 'Fallen', 'Inactive Stores',
+      'New Bloomer', 'Rising Star', 'Growing', 'Stable', 'Declining', 'Fallen', 'Inactive',
       'Health Score', 'Risk Index', 'Opportunity',
     ]
     const rows = tableRows.map(r => [
-      r.state, r.total, r.active, r.inactive,
+      r.state, r.total, r.active,
       r.earlyRev.toFixed(0), r.recentRev.toFixed(0),
       r.growthPct != null ? r.growthPct.toFixed(1) + '%' : 'N/A',
       r.avgStore.toFixed(0),
@@ -1362,6 +1407,57 @@ export default function StateJourneyAnalysis({ filters }: Props) {
         )}
       </motion.div>
 
+      {/* ── Metric Definitions ── */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.28, duration: 0.4 }}
+        className="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3"
+      >
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-blue-500 mb-2.5">Metric Definitions</p>
+        <div className="grid grid-cols-2 gap-x-8 gap-y-2 sm:grid-cols-3">
+          {([
+            {
+              label: 'Active Stores',
+              formula: 'Stores with ≥ 1 sale in the recent period',
+              color: 'text-emerald-700',
+            },
+            {
+              label: 'Inactive Stores',
+              formula: 'Classified as "Inactive Store" — no revenue in both mid & recent periods',
+              color: 'text-gray-500',
+            },
+            {
+              label: 'Net %',
+              formula: 'State Revenue ÷ Total Portfolio Revenue × 100 — share of all-India sales',
+              color: 'text-blue-700',
+            },
+            {
+              label: 'Health Score (0–100)',
+              formula: '(Active % × 50) + (Growth Health × 30) + (Rising Star % × 20) — higher is better',
+              color: 'text-emerald-700',
+            },
+            {
+              label: 'Risk Index (0–100)',
+              formula: '(Fallen Stars × 1.0 + Inactive Stores × 0.5) ÷ Total Stores × 100 — higher is worse',
+              color: 'text-red-600',
+            },
+            {
+              label: 'Opportunity (Opp.)',
+              formula: 'Count of Rising Star stores — stores with strong upward revenue momentum',
+              color: 'text-amber-700',
+            },
+          ] as const).map(({ label, formula, color }) => (
+            <div key={label} className="flex gap-1.5 items-start min-w-0">
+              <Info className={cn('h-3 w-3 mt-0.5 shrink-0', color)} />
+              <div className="min-w-0">
+                <span className={cn('text-[11px] font-semibold', color)}>{label}: </span>
+                <span className="text-[11px] text-gray-500">{formula}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </motion.div>
+
       {/* ── State Ranking Table ── */}
       <motion.div
         initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
@@ -1383,13 +1479,17 @@ export default function StateJourneyAnalysis({ filters }: Props) {
                   </button>
                 </th>
 
-                {['Stores', 'Active', 'Inactive'].map(col => (
+                {([
+                  { col: 'Stores', key: 'stores', tip: 'Total stores in this state' },
+                  { col: 'Active', key: 'active', tip: 'Stores with ≥ 1 sale in the recent period' },
+                ] as const).map(({ col, key, tip }) => (
                   <th key={col} className="px-3 py-2.5 text-center">
                     <button
-                      onClick={() => toggleSort(col.toLowerCase() as SortKey)}
+                      onClick={() => toggleSort(key)}
+                      title={tip}
                       className="flex items-center gap-1 font-semibold uppercase tracking-wider text-gray-500 hover:text-gray-800 transition-colors mx-auto"
                     >
-                      {col}{sortIcon(col.toLowerCase() as SortKey)}
+                      {col}{sortIcon(key)}
                     </button>
                   </th>
                 ))}
@@ -1409,28 +1509,42 @@ export default function StateJourneyAnalysis({ filters }: Props) {
                   </button>
                 </th>
 
-                <th className="px-3 py-2.5 text-right font-semibold uppercase tracking-wider text-gray-500">Net%</th>
+                <th className="px-3 py-2.5 text-right font-semibold uppercase tracking-wider text-gray-500">
+                  <span title="State Revenue ÷ Total Portfolio Revenue × 100 — share of all-India sales" className="cursor-help">Net%</span>
+                </th>
 
-                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-emerald-600">New</th>
-                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-amber-600">Rising</th>
-                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-blue-500">Growing</th>
-                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-violet-500">Stable</th>
-                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-orange-500">Decline</th>
-                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-red-500">Fallen</th>
-                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-gray-400">Inactive</th>
+                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-emerald-600" title="New Bloomer stores">New</th>
+                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-amber-600" title="Rising Star stores">Rising</th>
+                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-blue-500" title="Growing Store stores">Growing</th>
+                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-violet-500" title="Constant (Stable) stores">Stable</th>
+                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-orange-500" title="Declining Store stores">Decline</th>
+                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-red-500" title="Fallen Star stores">Fallen</th>
+                <th className="px-3 py-2.5 text-center font-semibold uppercase tracking-wider text-gray-400" title="Stores classified as 'Inactive Store' — no revenue in both mid & recent periods">Inactive</th>
 
                 <th className="px-3 py-2.5 text-right">
-                  <button onClick={() => toggleSort('health')} className="flex items-center gap-1 font-semibold uppercase tracking-wider text-gray-500 hover:text-gray-800 transition-colors ml-auto">
+                  <button
+                    onClick={() => toggleSort('health')}
+                    title="Health Score (0–100): (Active % × 50) + (Growth Health × 30) + (Rising Star % × 20). Higher is better."
+                    className="flex items-center gap-1 font-semibold uppercase tracking-wider text-gray-500 hover:text-gray-800 transition-colors ml-auto"
+                  >
                     Health{sortIcon('health')}
                   </button>
                 </th>
                 <th className="px-3 py-2.5 text-right">
-                  <button onClick={() => toggleSort('risk')} className="flex items-center gap-1 font-semibold uppercase tracking-wider text-gray-500 hover:text-gray-800 transition-colors ml-auto">
+                  <button
+                    onClick={() => toggleSort('risk')}
+                    title="Risk Index (0–100): (Fallen Stars × 1.0 + Inactive Stores × 0.5) ÷ Total Stores × 100. Higher is worse."
+                    className="flex items-center gap-1 font-semibold uppercase tracking-wider text-gray-500 hover:text-gray-800 transition-colors ml-auto"
+                  >
                     Risk{sortIcon('risk')}
                   </button>
                 </th>
                 <th className="px-3 py-2.5 text-right">
-                  <button onClick={() => toggleSort('opp')} className="flex items-center gap-1 font-semibold uppercase tracking-wider text-gray-500 hover:text-gray-800 transition-colors ml-auto">
+                  <button
+                    onClick={() => toggleSort('opp')}
+                    title="Opportunity: count of Rising Star stores — stores with strong upward revenue momentum"
+                    className="flex items-center gap-1 font-semibold uppercase tracking-wider text-gray-500 hover:text-gray-800 transition-colors ml-auto"
+                  >
                     <Zap className="h-3 w-3 text-amber-500" />Opp.{sortIcon('opp')}
                   </button>
                 </th>
@@ -1451,7 +1565,6 @@ export default function StateJourneyAnalysis({ filters }: Props) {
 
                   <td className="px-3 py-2.5 text-center text-gray-700 tabular-nums font-medium">{row.total}</td>
                   <td className="px-3 py-2.5 text-center text-emerald-600 tabular-nums font-medium">{row.active}</td>
-                  <td className="px-3 py-2.5 text-center text-red-400 tabular-nums">{row.inactive}</td>
 
                   <td className="px-3 py-2.5 text-right text-gray-600 tabular-nums">{fmtInr(row.earlyRev)}</td>
                   <td className="px-3 py-2.5 text-right text-gray-800 tabular-nums font-medium">{fmtInr(row.recentRev)}</td>
@@ -1491,7 +1604,9 @@ export default function StateJourneyAnalysis({ filters }: Props) {
                       ? <span className="inline-flex items-center justify-center h-5 min-w-[20px] rounded-full bg-red-100 text-red-600 font-bold px-1.5">{row.fallen}</span>
                       : <span className="text-gray-300">0</span>}
                   </td>
-                  <td className="px-3 py-2.5 text-center text-gray-400 tabular-nums">{row.inactiveStore > 0 ? row.inactiveStore : <span className="text-gray-200">0</span>}</td>
+                  <td className="px-3 py-2.5 text-center text-gray-400 tabular-nums">
+                    {row.inactiveStore > 0 ? row.inactiveStore : <span className="text-gray-200">0</span>}
+                  </td>
 
                   <td className="px-3 py-2.5 text-right"><HealthBadge value={row.health} /></td>
                   <td className="px-3 py-2.5 text-right"><RiskBadge value={row.risk} /></td>
