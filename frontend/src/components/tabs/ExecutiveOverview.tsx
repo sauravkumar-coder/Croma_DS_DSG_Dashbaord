@@ -13,7 +13,7 @@ import Plotly from 'plotly.js-dist-min'
 import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
-import { allocatePhases } from '@/lib/classificationEngine'
+import { allocatePhases, type StoreCategory } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
 import { fmtInr, fmtPct } from '@/lib/formatting'
 import { kpiContainer, kpiItem, panelSpring } from '@/lib/animations'
@@ -38,13 +38,26 @@ const HEALTH_COLORS: Record<HealthStatus, string> = {
   Stable:          '#8b5cf6',
 }
 
-const EARLY_TIERS: EarlyTier[]      = ['Top Performer', 'Mid-tier', 'Low Tier']
-const RECENT_CATS: RecentCategory[] = [
-  'Consistent Performer', 'Fallen Star', 'Average', 'Consistently Low', 'Rising Star',
-]
+const EARLY_TIERS: EarlyTier[] = ['Top Performer', 'Mid-tier', 'Low Tier']
 
-const EARLY_NODE_COLORS  = ['#0ea5e9', '#8b5cf6', '#94a3b8']
-const RECENT_NODE_COLORS = ['#10b981', '#ef4444', '#f59e0b', '#64748b', '#06b6d4']
+const EARLY_NODE_COLORS = ['#0ea5e9', '#8b5cf6', '#94a3b8']
+
+// Target nodes for Sankey — keyed to the central classification engine categories
+const SANKEY_TARGETS: StoreCategory[] = [
+  'Rising Star', 'New Bloomer', 'Growing Store', 'Constant Store',
+  'Declining Store', 'Fallen Star', 'Inactive Store',
+]
+// Colors aligned with categoryStyles.ts (hex equivalents of Tailwind classes)
+const SANKEY_TARGET_COLORS: Record<StoreCategory, string> = {
+  'Rising Star':    '#eab308',
+  'New Bloomer':    '#059669',
+  'Growing Store':  '#3b82f6',
+  'Constant Store': '#8b5cf6',
+  'Declining Store':'#f97316',
+  'Fallen Star':    '#dc2626',
+  'Inactive Store': '#9ca3af',
+}
+
 const SANKEY_LINK_COLORS = [
   'rgba(14,165,233,0.20)',
   'rgba(139,92,246,0.20)',
@@ -264,17 +277,35 @@ export default function ExecutiveOverview({ filters }: Props) {
     return { scope, improved, declined, rising, fallen, dormant }
   }, [fs, journeys, classification, filters])
 
-  // ── Sankey ─────────────────────────────────────────────────────────────────
+  // ── Sankey (uses the same engineScope as the KPI cards) ────────────────────
   const sankeyTrace = useMemo(() => {
-    if (!journeys.length) return null
-    const labels = [...EARLY_TIERS, ...RECENT_CATS]
-    const colors = [...EARLY_NODE_COLORS, ...RECENT_NODE_COLORS]
+    // Mirror the exact filter the KPI cards apply so counts stay in sync
+    let engineScope = classification.metrics
+    if (filters.state)    engineScope = engineScope.filter(m => m.store.state    === filters.state)
+    if (filters.category) engineScope = engineScope.filter(m => m.store.category === filters.category)
+
+    if (!engineScope.length) return null
+
+    // Early tier derived from earlyTotal percentile within filtered scope
+    const sortedEarlyTotals = engineScope.map(m => m.earlyTotal).sort((a, b) => a - b)
+    const earlyTierOf = (earlyTotal: number): EarlyTier => {
+      const pct = sortedEarlyTotals.filter(t => t <= earlyTotal).length / sortedEarlyTotals.length * 100
+      if (pct >= 67) return 'Top Performer'
+      if (pct >= 33) return 'Mid-tier'
+      return 'Low Tier'
+    }
+
+    const labels = [...EARLY_TIERS, ...SANKEY_TARGETS]
+    const colors = [...EARLY_NODE_COLORS, ...SANKEY_TARGETS.map(c => SANKEY_TARGET_COLORS[c])]
+
     const flowMap: Record<string, number> = {}
-    for (const j of journeys) {
-      const key = `${EARLY_TIERS.indexOf(j.earlyTier)}_${
-        EARLY_TIERS.length + RECENT_CATS.indexOf(j.recentCategory)}`
+    for (const m of engineScope) {
+      const src = EARLY_TIERS.indexOf(earlyTierOf(m.earlyTotal))
+      const tgt = EARLY_TIERS.length + SANKEY_TARGETS.indexOf(m.category)
+      const key = `${src}_${tgt}`
       flowMap[key] = (flowMap[key] ?? 0) + 1
     }
+
     const sources: number[] = [], targets: number[] = []
     const values: number[]  = [], linkColors: string[] = []
     for (const [k, v] of Object.entries(flowMap)) {
@@ -282,8 +313,25 @@ export default function ExecutiveOverview({ filters }: Props) {
       sources.push(s); targets.push(t); values.push(v)
       linkColors.push(SANKEY_LINK_COLORS[s % SANKEY_LINK_COLORS.length])
     }
+
+    // ── Debug validation ──────────────────────────────────────────────────────
+    const totalInScope  = engineScope.length
+    const sankeyTotal   = values.reduce((s, v) => s + v, 0)
+    const fallenTotal   = engineScope.filter(m => m.category === 'Fallen Star').length
+    const risingTotal   = engineScope.filter(m => m.category === 'Rising Star').length
+    const missingStores = totalInScope - sankeyTotal
+
+    console.group('[Sankey Debug]')
+    console.log('Stores in Scope      :', totalInScope)
+    console.log('Sankey Source Total  :', sankeyTotal)
+    console.log('Sankey Target Total  :', sankeyTotal)
+    console.log('Fallen Star Total    :', fallenTotal)
+    console.log('Rising Star Total    :', risingTotal)
+    console.log('Missing Stores       :', missingStores)
+    console.groupEnd()
+
     return { labels, colors, sources, targets, values, linkColors }
-  }, [journeys])
+  }, [classification, filters])
 
   // ── Donut ──────────────────────────────────────────────────────────────────
   const donutCounts = useMemo(() => {
