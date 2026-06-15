@@ -148,23 +148,43 @@ interface StateMetric {
 
 // ── Rich hover text builder ────────────────────────────────────────────────────
 function buildHoverText(m: StateMetric): string {
+  const growthColor = m.growth === null ? '#94a3b8'
+    : m.growth > 10  ? '#4ade80'
+    : m.growth > 0   ? '#86efac'
+    : m.growth > -10 ? '#fca5a5'
+    : '#f87171'
+
   const catParts = [
-    m.catMix['Rising Star']     ? `Rising Stars: ${m.catMix['Rising Star']}`    : '',
-    m.catMix['New Bloomer']     ? `New Bloomers: ${m.catMix['New Bloomer']}`     : '',
-    m.catMix['Growing Store']   ? `Growing: ${m.catMix['Growing Store']}`        : '',
-    m.catMix['Constant Store']  ? `Constant: ${m.catMix['Constant Store']}`      : '',
-    m.catMix['Declining Store'] ? `Declining: ${m.catMix['Declining Store']}`    : '',
-    m.catMix['Fallen Star']     ? `Fallen Stars: ${m.catMix['Fallen Star']}`     : '',
-    m.catMix['Inactive Store']  ? `Inactive: ${m.catMix['Inactive Store']}`      : '',
+    m.catMix['Rising Star']     ? `⭐ Rising Stars: <b>${m.catMix['Rising Star']}</b>`    : '',
+    m.catMix['New Bloomer']     ? `🌱 New Bloomers: <b>${m.catMix['New Bloomer']}</b>`    : '',
+    m.catMix['Growing Store']   ? `📈 Growing: <b>${m.catMix['Growing Store']}</b>`        : '',
+    m.catMix['Constant Store']  ? `➡️ Constant: <b>${m.catMix['Constant Store']}</b>`     : '',
+    m.catMix['Declining Store'] ? `📉 Declining: <b>${m.catMix['Declining Store']}</b>`   : '',
+    m.catMix['Fallen Star']     ? `💫 Fallen Stars: <b>${m.catMix['Fallen Star']}</b>`    : '',
+    m.catMix['Inactive Store']  ? `⚪ Inactive: <b>${m.catMix['Inactive Store']}</b>`     : '',
   ].filter(Boolean)
 
+  const divider = `<br><span style="color:#475569">──────────────────</span>`
+
   return (
-    `<b>${m.ourState}</b>`
-    + `<br>Stores: ${m.count}  ·  Growth: ${m.growth !== null ? fmtPct(m.growth) : 'N/A'}`
-    + `<br>Revenue: ${fmtInr(m.rev)}`
-    + (m.totalPlans > 0 ? `<br>Plans Sold: ${m.totalPlans.toLocaleString()}` : '')
-    + `<br><span style="color:#9CA3AF">Early: ${fmtInr(m.earlyRev)}  ·  Mid: ${fmtInr(m.midRev)}  ·  Recent: ${fmtInr(m.recentRev)}</span>`
-    + (catParts.length ? `<br><span style="color:#9CA3AF">${catParts.join('  ·  ')}</span>` : '')
+    `<span style="font-size:14px;font-weight:700;color:#f8fafc;letter-spacing:0.01em">${m.ourState}</span>`
+    + divider
+    + `<br><span style="color:#94a3b8">Stores</span>  <span style="color:#f1f5f9;font-weight:600">${m.count}</span>`
+    + `  <span style="color:#475569">·</span>  <span style="color:#94a3b8">Growth</span>  <span style="color:${growthColor};font-weight:700">${m.growth !== null ? fmtPct(m.growth) : 'N/A'}</span>`
+    + `<br><span style="color:#94a3b8">Revenue</span>  <span style="color:#e2e8f0;font-weight:600">${fmtInr(m.rev)}</span>`
+    + (m.totalPlans > 0
+      ? `<br><span style="color:#94a3b8">Plans Sold</span>  <span style="color:#e2e8f0;font-weight:600">${m.totalPlans.toLocaleString()}</span>`
+      : '')
+    + divider
+    + `<br><span style="color:#64748b;font-size:10px">PHASE BREAKDOWN</span>`
+    + `<br><span style="color:#94a3b8">Early</span> <span style="color:#cbd5e1">${fmtInr(m.earlyRev)}</span>`
+    + `  <span style="color:#475569">·</span>  <span style="color:#94a3b8">Mid</span> <span style="color:#cbd5e1">${fmtInr(m.midRev)}</span>`
+    + `  <span style="color:#475569">·</span>  <span style="color:#94a3b8">Recent</span> <span style="color:#cbd5e1">${fmtInr(m.recentRev)}</span>`
+    + (catParts.length
+      ? divider
+        + `<br><span style="color:#64748b;font-size:10px">STORE MIX</span>`
+        + catParts.map(p => `<br><span style="color:#cbd5e1">${p}</span>`).join('')
+      : '')
   )
 }
 
@@ -280,7 +300,7 @@ export default function GeoAnalytics({ filters }: Props) {
       z:            unmatched.map(() => 0),
       colorscale:   [[0, '#E9EEF4'], [1, '#E9EEF4']],
       showscale:    false,
-      hovertemplate: '<b>%{location}</b><br><span style="color:#9CA3AF">No stores in scope</span><extra></extra>',
+      hovertemplate: '<span style="font-size:13px;font-weight:700;color:#f8fafc">%{location}</span><br><span style="color:#64748b">No stores in scope</span><extra></extra>',
       marker:       { line: { color: '#ffffff', width: 1 } },
     }
 
@@ -449,6 +469,17 @@ export default function GeoAnalytics({ filters }: Props) {
               geo:           GEO_LAYOUT,
               margin:        { l: 0, r: 0, t: 0, b: 0 },
               height:        560,
+              hoverlabel: {
+                bgcolor:    'rgba(15, 23, 42, 0.97)',
+                bordercolor: 'rgba(100, 116, 139, 0.55)',
+                font: {
+                  color:  '#f1f5f9',
+                  size:   12,
+                  family: 'Inter, system-ui, sans-serif',
+                },
+                align: 'left',
+                namelength: -1,
+              },
             } as any}
             config={{
               displayModeBar: false,
