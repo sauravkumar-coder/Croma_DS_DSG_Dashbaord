@@ -26,7 +26,6 @@ import RevenueMovers from './components/tabs/RevenueMovers'
 import StoreDeepDive from './components/tabs/StoreDeepDive'
 import TargetCommandCenter from './components/tabs/TargetCommandCenter'
 import StateJourneyAnalysis from './components/tabs/StateJourneyAnalysis'
-import PlatformDocs from './components/tabs/PlatformDocs'
 import { cn } from './lib/utils'
 import type { StoreCategory } from './lib/classificationEngine'
 
@@ -49,7 +48,6 @@ const TABS = [
   { id: 'fallen-stars',    label: 'Fallen Stores'   },
   { id: 'store-deep-dive', label: 'Store Spotlight' },
   { id: 'target-command',  label: 'Target Tracker'  },
-  { id: 'platform-docs',   label: 'Platform Docs'   },
 ] as const
 
 type TabId = typeof TABS[number]['id']
@@ -287,8 +285,7 @@ export default function App() {
       case 'rising-stars':    return <RisingStars filters={filters} onNavigateToStore={handleNavigateToStore} onNavigateToJourneyCategory={handleNavigateToJourneyCategory} />
       case 'fallen-stars':    return <FallenStars filters={filters} onNavigateToStore={handleNavigateToStore} onNavigateToJourneyCategory={handleNavigateToJourneyCategory} />
       case 'store-deep-dive': return <StoreDeepDive filters={filters} initialStoreId={deepDiveStoreId} />
-      case 'target-command':  return <TargetCommandCenter filters={filters} />
-      case 'platform-docs':   return <PlatformDocs />
+      case 'target-command':  return <TargetCommandCenter />
       default:                return <TabPlaceholder label={currentTab.label} filters={filters} />
     }
   }
@@ -404,20 +401,22 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── Filter Bar (sticky top-28 = 112 px = 64+48) ── */}
-      <div className="sticky top-28 z-30 border-b border-gray-200 bg-white/90 backdrop-blur-sm">
-        <div className="px-4 py-2 max-w-screen-2xl mx-auto">
-          <FilterBar
-            states={states}
-            categories={categories}
-            months={months}
-            filters={filters}
-            onFilterChange={handleFilterChange}
-            onReset={handleReset}
-            activeCount={activeCount}
-          />
+      {/* ── Filter Bar — hidden for Target Command Center which manages its own filters ── */}
+      {activeTab !== 'target-command' && (
+        <div className="sticky top-28 z-30 border-b border-gray-200 bg-white/90 backdrop-blur-sm">
+          <div className="px-4 py-2 max-w-screen-2xl mx-auto">
+            <FilterBar
+              states={states}
+              categories={categories}
+              months={months}
+              filters={filters}
+              onFilterChange={handleFilterChange}
+              onReset={handleReset}
+              activeCount={activeCount}
+            />
+          </div>
         </div>
-      </div>
+      )}
 
       {/* ── Tab Content ── */}
       <main className="px-4 py-6 pb-14 max-w-screen-2xl mx-auto">

@@ -6,14 +6,13 @@ import Plotly from 'plotly.js-dist-min'
 import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
-import { allocatePhases, classifyAllStores } from '@/lib/classificationEngine'
+import { allocatePhases } from '@/lib/classificationEngine'
 import type { StoreCategory } from '@/lib/classificationEngine'
 import { fmtInr, fmtPct } from '@/lib/formatting'
 
 const Plot = createPlotlyComponent(Plotly)
 
-const GEO_URL =
-  'https://raw.githubusercontent.com/geohacker/india/master/state/india_state.geojson'
+const GEO_URL = '/india-states.geojson'
 
 // ── State centroids for bubble placement ──────────────────────────────────────
 const STATE_CENTROIDS: Record<string, [number, number]> = {
@@ -86,7 +85,9 @@ const GEO_LAYOUT = {
   showsubunits:   true,
   subunitcolor:   '#CBD5E1',
   subunitwidth:   0.5,
-  projection:     { type: 'orthographic', rotation: { lon: 82, lat: 22, roll: 0 } },
+  projection:     { type: 'mercator' },
+  lonaxis:        { range: [65, 100] },
+  lataxis:        { range: [5, 40] },
 } as const
 
 // Empty choropleth for the selection ring when nothing is selected
@@ -171,7 +172,7 @@ function buildHoverText(m: StateMetric): string {
 interface Props { filters: FilterState }
 
 export default function GeoAnalytics({ filters }: Props) {
-  const { stores, months } = useDataContext()
+  const { stores, months, classification } = useDataContext()
 
   const [geojson, setGeojson]       = useState<any>(null)
   const [geoLoading, setGeoLoading] = useState(true)
@@ -213,32 +214,33 @@ export default function GeoAnalytics({ filters }: Props) {
   }, [stores, months, filters])
 
   // ── Store classification for tooltip category mix ──────────────────────────
+  // Uses the central classification (computed on full date range) so category
+  // counts in tooltips are consistent with the Rising Stars / Fallen Stars pages.
   const stateCatMix = useMemo(() => {
-    const result = classifyAllStores(fs, fm)
     const mix: Record<string, Partial<Record<StoreCategory, number>>> = {}
-    for (const m of result.metrics) {
-      const s = m.store.state ?? 'Unknown'
+    for (const m of classification.metrics) {
+      const store = m.store
+      if (filters.state && store.state !== filters.state) continue
+      if (filters.category && store.category !== filters.category) continue
+      const s = store.state ?? 'Unknown'
       if (!mix[s]) mix[s] = {}
       mix[s][m.category] = (mix[s][m.category] ?? 0) + 1
     }
     return mix
-  }, [fs, fm])
+  }, [classification, filters.state, filters.category])
 
   // ── Per-state aggregations ─────────────────────────────────────────────────
   const stateMetrics = useMemo((): StateMetric[] => {
     const map: Record<string, {
-      rev: number; count: number; topStore: StoreRecord | null; growths: number[];
+      rev: number; count: number; topStore: StoreRecord | null;
       earlyRev: number; midRev: number; recentRev: number; totalPlans: number;
     }> = {}
     for (const store of fs) {
       const s = store.state ?? 'Unknown'
-      if (!map[s]) map[s] = { rev: 0, count: 0, topStore: null, growths: [], earlyRev: 0, midRev: 0, recentRev: 0, totalPlans: 0 }
+      if (!map[s]) map[s] = { rev: 0, count: 0, topStore: null, earlyRev: 0, midRev: 0, recentRev: 0, totalPlans: 0 }
       const r = winRev(store, fm)
       map[s].rev += r; map[s].count++
       if (!map[s].topStore || r > winRev(map[s].topStore!, fm)) map[s].topStore = store
-      const e = mAvg(store, early)
-      if (e > 0 && early.length && recent.length)
-        map[s].growths.push((mAvg(store, recent) - e) / e * 100)
       map[s].earlyRev  += winRev(store, early)
       map[s].midRev    += winRev(store, mid)
       map[s].recentRev += winRev(store, recent)
@@ -251,7 +253,7 @@ export default function GeoAnalytics({ filters }: Props) {
       rev:        d.rev,
       count:      d.count,
       topStore:   d.topStore,
-      growth:     d.growths.length ? d.growths.reduce((a, b) => a + b, 0) / d.growths.length : null,
+      growth:     d.earlyRev > 0 ? (d.recentRev - d.earlyRev) / d.earlyRev * 100 : null,
       earlyRev:   d.earlyRev,
       midRev:     d.midRev,
       recentRev:  d.recentRev,

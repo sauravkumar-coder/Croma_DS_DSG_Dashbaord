@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { TrendingDown, Info, ArrowRight } from 'lucide-react'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import createPlotlyComponent from 'react-plotly.js/factory'
@@ -12,6 +12,7 @@ import { fmtInr, fmtPct, fmtStore } from '@/lib/formatting'
 import { exportCsv } from '@/lib/tableExport'
 import { CATEGORY_TEXT_COLOR } from '@/lib/categoryStyles'
 import DataTable from '@/components/ui/DataTable'
+import StarsStateMap from './StarsStateMap'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -55,6 +56,10 @@ export default function FallenStars({
   const { classification } = useDataContext()
   const [sortKey, setSortKey] = useState<SortKey>('growth')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [mapStateFilter, setMapStateFilter] = useState<string | null>(null)
+
+  // Reset map selection whenever parent filters change
+  useEffect(() => { setMapStateFilter(null) }, [filters])
 
   // ── Filter engine results ─────────────────────────────────────────────────
 
@@ -145,17 +150,28 @@ export default function FallenStars({
     })
   }, [rows, sortKey, sortDir])
 
+  // Apply map state selection on top of existing sort/filter (no change to core computations)
+  const displayRows = useMemo(() =>
+    mapStateFilter ? sorted.filter(r => r.store.state === mapStateFilter) : sorted,
+    [sorted, mapStateFilter],
+  )
+
+  const displayTop15 = useMemo(() =>
+    mapStateFilter ? top15.filter(r => r.store.state === mapStateFilter) : top15,
+    [top15, mapStateFilter],
+  )
+
   // ── Dumbbell chart ────────────────────────────────────────────────────────────
 
   const { chartTraces, chartCategories } = useMemo(() => {
-    if (top15.length === 0) return { chartTraces: [] as object[], chartCategories: [] as string[] }
+    if (displayTop15.length === 0) return { chartTraces: [] as object[], chartCategories: [] as string[] }
 
     const { earlyMonths, midMonths, recentMonths } = classification.phases
     const ec = earlyMonths.length  || 1
     const mc = midMonths.length    || 1
     const rc = recentMonths.length || 1
 
-    const ordered = [...top15].sort((a, b) => a.earlyTotal / ec - b.earlyTotal / ec)
+    const ordered = [...displayTop15].sort((a, b) => a.earlyTotal / ec - b.earlyTotal / ec)
     const storeLabel = (r: typeof ordered[0]) => fmtStore(r.store)
     const chartCategories = ordered.map(r => fmtStore(r.store))
 
@@ -201,7 +217,7 @@ export default function FallenStars({
     }
 
     return { chartTraces: [...lines, earlyTrace, midTrace, recentTrace], chartCategories }
-  }, [top15, classification.phases])
+  }, [displayTop15, classification.phases])
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -218,7 +234,7 @@ export default function FallenStars({
       'Early Plans', 'Mid Plans', 'Recent Plans',
       'Early Rank', 'Recent Rank', 'Health %',
     ]
-    const rows = sorted.map((r, i) => [
+    const exportRows = displayRows.map((r, i) => [
       i + 1, r.store.store_id, r.store.store_name ?? '', r.store.state ?? '',
       r.category,
       r.earlyTotal.toFixed(0), r.recentTotal.toFixed(0),
@@ -226,8 +242,8 @@ export default function FallenStars({
       r.earlyPlans, r.midPlans, r.recentPlans,
       r.earlyRank, r.recentRank, r.localHealth.toFixed(1),
     ])
-    exportCsv('fallen-stores', headers, rows)
-  }, [sorted])
+    exportCsv('fallen-stores', headers, exportRows)
+  }, [displayRows])
 
   // ── Empty state ───────────────────────────────────────────────────────────────
 
@@ -322,11 +338,19 @@ export default function FallenStars({
         </div>
       )}
 
+      {/* State-level Fallen Stars map */}
+      <StarsStateMap
+        rows={rows}
+        variant="fallen"
+        selectedState={mapStateFilter}
+        onStateClick={setMapStateFilter}
+      />
+
       {/* Dumbbell chart */}
-      {top15.length > 0 && (
+      {displayTop15.length > 0 && (
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
           <h3 className="text-sm font-semibold text-gray-700">Early → Mid → Recent Revenue</h3>
-          <p className="text-xs text-gray-400 mt-0.5 mb-4">Top {top15.length} by early phase total · ● Early · ◆ Mid · ● Recent</p>
+          <p className="text-xs text-gray-400 mt-0.5 mb-4">Top {displayTop15.length} by early phase total · ● Early · ◆ Mid · ● Recent</p>
           <Plot
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             data={chartTraces as any}
@@ -364,7 +388,7 @@ export default function FallenStars({
       {/* Detail table */}
       <DataTable
         title="Declining Stores Detail"
-        subtitle={`${sorted.length} store${sorted.length !== 1 ? 's' : ''} · click column headers to sort`}
+        subtitle={`${displayRows.length} store${displayRows.length !== 1 ? 's' : ''} · click column headers to sort`}
         onExportCsv={handleExportCsv}
       >
         <table className="w-full text-xs min-w-[700px]">
@@ -391,8 +415,8 @@ export default function FallenStars({
             </thead>
             <tbody>
               {(() => {
-                const maxDecline = Math.max(...sorted.map(r => Math.abs(r.growthPct ?? 0)), 1)
-                return sorted.map((row, i) => {
+                const maxDecline = Math.max(...displayRows.map(r => Math.abs(r.growthPct ?? 0)), 1)
+                return displayRows.map((row, i) => {
                   const barW = (Math.abs(row.growthPct ?? 0) / maxDecline) * 100
                   return (
                     <tr

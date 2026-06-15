@@ -153,9 +153,15 @@ def _is_transactional(df: pd.DataFrame) -> bool:
 
 
 def _is_ow_target_format(df: pd.DataFrame) -> bool:
-    """True when the file is the OW Budget format (Store Key / OOW)."""
+    """True when the file is the OW Budget format (Store Key + a target-like column)."""
     cols = {c.strip().lower() for c in df.columns}
-    return "store key" in cols and "oow" in cols
+    has_key = "store key" in cols
+    has_target = any(
+        t in col
+        for col in cols
+        for t in ("oow", "sales target", "store target", "monthly target")
+    )
+    return has_key and has_target
 
 
 def _sort_months_list(months: list[str]) -> list[str]:
@@ -400,15 +406,25 @@ def parse_targets(filepath: str) -> dict[str, dict]:
 
 
 def _parse_ow_targets(df: pd.DataFrame) -> dict[str, dict]:
-    """Parse OW Budget format: Store Key | Store Name | … | OOW."""
+    """Parse OW Budget format: Store Key | Store Name | … | OOW / Sales Target."""
     c_id   = _find_col(df, "store key")
     c_name = _find_col(df, "store name")
-    c_oow  = _find_col(df, "oow")
     c_zm   = _find_col(df, "zonal manager")
     c_cm   = _find_col(df, "cluster manager")
 
+    # Accept multiple column names for the target value
+    c_oow = (
+        _find_col(df, "oow")
+        or _find_col(df, "sales target")
+        or _find_col(df, "store target")
+        or _find_col(df, "monthly target")
+    )
+
     if c_id is None or c_oow is None:
-        raise ValueError("OW Budget file must have 'Store Key' and 'OOW' columns.")
+        raise ValueError(
+            "OW Budget file must have 'Store Key' and a target column "
+            "(OOW / Sales Target / Store Target / Monthly Target)."
+        )
 
     df = df[df[c_id].notna()].copy()
     df[c_id]  = df[c_id].astype(str).str.strip()

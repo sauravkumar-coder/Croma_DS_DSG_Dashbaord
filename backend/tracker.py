@@ -168,7 +168,7 @@ def parse_tracker_sales(filepath: str) -> dict[str, Any]:
     df.columns = [str(c).strip() for c in df.columns]
 
     c_name  = _find_col(df, "store name", "store_name", "store", "outlet")
-    c_key   = _find_col(df, "store key", "store_id", "ship_node")
+    c_key   = _find_col(df, "store key", "store_id", "ship_node", "branch code")
     c_sales = _find_col(df, "sales", "revenue", "amount", "net sales",
                         "gross_amount", "value", "total")
     c_date  = _find_col(df, "date", "txn date", "transaction date",

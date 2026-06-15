@@ -427,104 +427,43 @@ export default function StateJourneyAnalysis({ filters }: Props) {
     }
   }, [filters.state, stateScopedStores])
 
-  // ── Store Revenue by State chart (drill-down: only when state filter active) ──
+  // ── Store Revenue Ranking data (drill-down: only when state filter active) ──
   const storeCompData = useMemo(() => {
-    if (!filters.state) return { traces: [], stateName: '', count: 0, chartHeight: 320 }
+    if (!filters.state) return { stores: [], stateName: '', count: 0, totalRev: 0, maxRev: 0, growing: 0, atRisk: 0 }
 
     const stateStores = classifiedStores
       .filter(c => (c.store.state ?? 'Unknown') === filters.state)
-      .sort((a, b) => a.rev - b.rev)
+      .sort((a, b) => b.rev - a.rev)
 
-    if (!stateStores.length) return { traces: [], stateName: filters.state, count: 0, chartHeight: 320 }
+    if (!stateStores.length) return { stores: [], stateName: filters.state, count: 0, totalRev: 0, maxRev: 0, growing: 0, atRisk: 0 }
 
-    const labels = stateStores.map(c => c.store.store_name ?? c.store.store_id)
+    const totalRev = stateStores.reduce((s, c) => s + c.rev, 0)
+    const maxRev   = stateStores[0]?.rev ?? 0
+    const growing  = stateStores.filter(c =>
+      c.category === 'Rising Star' || c.category === 'New Bloomer' || c.category === 'Growing Store'
+    ).length
+    const atRisk = stateStores.filter(c =>
+      c.category === 'Declining Store' || c.category === 'Fallen Star' || c.category === 'Inactive Store'
+    ).length
 
-    const recentColors = stateStores.map(c =>
-      c.growthPct === null ? '#94a3b8'
-      : c.growthPct >= 15  ? '#15803d'
-      : c.growthPct >= 0   ? '#4ade80'
-      : c.growthPct >= -15 ? '#f97316'
-      :                      '#dc2626'
-    )
-    const growthLabels = stateStores.map(c =>
-      c.growthPct !== null
-        ? `  ${c.growthPct >= 0 ? '▲' : '▼'} ${Math.abs(c.growthPct).toFixed(1)}%`
-        : ''
-    )
-    const growthLabelColors = stateStores.map(c =>
-      c.growthPct === null ? '#94a3b8' : c.growthPct >= 0 ? '#15803d' : '#dc2626'
-    )
-
-    return {
-      stateName: filters.state,
-      count: stateStores.length,
-      chartHeight: Math.max(320, stateStores.length * 30 + 80),
-      traces: [
-        {
-          type: 'bar' as const, orientation: 'h' as const, name: 'Early',
-          y: labels, x: stateStores.map(c => c.earlyR),
-          marker: { color: '#bfdbfe', opacity: 0.9 },
-          hovertemplate: '<b>%{y}</b><br>Early period: ₹%{x:,.0f}<extra></extra>',
-        },
-        {
-          type: 'bar' as const, orientation: 'h' as const, name: 'Recent',
-          y: labels, x: stateStores.map(c => c.recentR),
-          marker: { color: recentColors, opacity: 0.92 },
-          text: growthLabels,
-          textposition: 'outside' as const,
-          textfont: { size: 9, color: growthLabelColors },
-          cliponaxis: false,
-          hovertemplate: '<b>%{y}</b><br>Recent period: ₹%{x:,.0f}<br>Growth: %{text}<extra></extra>',
-        },
-      ],
-    }
+    return { stores: stateStores, stateName: filters.state, count: stateStores.length, totalRev, maxRev, growing, atRisk }
   }, [classifiedStores, filters.state])
 
-  // ── Revenue × Growth bubble scatter (all-states executive view) ────────────
-  const stateRevChartData = useMemo(() => {
+  // ── State Performance Leaderboard derived data ────────────────────────────
+  const leaderboardData = useMemo(() => {
     if (filters.state || !stateMetrics.length) return null
-
-    const maxStores = Math.max(...stateMetrics.map(m => m.total), 1)
-
+    const maxRev = stateMetrics.reduce((m, s) => Math.max(m, s.totalRevV), 0)
+    const withGrowth = stateMetrics.filter(m => m.growthPct !== null)
+    const growthSorted = [...withGrowth].sort((a, b) => (b.growthPct ?? 0) - (a.growthPct ?? 0))
+    const growthRankMap = new Map<string, number>(growthSorted.map((m, i) => [m.state, i + 1]))
     return {
-      traces: [{
-        type: 'scatter' as const,
-        mode: 'text+markers' as const,
-        x:    stateMetrics.map(m => m.totalRevV),
-        y:    stateMetrics.map(m => m.growthPct ?? 0),
-        text: stateMetrics.map(m => m.state),
-        textposition: 'top center' as const,
-        textfont: { size: 10, color: '#374151' },
-        marker: {
-          size:       stateMetrics.map(m => 14 + (m.total / maxStores) * 26),
-          color:      stateMetrics.map(m => m.health),
-          colorscale: COLORSCALE_HEALTH_PASTEL,
-          cmin: 0, cmax: 100,
-          opacity: 0.85,
-          line: { color: '#ffffff', width: 1.5 },
-          colorbar: {
-            thickness: 10, len: 0.75,
-            tickfont: { color: '#6b7280', size: 9 },
-            title: { text: 'Health', side: 'right' as const, font: { color: '#6b7280', size: 9 } },
-          },
-        },
-        customdata: stateMetrics.map(m => [
-          fmtInr(m.totalRevV), m.total, m.active,
-          m.growthPct != null ? fmtPct(m.growthPct) : 'N/A',
-          m.health.toFixed(1), m.rising, m.fallen, fmtInr(m.avgStore),
-        ]),
-        hovertemplate:
-          '<b>%{text}</b><br>'
-          + 'Revenue: %{customdata[0]}<br>'
-          + 'Stores: %{customdata[1]} (%{customdata[2]} active)<br>'
-          + 'Growth: %{customdata[3]}<br>'
-          + 'Health: %{customdata[4]}<br>'
-          + 'Rising Stars: %{customdata[5]} · Fallen: %{customdata[6]}<br>'
-          + 'Avg/Store: %{customdata[7]}'
-          + '<extra></extra>',
-      }],
+      maxRev,
+      topGrowth:    growthSorted.slice(0, 5),
+      bottomGrowth: growthSorted.slice(-5).reverse(),
+      growthRankMap,
     }
   }, [stateMetrics, filters.state])
+
 
   // ── Category breakdown bar for store distribution (state drill-down) ───────
   const stateCatData = useMemo(() => {
@@ -645,94 +584,103 @@ export default function StateJourneyAnalysis({ filters }: Props) {
     }]
   }, [stateMetrics, stateScopedStores, filters.state])
 
-  // ── Risk vs Opportunity: state scatter OR store drill-down ─────────────────
-  const rvoData = useMemo(() => {
-    if (filters.state && stateScopedStores.length > 0) {
-      // Drill-down: individual stores within selected state
-      const stores = stateScopedStores
-      const maxRev = Math.max(...stores.map(c => c.rev), 1)
-      const minRev = Math.min(...stores.map(c => c.rev), 0)
-      const bSize  = (r: number) => 10 + ((r - minRev) / ((maxRev - minRev) || 1)) * 28
+  // ── Pareto: Store Footprint Concentration (no-state view) ─────────────────
+  const paretoData = useMemo(() => {
+    const sorted = [...stateMetrics]
+      .filter(m => m.total > 0)
+      .sort((a, b) => b.total - a.total)
 
-      return [{
-        type:         'scatter' as const,
-        mode:         'text+markers' as const,
-        // x = decline exposure (0 when growing, magnitude of decline when falling)
-        x:            stores.map(c => c.growthPct !== null ? Math.max(0, -c.growthPct) : 50),
-        // y = growth opportunity (0 when declining, magnitude of growth when rising)
-        y:            stores.map(c => c.growthPct !== null ? Math.max(0, c.growthPct) : 0),
-        text:         stores.map(c => c.store.store_name ?? c.store.store_id),
-        textposition: 'top center' as const,
-        textfont:     { color: '#9ca3af', size: 8 },
-        customdata:   stores.map(c => [c.category, c.rev, c.growthPct?.toFixed(1) ?? 'N/A']),
-        marker: {
-          size:       stores.map(c => bSize(c.rev)),
-          color:      stores.map(c => HEALTH_BY_CAT[c.category] ?? 50),
-          colorscale: COLORSCALE_HEALTH_PASTEL,
-          cmin:       0,
-          cmax:       100,
-          opacity:    0.85,
-          line:       { color: '#ffffff', width: 1.5 },
-          colorbar: {
-            thickness: 10,
-            len:       0.75,
-            tickfont:  { color: '#6b7280', size: 9 },
-            title:     { text: 'Health', side: 'right' as const, font: { color: '#6b7280', size: 9 } },
-          },
-        },
-        hovertemplate:
-          '<b>%{text}</b><br>Category: %{customdata[0]}'
-          + '<br>Growth: %{customdata[2]}%<br>Revenue: ₹%{customdata[1]:,.0f}<extra></extra>',
-      }]
+    if (!sorted.length) return null
+
+    const totalStores = sorted.reduce((s, m) => s + m.total, 0)
+
+    // Plans sold per state from raw store records (respects all existing filters)
+    const plansMap = new Map<string, number>()
+    for (const c of classifiedStores) {
+      const st = c.store.state ?? 'Unknown'
+      const p  = fm.reduce((s, mo) => s + (c.store.monthly_plans_count?.[mo] ?? 0), 0)
+      plansMap.set(st, (plansMap.get(st) ?? 0) + p)
     }
 
-    // Default: state-level scatter
-    if (!stateMetrics.length) return []
-    const maxRev = Math.max(...stateMetrics.map(m => m.totalRevV), 1)
-    const minRev = Math.min(...stateMetrics.map(m => m.totalRevV), 0)
-    const bSize  = (r: number) => 12 + ((r - minRev) / ((maxRev - minRev) || 1)) * 34
+    let runningPct = 0
+    const rows = sorted.map(m => {
+      const contrib = totalStores > 0 ? (m.total / totalStores) * 100 : 0
+      runningPct = Math.min(runningPct + contrib, 100)
+      return {
+        state:       m.state,
+        count:       m.total,
+        contrib:     Math.round(contrib * 10) / 10,
+        cumulative:  Math.round(runningPct * 10) / 10,
+        rev:         m.totalRevV,
+        growthPct:   m.growthPct,
+        revPerStore: m.total > 0 ? m.totalRevV / m.total : 0,
+        plans:       plansMap.get(m.state) ?? 0,
+      }
+    })
 
-    return [{
-      type:   'scatter' as const,
-      mode:   'text+markers' as const,
-      x:      stateMetrics.map(m => m.risk),
-      y:      stateMetrics.map(m => m.opp),
-      text:   stateMetrics.map(m => m.state),
-      textposition: 'top center' as const,
-      textfont: { color: '#9ca3af', size: 9 },
-      customdata: stateMetrics.map(m => [
-        m.health, m.totalRevV, m.total,
-        m.growthPct?.toFixed(1) ?? 'N/A',
-      ]),
-      marker: {
-        size:       stateMetrics.map(m => bSize(m.totalRevV)),
-        color:      stateMetrics.map(m => m.health),
-        colorscale: COLORSCALE_HEALTH_PASTEL,
-        cmin:       0,
-        cmax:       100,
-        opacity:    0.85,
-        line:       { color: '#ffffff', width: 1.5 },
-        colorbar: {
-          thickness: 10,
-          len:       0.75,
-          tickfont:  { color: '#6b7280', size: 9 },
-          title:     { text: 'Health', side: 'right' as const, font: { color: '#6b7280', size: 9 } },
-        },
+    const paretoIdx   = rows.findIndex(r => r.cumulative >= 80)
+    const statesFor80 = paretoIdx >= 0 ? paretoIdx + 1 : rows.length
+    const top5cum     = rows[Math.min(4, rows.length - 1)]?.cumulative  ?? 0
+    const top10cum    = rows[Math.min(9, rows.length - 1)]?.cumulative ?? 0
+    const isConc      = statesFor80 <= Math.ceil(rows.length * 0.4)
+
+    const barColors = rows.map((_, i) =>
+      paretoIdx < 0 || i <= paretoIdx ? '#3b82f6' : '#bfdbfe'
+    )
+
+    const traces = [
+      {
+        type: 'bar' as const,
+        name: 'Store Count',
+        x: rows.map(r => r.state),
+        y: rows.map(r => r.count),
+        marker: { color: barColors, opacity: 0.88, line: { width: 0 } },
+        yaxis: 'y' as const,
+        customdata: rows.map(r => [
+          r.contrib.toFixed(1),
+          r.cumulative.toFixed(1),
+          fmtInr(r.rev),
+          fmtInr(r.revPerStore),
+          r.growthPct !== null ? fmtPct(r.growthPct) : 'N/A',
+          r.plans.toLocaleString('en-IN'),
+        ]),
+        hovertemplate:
+          '<b>%{x}</b>'
+          + '<br>Stores: <b>%{y}</b>'
+          + '<br>Contribution: %{customdata[0]}%'
+          + '<br>Cumulative: %{customdata[1]}%'
+          + '<br>Revenue: %{customdata[2]}'
+          + '<br>Rev / Store: %{customdata[3]}'
+          + '<br>Growth: %{customdata[4]}'
+          + '<br>Plans Sold: %{customdata[5]}'
+          + '<extra></extra>',
       },
-      hovertemplate:
-        '<b>%{text}</b><br>Risk Index: %{x:.1f}<br>Rising Stars: %{y}<br>'
-        + 'Health: %{customdata[0]:.1f}<br>Revenue: ₹%{customdata[1]:,.0f}'
-        + '<br>Stores: %{customdata[2]}<br>Growth: %{customdata[3]}%<extra></extra>',
-    }]
-  }, [stateMetrics, stateScopedStores, filters.state])
+      {
+        type: 'scatter' as const,
+        mode: 'lines+markers' as const,
+        name: 'Cumulative %',
+        x: rows.map(r => r.state),
+        y: rows.map(r => r.cumulative),
+        yaxis: 'y2' as const,
+        line:   { color: '#f59e0b', width: 2.5 },
+        marker: { size: 5, color: '#f59e0b' },
+        hovertemplate: '<b>%{x}</b><br>Cumulative: %{y:.1f}%<extra></extra>',
+      },
+      {
+        type: 'scatter' as const,
+        mode: 'lines' as const,
+        name: '80% Pareto line',
+        x: [rows[0]?.state, rows[rows.length - 1]?.state],
+        y: [80, 80],
+        yaxis: 'y2' as const,
+        line: { color: '#ef4444', width: 1.5, dash: 'dash' as const },
+        hoverinfo: 'skip' as const,
+        showlegend: true,
+      },
+    ]
 
-  // ── Quadrant reference lines for the state-level scatter ──────────────────
-  const rvoMeta = useMemo(() => {
-    if (filters.state || !stateMetrics.length) return null
-    const avgRisk = stateMetrics.reduce((s, m) => s + m.risk, 0) / stateMetrics.length
-    const avgOpp  = stateMetrics.reduce((s, m) => s + m.opp,  0) / stateMetrics.length
-    return { avgRisk, avgOpp }
-  }, [stateMetrics, filters.state])
+    return { rows, totalStores, statesFor80, top5cum, top10cum, isConc, traces }
+  }, [stateMetrics, classifiedStores, fm])
 
   // ── Sorted table rows ─────────────────────────────────────────────────────
   const tableRows = useMemo(() =>
@@ -1004,101 +952,284 @@ export default function StateJourneyAnalysis({ filters }: Props) {
           className={card}
         >
           {filters.state ? (
-            /* ── Drill-down: per-store chart for the selected state ── */
-            <>
-              <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-800">Store Revenue by State</h3>
-                  <p className="text-[11px] text-gray-400 mt-0.5">
-                    All {storeCompData.count} stores in{' '}
-                    <span className="font-semibold text-blue-600">{storeCompData.stateName}</span>
-                    {' · bar colour = growth direction'}
-                  </p>
-                </div>
-                <div className="text-xs border border-blue-200 rounded-lg px-2.5 py-1.5 bg-blue-50 text-blue-700 shrink-0">
-                  {filters.state} (filtered)
-                </div>
-              </div>
-              {storeCompData.traces.length > 0 ? (
-                <div className="overflow-y-auto" style={{ maxHeight: 520 }}>
-                  <Plot
-                    data={storeCompData.traces}
-                    layout={{
-                      ...PLOTLY_BASE,
-                      barmode: 'group' as const,
-                      legend: {
-                        bgcolor: 'rgba(0,0,0,0)',
-                        font: { color: PT.font, size: 10 },
-                        orientation: 'h' as const,
-                        y: -0.06,
-                      },
-                      xaxis: {
-                        gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line,
-                        automargin: true,
-                        title: { text: 'Revenue (₹)' },
-                        tickformat: '.3s', tickprefix: '₹',
-                      },
-                      yaxis: {
-                        gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line,
-                        automargin: true, tickfont: { size: 10 },
-                      },
-                      margin: { l: 160, r: 90, t: 8, b: 50 },
-                      height: storeCompData.chartHeight,
-                    }}
-                    config={{ displayModeBar: false, responsive: true }}
-                    style={{ width: '100%' }}
-                  />
-                </div>
-              ) : (
-                <div className="flex items-center justify-center h-48 text-gray-400 text-sm">
-                  No store data for selected state
-                </div>
-              )}
-            </>
+            /* ── Drill-down: store revenue ranking leaderboard ── */
+            (() => {
+              const CAT_CFG: Record<string, { bar: string; badge: string; text: string; label: string }> = {
+                'Rising Star':     { bar: '#f59e0b', badge: '#fef3c7', text: '#92400e', label: 'Rising Star'     },
+                'New Bloomer':     { bar: '#4ade80', badge: '#dcfce7', text: '#166534', label: 'New Bloomer'     },
+                'Growing Store':   { bar: '#22c55e', badge: '#dcfce7', text: '#166534', label: 'Growing'         },
+                'Constant Store':  { bar: '#f97316', badge: '#ffedd5', text: '#9a3412', label: 'Stable'          },
+                'Declining Store': { bar: '#ef4444', badge: '#fee2e2', text: '#991b1b', label: 'Declining'       },
+                'Fallen Star':     { bar: '#dc2626', badge: '#fee2e2', text: '#7f1d1d', label: 'Fallen Star'     },
+                'Inactive Store':  { bar: '#9ca3af', badge: '#f3f4f6', text: '#6b7280', label: 'Inactive'        },
+              }
+
+              const growthCfg = (g: number | null) =>
+                g === null           ? { bg: '#f3f4f6', fg: '#6b7280', label: 'N/A'            } :
+                g >= 15              ? { bg: '#dcfce7', fg: '#15803d', label: `▲ ${g.toFixed(1)}%` } :
+                g >= 0               ? { bg: '#f0fdf4', fg: '#15803d', label: `▲ ${g.toFixed(1)}%` } :
+                g >= -15             ? { bg: '#ffedd5', fg: '#c2410c', label: `▼ ${Math.abs(g).toFixed(1)}%` } :
+                                       { bg: '#fee2e2', fg: '#dc2626', label: `▼ ${Math.abs(g).toFixed(1)}%` }
+
+              const { stores, totalRev, maxRev, growing, atRisk, count, stateName } = storeCompData
+
+              return (
+                <>
+                  {/* Header */}
+                  <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-800">Store Revenue Ranking</h3>
+                      <p className="text-[11px] text-gray-400 mt-0.5">
+                        {count} stores in{' '}
+                        <span className="font-semibold text-blue-600">{stateName}</span>
+                        {' · ranked by total revenue'}
+                      </p>
+                    </div>
+                    <div className="text-xs border border-blue-200 rounded-lg px-2.5 py-1.5 bg-blue-50 text-blue-700 shrink-0">
+                      {filters.state} (filtered)
+                    </div>
+                  </div>
+
+                  {/* 3 summary stat pills */}
+                  {count > 0 && (
+                    <div className="grid grid-cols-3 gap-2 mb-3">
+                      <div className="rounded-lg bg-gray-50 border border-gray-100 px-2.5 py-2 text-center">
+                        <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-0.5">State Revenue</p>
+                        <p className="text-[13px] font-bold text-gray-900 tabular-nums">{fmtInr(totalRev)}</p>
+                      </div>
+                      <div className="rounded-lg bg-emerald-50 border border-emerald-100 px-2.5 py-2 text-center">
+                        <p className="text-[9px] font-bold uppercase tracking-widest text-emerald-600 mb-0.5">Growing</p>
+                        <p className="text-[13px] font-bold text-emerald-700 tabular-nums">
+                          {growing} <span className="text-[10px] font-normal text-emerald-500">/ {count}</span>
+                        </p>
+                      </div>
+                      <div className="rounded-lg bg-red-50 border border-red-100 px-2.5 py-2 text-center">
+                        <p className="text-[9px] font-bold uppercase tracking-widest text-red-500 mb-0.5">At-Risk</p>
+                        <p className="text-[13px] font-bold text-red-600 tabular-nums">
+                          {atRisk} <span className="text-[10px] font-normal text-red-400">/ {count}</span>
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Column headers */}
+                  {count > 0 && (
+                    <div className="flex items-center gap-2 px-3 mb-1">
+                      <span className="w-7 shrink-0" />
+                      <span className="flex-1 text-[9px] font-bold uppercase tracking-wider text-gray-400">Store</span>
+                      <span className="text-[9px] font-bold uppercase tracking-wider text-gray-400 shrink-0 w-16 text-right">Revenue</span>
+                      <span className="text-[9px] font-bold uppercase tracking-wider text-gray-400 shrink-0 w-12 text-right">Share</span>
+                      <span className="text-[9px] font-bold uppercase tracking-wider text-gray-400 shrink-0 w-16 text-right">Growth</span>
+                    </div>
+                  )}
+
+                  {/* Ranked rows */}
+                  {count > 0 ? (
+                    <div className="overflow-y-auto space-y-1" style={{ maxHeight: 380 }}>
+                      {stores.map((c, i) => {
+                        const cfg      = CAT_CFG[c.category] ?? CAT_CFG['Constant Store']
+                        const gCfg     = growthCfg(c.growthPct)
+                        const barPct   = maxRev > 0 ? Math.max((c.rev / maxRev) * 100, 2) : 2
+                        const revShare = totalRev > 0 ? (c.rev / totalRev * 100) : 0
+                        const name     = c.store.store_name ?? c.store.store_id
+                        const rank     = i + 1
+
+                        return (
+                          <div
+                            key={c.store.store_id}
+                            className="rounded-lg px-3 py-2 bg-gray-50/80 hover:bg-blue-50/60 transition-colors cursor-default"
+                            title={`${name} · ${c.category} · Revenue: ${fmtInr(c.rev)} · Growth: ${c.growthPct !== null ? fmtPct(c.growthPct) : 'N/A'}`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              {/* Rank badge */}
+                              <span className={cn(
+                                'w-7 text-center text-[10px] font-bold tabular-nums shrink-0',
+                                rank === 1 ? 'text-amber-500' : rank === 2 ? 'text-gray-400' : rank === 3 ? 'text-orange-400' : 'text-gray-300',
+                              )}>
+                                #{rank}
+                              </span>
+
+                              {/* Store name + category chip */}
+                              <div className="flex-1 min-w-0 flex items-center gap-1.5 overflow-hidden">
+                                <span className="text-[11px] font-semibold text-gray-800 truncate">{name}</span>
+                                <span
+                                  className="shrink-0 px-1.5 py-0.5 rounded-full text-[8px] font-bold whitespace-nowrap"
+                                  style={{ backgroundColor: cfg.badge, color: cfg.text }}
+                                >
+                                  {cfg.label}
+                                </span>
+                              </div>
+
+                              {/* Revenue */}
+                              <span className="text-[11px] font-bold text-gray-900 tabular-nums shrink-0 w-16 text-right">
+                                {fmtInr(c.rev)}
+                              </span>
+
+                              {/* Revenue share of state */}
+                              <span className="text-[9px] text-gray-400 tabular-nums shrink-0 w-12 text-right">
+                                {revShare.toFixed(1)}%
+                              </span>
+
+                              {/* Growth badge */}
+                              <span
+                                className="shrink-0 px-1.5 py-0.5 rounded-full text-[9px] font-bold tabular-nums w-16 text-right"
+                                style={{ backgroundColor: gCfg.bg, color: gCfg.fg }}
+                              >
+                                {gCfg.label}
+                              </span>
+                            </div>
+
+                            {/* Revenue bar */}
+                            <div className="mt-1.5 h-1 w-full rounded-full bg-gray-200 overflow-hidden">
+                              <motion.div
+                                className="h-full rounded-full"
+                                style={{ backgroundColor: cfg.bar }}
+                                initial={{ width: 0 }}
+                                animate={{ width: `${barPct}%` }}
+                                transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1], delay: i * 0.02 }}
+                              />
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center h-48 text-gray-400 text-sm">
+                      No store data for selected state
+                    </div>
+                  )}
+                </>
+              )
+            })()
           ) : (
-            /* ── Executive overview: revenue × growth bubble scatter ── */
+            /* ── Executive overview: state performance leaderboard ── */
             <>
               <div className="mb-3">
-                <h3 className="text-sm font-semibold text-gray-800">Revenue vs Growth by State</h3>
+                <h3 className="text-sm font-semibold text-gray-800">State Performance Leaderboard</h3>
                 <p className="text-[11px] text-gray-400 mt-0.5">
-                  X = total revenue · Y = growth % · bubble size = store count · colour = health score · hover for details
+                  Ranked by revenue · bar = revenue share · colour = health score
                 </p>
               </div>
-              {stateRevChartData ? (
-                <Plot
-                  data={stateRevChartData.traces}
-                  layout={{
-                    ...PLOTLY_BASE,
-                    xaxis: {
-                      gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line,
-                      automargin: true,
-                      title: { text: 'Total Revenue →', font: { size: 11, color: '#6b7280' } },
-                      tickformat: '.3s', tickprefix: '₹',
-                    },
-                    yaxis: {
-                      gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line,
-                      automargin: true,
-                      title: { text: 'Growth % →', font: { size: 11, color: '#6b7280' } },
-                      zeroline: true, zerolinecolor: '#d1d5db', zerolinewidth: 1.5,
-                      ticksuffix: '%',
-                    },
-                    shapes: [{
-                      type: 'line', xref: 'paper', yref: 'y',
-                      x0: 0, x1: 1, y0: 0, y1: 0,
-                      line: { color: '#d1d5db', width: 1.5, dash: 'dot' },
-                    }],
-                    annotations: [
-                      { x: 0.99, y: 0.99, xref: 'paper', yref: 'paper', text: '↑ Growing', showarrow: false, xanchor: 'right', yanchor: 'top', font: { color: '#10b981', size: 10 } },
-                      { x: 0.99, y: 0.01, xref: 'paper', yref: 'paper', text: '↓ Declining', showarrow: false, xanchor: 'right', yanchor: 'bottom', font: { color: '#ef4444', size: 10 } },
-                    ],
-                    hovermode: 'closest',
-                    showlegend: false,
-                    margin: { l: 54, r: 80, t: 16, b: 54 },
-                    height: 360,
-                  }}
-                  config={{ displayModeBar: false, responsive: true }}
-                  style={{ width: '100%' }}
-                />
+
+              {leaderboardData && stateMetrics.length > 0 ? (
+                <div className="space-y-3">
+
+                  {/* ── Quick-scan summary cards ── */}
+                  <div className="grid grid-cols-3 gap-2">
+
+                    {/* Top 5 Revenue */}
+                    <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-2.5">
+                      <p className="text-[9px] font-bold uppercase tracking-widest text-emerald-700 mb-2">Top Revenue</p>
+                      {stateMetrics.slice(0, 5).map((m, i) => (
+                        <div key={m.state} className="flex items-center gap-1 py-0.5">
+                          <span className="text-[9px] font-bold text-emerald-600 tabular-nums shrink-0 w-5">#{i + 1}</span>
+                          <span className="text-[9px] text-gray-700 truncate flex-1">{m.state}</span>
+                          <span className="text-[9px] font-semibold text-gray-800 tabular-nums shrink-0">{fmtInr(m.totalRevV)}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Top 5 Growth */}
+                    <div className="rounded-lg border border-blue-100 bg-blue-50 p-2.5">
+                      <p className="text-[9px] font-bold uppercase tracking-widest text-blue-700 mb-2">Top Growth</p>
+                      {leaderboardData.topGrowth.map((m, i) => (
+                        <div key={m.state} className="flex items-center gap-1 py-0.5">
+                          <span className="text-[9px] font-bold text-blue-500 tabular-nums shrink-0 w-5">#{i + 1}</span>
+                          <span className="text-[9px] text-gray-700 truncate flex-1">{m.state}</span>
+                          <span className="text-[9px] font-semibold text-emerald-600 tabular-nums shrink-0">{fmtPct(m.growthPct!)}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Bottom 5 Growth (risk) */}
+                    <div className="rounded-lg border border-red-100 bg-red-50 p-2.5">
+                      <p className="text-[9px] font-bold uppercase tracking-widest text-red-700 mb-2">Growth Risk</p>
+                      {leaderboardData.bottomGrowth.map((m, i) => (
+                        <div key={m.state} className="flex items-center gap-1 py-0.5">
+                          <span className="text-[9px] font-bold text-red-400 tabular-nums shrink-0 w-5">#{i + 1}</span>
+                          <span className="text-[9px] text-gray-700 truncate flex-1">{m.state}</span>
+                          <span className="text-[9px] font-semibold text-red-600 tabular-nums shrink-0">{fmtPct(m.growthPct!)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* ── Leaderboard rows ── */}
+                  <div className="overflow-y-auto space-y-1" style={{ maxHeight: 230 }}>
+                    {stateMetrics.map((m, i) => {
+                      const barPct = leaderboardData.maxRev > 0
+                        ? Math.max((m.totalRevV / leaderboardData.maxRev) * 100, 2)
+                        : 2
+                      const gRank = leaderboardData.growthRankMap.get(m.state)
+                      return (
+                        <div
+                          key={m.state}
+                          className="rounded-lg px-3 py-2 bg-gray-50/80 hover:bg-blue-50 transition-colors cursor-default"
+                          title={`${m.state}  ·  Revenue: ${fmtInr(m.totalRevV)}  ·  Growth: ${m.growthPct != null ? fmtPct(m.growthPct) : 'N/A'}  ·  Health: ${m.health.toFixed(1)}  ·  Stores: ${m.total} (${m.active} active)  ·  Rev rank: #${i + 1}  ·  Growth rank: ${gRank != null ? `#${gRank}` : '—'}`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            {/* Revenue rank */}
+                            <span className="text-[9px] font-bold text-gray-400 tabular-nums shrink-0 w-5">
+                              #{i + 1}
+                            </span>
+                            {/* State name */}
+                            <span className="text-[11px] font-semibold text-gray-800 truncate flex-1 min-w-0">
+                              {m.state}
+                            </span>
+                            {/* Revenue */}
+                            <span className="text-[10px] font-bold text-gray-900 tabular-nums shrink-0">
+                              {fmtInr(m.totalRevV)}
+                            </span>
+                            {/* Growth badge */}
+                            <span className={cn(
+                              'text-[9px] font-bold px-1.5 py-0.5 rounded-full tabular-nums shrink-0',
+                              m.growthPct === null
+                                ? 'bg-gray-100 text-gray-500'
+                                : m.growthPct >= 0
+                                  ? 'bg-emerald-100 text-emerald-700'
+                                  : 'bg-red-100 text-red-700',
+                            )}>
+                              {m.growthPct === null ? 'N/A' : fmtPct(m.growthPct)}
+                            </span>
+                            {/* Health badge */}
+                            <span className={cn(
+                              'text-[9px] font-bold px-1.5 py-0.5 rounded tabular-nums shrink-0',
+                              m.health >= 75 ? 'bg-emerald-100 text-emerald-700'
+                              : m.health >= 50 ? 'bg-amber-100 text-amber-700'
+                              : 'bg-red-100 text-red-700',
+                            )}>
+                              H{m.health.toFixed(0)}
+                            </span>
+                            {/* Store count */}
+                            <span className="text-[9px] text-gray-400 tabular-nums shrink-0">
+                              {m.total} sts
+                            </span>
+                            {/* Growth rank (dimmed) */}
+                            <span className="text-[8px] text-gray-300 tabular-nums shrink-0 w-7 text-right">
+                              G#{gRank ?? '—'}
+                            </span>
+                          </div>
+                          {/* Revenue bar */}
+                          <div className="mt-1.5 h-1.5 w-full rounded-full bg-gray-200 overflow-hidden">
+                            <motion.div
+                              className="h-full rounded-full"
+                              style={{
+                                backgroundColor:
+                                  m.health >= 75 ? '#10b981'
+                                  : m.health >= 50 ? '#f59e0b'
+                                  : '#ef4444',
+                              }}
+                              initial={{ width: 0 }}
+                              animate={{ width: `${barPct}%` }}
+                              transition={{ duration: 0.75, ease: [0.22, 1, 0.36, 1], delay: i * 0.03 }}
+                            />
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                </div>
               ) : (
                 <div className="flex items-center justify-center h-48 text-gray-400 text-sm">
                   No state data available
@@ -1109,25 +1240,25 @@ export default function StateJourneyAnalysis({ filters }: Props) {
         </motion.div>
       </div>
 
-      {/* ── Row 3: Treemap + Risk vs Opportunity ── */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      {/* ── Store Distribution / Store Footprint Concentration ── */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.22, duration: 0.4 }}
+        className={card}
+      >
+        <h3 className="text-sm font-semibold text-gray-800 mb-0.5">
+          {filters.state ? `Store Distribution — ${filters.state}` : 'Store Footprint Concentration'}
+        </h3>
+        <p className="text-[11px] text-gray-400 mb-3">
+          {filters.state
+            ? `Category health breakdown · ${stateScopedStores.length} stores total · bar colour = category`
+            : 'Shows how the store network is distributed across states and highlights concentration risk'
+          }
+        </p>
 
-        {/* Store Distribution by State */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.22, duration: 0.4 }}
-          className={card}
-        >
-          <h3 className="text-sm font-semibold text-gray-800 mb-0.5">
-            {filters.state ? `Store Distribution — ${filters.state}` : 'Store Distribution by State'}
-          </h3>
-          <p className="text-[11px] text-gray-400 mb-2">
-            {filters.state
-              ? `Category health breakdown · ${stateScopedStores.length} stores total`
-              : 'Tile size = store count · colour = health score (green healthy → red at-risk)'
-            }
-          </p>
-          {filters.state && stateCatData ? (
+        {filters.state && stateCatData ? (
+          /* ── Existing category drill-down (unchanged) ── */
+          <div className="overflow-y-auto" style={{ maxHeight: 560 }}>
             <Plot
               data={stateCatData.traces}
               layout={{
@@ -1139,98 +1270,97 @@ export default function StateJourneyAnalysis({ filters }: Props) {
                 },
                 yaxis: {
                   gridcolor: PT.grid, linecolor: PT.line,
-                  tickfont: { size: 11 }, automargin: true,
+                  tickfont: { size: 12 }, automargin: true,
                 },
-                margin: { l: 120, r: 80, t: 8, b: 40 },
+                margin: { l: 140, r: 110, t: 8, b: 50 },
                 height: stateCatData.height,
                 showlegend: false,
               }}
               config={{ displayModeBar: false, responsive: true }}
               style={{ width: '100%' }}
             />
-          ) : (
+          </div>
+        ) : paretoData ? (
+          /* ── Pareto: Store Footprint Concentration ── */
+          <>
+            {/* Dynamic insight chips */}
+            <div className="flex flex-wrap gap-2 mb-4">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 border border-blue-100 px-3 py-1 text-[10px] font-semibold text-blue-700">
+                Top {Math.min(5, paretoData.rows.length)} states →{' '}
+                <span className="font-bold">{paretoData.top5cum.toFixed(0)}%</span> of stores
+              </span>
+              {paretoData.rows.length > 5 && (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 border border-blue-100 px-3 py-1 text-[10px] font-semibold text-blue-700">
+                  Top {Math.min(10, paretoData.rows.length)} states →{' '}
+                  <span className="font-bold">{paretoData.top10cum.toFixed(0)}%</span> of stores
+                </span>
+              )}
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 border border-amber-100 px-3 py-1 text-[10px] font-semibold text-amber-700">
+                <span className="font-bold">{paretoData.statesFor80}</span> of{' '}
+                {paretoData.rows.length} states reach the 80% threshold
+              </span>
+              <span className={cn(
+                'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[10px] font-semibold border',
+                paretoData.isConc
+                  ? 'bg-red-50 border-red-100 text-red-700'
+                  : 'bg-emerald-50 border-emerald-100 text-emerald-700',
+              )}>
+                {paretoData.isConc ? 'Highly Concentrated' : 'Broadly Distributed'}
+              </span>
+            </div>
+
+            {/* Pareto chart */}
             <Plot
-              data={treemapData}
+              data={paretoData.traces}
               layout={{
                 ...PLOTLY_BASE,
-                margin: { l: 0, r: 0, t: 0, b: 0 },
-                height: 360,
+                yaxis: {
+                  gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line,
+                  title: { text: 'Store Count', font: { size: 10, color: '#6b7280' } },
+                  automargin: true,
+                },
+                yaxis2: {
+                  title: { text: 'Cumulative %', font: { size: 10, color: '#6b7280' } },
+                  overlaying: 'y' as const,
+                  side: 'right' as const,
+                  range: [0, 106],
+                  ticksuffix: '%',
+                  gridcolor: 'transparent',
+                  linecolor: PT.line,
+                  automargin: true,
+                  fixedrange: true,
+                },
+                xaxis: {
+                  gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line,
+                  tickangle: -40,
+                  tickfont: { size: 10 },
+                  automargin: true,
+                },
+                legend: {
+                  orientation: 'h' as const,
+                  y: -0.22,
+                  font: { size: 10, color: PT.font },
+                  bgcolor: 'rgba(0,0,0,0)',
+                },
+                height: 400,
+                margin: { l: 50, r: 60, t: 10, b: 90 },
               }}
               config={{ displayModeBar: false, responsive: true }}
               style={{ width: '100%' }}
             />
-          )}
-        </motion.div>
 
-        {/* Risk vs Opportunity Scatter */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.26, duration: 0.4 }}
-          className={card}
-        >
-          <h3 className="text-sm font-semibold text-gray-800 mb-0.5">
-            {filters.state ? `Risk vs Opportunity — ${filters.state} Stores` : 'Risk vs Opportunity'}
-          </h3>
-          <p className="text-[11px] text-gray-400 mb-2">
-            {filters.state
-              ? 'X = decline exposure · Y = growth opportunity · size = revenue · colour = health'
-              : 'X = risk index · Y = opportunity (rising stars) · size = revenue · colour = health'
-            }
-          </p>
-          <Plot
-            data={rvoData}
-            layout={{
-              ...PLOTLY_BASE,
-              showlegend: false,
-              shapes: rvoMeta ? [
-                {
-                  type: 'line' as const, x0: rvoMeta.avgRisk, x1: rvoMeta.avgRisk,
-                  y0: 0, y1: 1, yref: 'paper' as const,
-                  line: { color: '#d1d5db', width: 1, dash: 'dot' },
-                },
-                {
-                  type: 'line' as const, x0: 0, x1: 1, xref: 'paper' as const,
-                  y0: rvoMeta.avgOpp, y1: rvoMeta.avgOpp,
-                  line: { color: '#d1d5db', width: 1, dash: 'dot' },
-                },
-              ] : [],
-              annotations: rvoMeta ? [
-                {
-                  text: 'Stars ✦', showarrow: false,
-                  x: 0, xanchor: 'left' as const, xref: 'paper' as const,
-                  y: rvoMeta.avgOpp * 1.25, yref: 'y' as const,
-                  font: { color: '#10b981', size: 9 }, opacity: 0.7,
-                },
-                {
-                  text: 'At Risk ⚠', showarrow: false,
-                  x: 1, xanchor: 'right' as const, xref: 'paper' as const,
-                  y: 0, yanchor: 'bottom' as const, yref: 'paper' as const,
-                  font: { color: '#ef4444', size: 9 }, opacity: 0.7,
-                },
-              ] : [],
-              xaxis: {
-                gridcolor: PT.grid,
-                linecolor: PT.line,
-                tickcolor: PT.line,
-                automargin: true,
-                title: { text: filters.state ? 'Decline Exposure (%)' : 'Risk Index →' },
-              },
-              yaxis: {
-                gridcolor: PT.grid,
-                linecolor: PT.line,
-                tickcolor: PT.line,
-                automargin: true,
-                title: { text: filters.state ? 'Growth Opportunity (%)' : 'Opportunity (Rising Stars)' },
-              },
-              hovermode: 'closest' as const,
-              margin: { l: 60, r: 80, t: 16, b: 60 },
-              height: 360,
-            }}
-            config={{ displayModeBar: false, responsive: true }}
-            style={{ width: '100%' }}
-          />
-        </motion.div>
-      </div>
+            {/* Legend note */}
+            <p className="text-[10px] text-gray-400 mt-1">
+              Blue bars = states within 80% threshold · Light bars = remaining states ·
+              Hover for revenue, growth and plans detail
+            </p>
+          </>
+        ) : (
+          <div className="flex items-center justify-center h-48 text-gray-400 text-sm">
+            No state data available
+          </div>
+        )}
+      </motion.div>
 
       {/* ── State Ranking Table ── */}
       <motion.div

@@ -1,18 +1,27 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { motion, useMotionValue, useTransform, animate } from 'framer-motion'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AnimatePresence, motion, useMotionValue, useTransform, animate } from 'framer-motion'
 import {
   Activity, AlertCircle, BarChart2,
   Calendar, ChevronDown, ChevronUp,
-  Download, Minus, Search, Settings, Target,
-  TrendingDown, TrendingUp, X, Zap,
+  Download, FileSpreadsheet, Loader2, Minus, RefreshCw, Search, Settings, Target,
+  TrendingDown, TrendingUp, UploadCloud, X, XCircle, Zap,
 } from 'lucide-react'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import createPlotlyComponent from 'react-plotly.js/factory'
 // @ts-ignore — plotly.js-dist-min does not ship its own .d.ts
 import Plotly from 'plotly.js-dist-min'
-import { useDataContext } from '@/contexts/DataContext'
-import type { FilterState } from '@/hooks/useFilters'
+import {
+  getTrackerStatus, getTrackerData, uploadTrackerSales,
+  type TrackerStatus,
+} from '@/lib/api'
 import { cn } from '@/lib/utils'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import TargetManagementDrawer from './TargetManagementDrawer'
 import { fmtInr, fmtPct } from '@/lib/formatting'
 import { exportExcel } from '@/lib/tableExport'
@@ -22,8 +31,24 @@ const Plot = createPlotlyComponent(Plotly)
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const TOTAL_DAYS = 31
 const TABLE_PAGE_SIZE = 20
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function getDaysInMonth(monthStr: string): number {
+  const DAYS: Record<string, number> = {
+    Jan: 31, Feb: 28, Mar: 31, Apr: 30, May: 31, Jun: 30,
+    Jul: 31, Aug: 31, Sep: 30, Oct: 31, Nov: 30, Dec: 31,
+  }
+  const parts = monthStr.split('-')
+  if (parts.length !== 2) return 31
+  const [abbr, yearStr] = parts
+  const year = parseInt(yearStr, 10)
+  if (abbr === 'Feb' && !isNaN(year)) {
+    if ((year % 4 === 0 && year % 100 !== 0) || year % 400 === 0) return 29
+  }
+  return DAYS[abbr] ?? 31
+}
 
 const PLOTLY_AXES = {
   gridcolor: '#e5e7eb',
@@ -40,6 +65,15 @@ type RiskStatus = 'Champion' | 'On Track' | 'Watchlist' | 'At Risk'
 type TableSortKey =
   | 'name' | 'state' | 'target' | 'sales'
   | 'achPct' | 'gapPct' | 'reqDRR' | 'projected' | 'projAchPct' | 'status'
+type TrackerInitStatus = 'loading' | 'needs_upload' | 'ready'
+type SalesPhase =
+  | { kind: 'idle' }
+  | { kind: 'uploading'; progress: number }
+  | { kind: 'done'; month: string; storeCount: number }
+  | { kind: 'error'; message: string }
+
+// Minimal store reference built from tracker data
+type LocalStore = { store_id: string; store_name: string; state: string }
 
 const RISK_ORDER: RiskStatus[] = ['Champion', 'On Track', 'Watchlist', 'At Risk']
 
@@ -144,7 +178,8 @@ function NoTargetsPrompt({ onManage }: { onManage: () => void }) {
 function DaySlider({ value, onChange, targetMonth }: {
   value: number; onChange: (v: number) => void; targetMonth: string
 }) {
-  const pct = ((value - 1) / (TOTAL_DAYS - 1)) * 100
+  const totalDays = getDaysInMonth(targetMonth)
+  const pct = ((value - 1) / (totalDays - 1)) * 100
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -166,17 +201,17 @@ function DaySlider({ value, onChange, targetMonth }: {
           <span className="text-xs text-gray-400 shrink-0 w-10">Day 1</span>
           <div className="relative flex-1">
             <input
-              type="range" min={1} max={TOTAL_DAYS} value={value}
+              type="range" min={1} max={totalDays} value={value}
               onChange={e => onChange(Number(e.target.value))}
               className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
               style={{ background: `linear-gradient(to right,#3b82f6 ${pct}%,#e5e7eb ${pct}%)` }}
             />
           </div>
-          <span className="text-xs text-gray-400 shrink-0 w-14 text-right">Day {TOTAL_DAYS}</span>
+          <span className="text-xs text-gray-400 shrink-0 w-14 text-right">Day {totalDays}</span>
           <div className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-100">
             <span className="text-xs text-gray-500">Day</span>
             <span className="text-lg font-bold text-blue-600 tabular-nums w-6 text-center">{value}</span>
-            <span className="text-xs text-gray-400">/ {TOTAL_DAYS}</span>
+            <span className="text-xs text-gray-400">/ {totalDays}</span>
           </div>
         </div>
       </div>
@@ -215,80 +250,283 @@ function ManageBtn({ onClick }: { onClick: () => void }) {
   )
 }
 
-type PlanView = 'regular' | 'overall'
+// Inline upload zone — used when no tracker sales are loaded yet
+function SalesUploadZone({ phase, onFile, onReset }: {
+  phase: SalesPhase; onFile: (f: File) => void; onReset: () => void
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const dragRef  = useRef(0)
+  const [drag, setDrag] = useState(false)
+  const canInteract = phase.kind === 'idle' || phase.kind === 'error'
+
+  return (
+    <div
+      onClick={() => canInteract && inputRef.current?.click()}
+      onDragEnter={e => { e.preventDefault(); dragRef.current++; setDrag(true) }}
+      onDragLeave={e => { e.preventDefault(); dragRef.current--; if (dragRef.current <= 0) { dragRef.current = 0; setDrag(false) } }}
+      onDragOver={e => e.preventDefault()}
+      onDrop={e => { e.preventDefault(); dragRef.current = 0; setDrag(false); const f = e.dataTransfer.files[0]; if (f) onFile(f) }}
+      className={cn(
+        'relative rounded-xl border-2 border-dashed transition-all duration-200 p-6 min-h-[180px] flex flex-col',
+        canInteract && 'cursor-pointer',
+        phase.kind === 'idle' && !drag && 'border-slate-200 bg-slate-50 hover:border-blue-400 hover:bg-blue-50/50',
+        drag              && 'border-blue-500 bg-blue-50 ring-2 ring-blue-400/20',
+        phase.kind === 'uploading' && 'border-blue-300 bg-blue-50/50',
+        phase.kind === 'done'    && 'border-emerald-400 bg-emerald-50/60',
+        phase.kind === 'error'   && 'border-red-300 bg-red-50/50',
+      )}
+    >
+      <input ref={inputRef} type="file" accept=".xlsx,.xls" className="hidden"
+        onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = '' }} />
+
+      <div className="flex items-center gap-2.5 mb-3">
+        <FileSpreadsheet className="h-5 w-5 text-slate-400" />
+        <div>
+          <p className="text-sm font-semibold text-slate-800">Upload Monthly Sales File</p>
+          <p className="text-xs text-slate-500">Required to view tracker analytics · .xlsx</p>
+        </div>
+      </div>
+
+      <div className="flex-1 flex flex-col items-center justify-center gap-3">
+        <AnimatePresence mode="wait">
+          {phase.kind === 'idle' && (
+            <motion.div key="idle" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="flex flex-col items-center gap-2.5 text-center">
+              <div className={cn('h-12 w-12 rounded-xl flex items-center justify-center', drag ? 'bg-blue-100' : 'bg-slate-100')}>
+                <UploadCloud className={cn('h-6 w-6', drag ? 'text-blue-500' : 'text-slate-400')} />
+              </div>
+              <p className="text-sm text-slate-500">{drag ? 'Drop to upload' : 'Drag & drop or click to browse'}</p>
+              <div className="flex flex-wrap justify-center gap-1 mt-1">
+                {['Store Name', 'Sales / Amount', 'Date'].map(h => (
+                  <span key={h} className="text-[10px] px-2 py-0.5 rounded-full bg-slate-200 text-slate-500 font-mono">{h}</span>
+                ))}
+              </div>
+            </motion.div>
+          )}
+          {phase.kind === 'uploading' && (
+            <motion.div key="uploading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="flex flex-col items-center gap-2 w-full">
+              <Loader2 className="h-8 w-8 text-blue-500 animate-spin" />
+              <p className="text-sm text-slate-500">Uploading… {phase.progress}%</p>
+              <div className="w-full max-w-[180px] h-1.5 rounded-full bg-slate-200 overflow-hidden">
+                <div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: `${phase.progress}%` }} />
+              </div>
+            </motion.div>
+          )}
+          {phase.kind === 'done' && (
+            <motion.div key="done" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
+              className="flex flex-col items-center gap-2 text-center">
+              <div className="h-12 w-12 rounded-xl bg-emerald-100 flex items-center justify-center">
+                <FileSpreadsheet className="h-6 w-6 text-emerald-600" />
+              </div>
+              <p className="text-sm font-semibold text-emerald-700">Saved to server</p>
+              <p className="text-xs text-slate-500">{phase.storeCount} stores · {phase.month}</p>
+              <button onClick={e => { e.stopPropagation(); onReset() }}
+                className="mt-1 text-xs text-slate-400 hover:text-red-500 flex items-center gap-1 transition-colors">
+                <X className="h-3 w-3" /> Upload new file
+              </button>
+            </motion.div>
+          )}
+          {phase.kind === 'error' && (
+            <motion.div key="error" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="flex flex-col items-center gap-2 text-center">
+              <XCircle className="h-10 w-10 text-red-400" />
+              <p className="text-sm font-semibold text-red-600">Upload failed</p>
+              <p className="text-xs text-slate-500 max-w-[220px] leading-relaxed">{phase.message}</p>
+              <button onClick={e => { e.stopPropagation(); onReset() }} className="text-xs text-blue-500 underline">Try again</button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </div>
+  )
+}
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-interface Props { filters: FilterState }
+export default function TargetCommandCenter() {
+  // ── Tracker init / lifecycle ──────────────────────────────────────────────
+  const [initStatus,     setInitStatus]     = useState<TrackerInitStatus>('loading')
+  const [trackerStatus,  setTrackerStatus]  = useState<TrackerStatus | null>(null)
+  const [currentMonth,   setCurrentMonth]   = useState<string | null>(null)
+  const [salesPhase,     setSalesPhase]     = useState<SalesPhase>({ kind: 'idle' })
+  const [showNewSales,   setShowNewSales]   = useState(false)
 
-export default function TargetCommandCenter({ filters }: Props) {
-  const { stores, months, hasTargets, targetMonth: apiTargetMonth, refetchData } = useDataContext()
+  // ── Tracker data (own store — never touches DataContext) ──────────────────
+  const [targetMap,       setTargetMap]       = useState<Map<string, number>>(new Map())
+  const [targetKeyToName, setTargetKeyToName] = useState<Map<string, string>>(new Map())
+  const [rawSalesRows,    setRawSalesRows]    = useState<{ storeName: string; sales: number; day: number }[]>([])
+  const [salesMap,        setSalesMap]        = useState<Map<string, number>>(new Map())
+  const [storeStateMap,   setStoreStateMap]   = useState<Map<string, string>>(new Map())
+  const [statesList,      setStatesList]      = useState<string[]>([])
+  const [maxElapsed,      setMaxElapsed]      = useState(1)
+  const [dayOfMonth,      setDayOfMonth]      = useState(15)
 
-  const [planView, setPlanView]           = useState<PlanView>('overall')
-  const [dayOfMonth, setDayOfMonth]       = useState(15)
-  const [showDrawer, setShowDrawer]       = useState(false)
-  const [tableSearch, setTableSearch]     = useState('')
-  const [tableSortKey, setTableSortKey]   = useState<TableSortKey>('achPct')
-  const [tableSortDir, setTableSortDir]   = useState<'asc' | 'desc'>('asc')
-  const [tablePage, setTablePage]         = useState(1)
+  // ── Own filter state (never reads from global filter bar) ─────────────────
+  const [filterState,   setFilterState]   = useState('')
 
-  // Reset page when search or sort changes
-  useEffect(() => { setTablePage(1) }, [tableSearch, tableSortKey, tableSortDir, planView])
+  // ── UI state ──────────────────────────────────────────────────────────────
+  const [showDrawer,    setShowDrawer]    = useState(false)
+  const [tableSearch,   setTableSearch]   = useState('')
+  const [tableSortKey,  setTableSortKey]  = useState<TableSortKey>('achPct')
+  const [tableSortDir,  setTableSortDir]  = useState<'asc' | 'desc'>('asc')
+  const [tablePage,     setTablePage]     = useState(1)
 
-  // The target month is always fixed to what the target file covers (e.g. Jun-2026).
-  // We fall back to the last available sales month only when no target file month is known.
-  const lastSalesMonth = months[months.length - 1] ?? ''
-  const targetMonth = apiTargetMonth ?? lastSalesMonth
+  useEffect(() => { setTablePage(1) }, [tableSearch, tableSortKey, tableSortDir])
 
-  const filteredStores = useMemo(() => {
-    let fs = stores
-    if (filters.state)    fs = fs.filter(s => s.state === filters.state)
-    if (filters.category) fs = fs.filter(s => s.category === filters.category)
-    return fs.filter(s => s.target != null && (s.target as number) > 0)
-  }, [stores, filters])
+  // ── Apply tracker API data to local state ─────────────────────────────────
 
-  // Resolve sales for a store based on the active planView
-  const getSales = useCallback((s: (typeof stores)[0], month: string): number => {
-    if (planView === 'regular') {
-      return s.monthly_sales_ds?.[month] ?? 0
+  const applyTrackerData = useCallback((data: import('@/lib/api').TrackerData) => {
+    const tm  = new Map<string, number>()
+    const knm = new Map<string, string>()
+    for (const t of data.targets) {
+      const key = t.store_key || t.store_name
+      tm.set(key, t.target)
+      knm.set(key, t.store_name || t.store_key)
     }
-    return s.monthly_sales[month] ?? 0   // overall = DS + DSG
-  }, [planView])
+    setTargetMap(tm)
+    setTargetKeyToName(knm)
 
-  // Per-store calculations — recomputes on every slider tick or view change
+    const rawRows: { storeName: string; sales: number; day: number }[] = []
+    const stateMapNew = new Map<string, string>()
+    for (const r of data.sales_rows) {
+      const salesKey = r.store_key || r.store_name
+      rawRows.push({ storeName: salesKey, sales: r.sales, day: r.day })
+      if (r.state) stateMapNew.set(salesKey, r.state)
+    }
+
+    const sm = new Map<string, number>()
+    for (const r of rawRows) sm.set(r.storeName, (sm.get(r.storeName) ?? 0) + r.sales)
+
+    setSalesMap(sm)
+    setRawSalesRows(rawRows)
+    setMaxElapsed(data.max_elapsed || 1)
+    setDayOfMonth(data.max_elapsed || 1)
+    setStoreStateMap(stateMapNew)
+    setStatesList([...new Set(stateMapNew.values())].sort())
+  }, [])
+
+  // ── Data fetch helpers ────────────────────────────────────────────────────
+
+  const refreshStatus = useCallback(async () => {
+    try {
+      const { data } = await getTrackerStatus()
+      setTrackerStatus(data)
+      return data
+    } catch { return null }
+  }, [])
+
+  const loadMonth = useCallback(async (month: string) => {
+    try {
+      const { data } = await getTrackerData(month)
+      if (data.has_target && data.has_sales) {
+        applyTrackerData(data)
+        setCurrentMonth(month)
+        setInitStatus('ready')
+        return true
+      }
+    } catch { /* fall through */ }
+    return false
+  }, [applyTrackerData])
+
+  const initTracker = useCallback(async () => {
+    setInitStatus('loading')
+    const status = await refreshStatus()
+    if (!status) { setInitStatus('needs_upload'); return }
+    const ready = status.months.find(m => m.has_target && m.has_sales)
+    if (ready) {
+      const ok = await loadMonth(ready.month)
+      if (ok) return
+    }
+    setInitStatus('needs_upload')
+  }, [refreshStatus, loadMonth])
+
+  useEffect(() => { initTracker() }, [initTracker])
+
+  // ── Sales upload handler ──────────────────────────────────────────────────
+
+  const handleSalesUpload = useCallback(async (file: File) => {
+    setSalesPhase({ kind: 'uploading', progress: 0 })
+    try {
+      const { data: result } = await uploadTrackerSales(file, pct =>
+        setSalesPhase({ kind: 'uploading', progress: pct })
+      )
+      setSalesPhase({ kind: 'done', month: result.month, storeCount: result.store_count })
+      const status = await refreshStatus()
+      if (status) {
+        const ready = status.months.find(m => m.month === result.month && m.has_target && m.has_sales)
+          ?? status.months.find(m => m.has_target && m.has_sales)
+        if (ready) await loadMonth(ready.month)
+      }
+      setShowNewSales(false)
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        ?? 'Upload failed. Check file format.'
+      setSalesPhase({ kind: 'error', message: msg })
+    }
+  }, [refreshStatus, loadMonth])
+
+  // ── Sales active map: respects day slider ─────────────────────────────────
+
+  const activeSalesMap = useMemo(() => {
+    const hasDateInfo = rawSalesRows.some(r => r.day > 0)
+    if (!hasDateInfo) return salesMap
+    const map = new Map<string, number>()
+    for (const r of rawSalesRows) {
+      if (r.day === 0 || r.day <= dayOfMonth) {
+        map.set(r.storeName, (map.get(r.storeName) ?? 0) + r.sales)
+      }
+    }
+    return map
+  }, [rawSalesRows, dayOfMonth, salesMap])
+
+  const targetMonth = currentMonth ?? ''
+  const totalDays   = useMemo(() => getDaysInMonth(targetMonth), [targetMonth])
+
+  // ── Filtered store entries ────────────────────────────────────────────────
+
+  const filteredEntries = useMemo(() => {
+    const entries = [...targetMap.entries()].filter(([, t]) => t > 0)
+    if (!filterState) return entries
+    return entries.filter(([name]) => storeStateMap.get(name) === filterState)
+  }, [targetMap, filterState, storeStateMap])
+
+  // ── Per-store calculations ────────────────────────────────────────────────
+
   const storeCalcs = useMemo(() => {
-    const elapsed    = Math.max(1, dayOfMonth)
-    const remaining  = Math.max(0, TOTAL_DAYS - elapsed)
-    return filteredStores.map(s => {
-      const target       = s.target as number
-      const currentSales = getSales(s, targetMonth)
+    const elapsed   = Math.max(1, dayOfMonth)
+    const remaining = Math.max(0, totalDays - elapsed)
+    return filteredEntries.map(([storeName, target]) => {
+      const store: LocalStore = {
+        store_id:   storeName,
+        store_name: targetKeyToName.get(storeName) || storeName,
+        state:      storeStateMap.get(storeName) ?? '',
+      }
+      const currentSales = activeSalesMap.get(storeName) ?? 0
       const achPct       = target > 0 ? (currentSales / target) * 100 : 0
-      const expectedPct  = (elapsed / TOTAL_DAYS) * 100
+      const expectedPct  = (elapsed / totalDays) * 100
       const gap          = target - currentSales
       const gapPct       = target > 0 ? (gap / target) * 100 : 0
-      const projected    = elapsed > 0 ? (currentSales / elapsed) * TOTAL_DAYS : 0
+      const projected    = elapsed > 0 ? (currentSales / elapsed) * totalDays : 0
       const projAchPct   = target > 0 ? (projected / target) * 100 : 0
       const reqDRR       = remaining > 0 && gap > 0 ? gap / remaining : 0
-      const expectedSales = target * (elapsed / TOTAL_DAYS)
+      const expectedSales = target * (elapsed / totalDays)
       const status        = getRisk(projAchPct)
-      return {
-        store: s, target, currentSales,
-        achPct, expectedPct, gap, gapPct,
-        projected, projAchPct, reqDRR, expectedSales, status,
-      }
+      return { store, target, currentSales, achPct, expectedPct, gap, gapPct, projected, projAchPct, reqDRR, expectedSales, status }
     })
-  }, [filteredStores, targetMonth, dayOfMonth, getSales])
+  }, [filteredEntries, dayOfMonth, totalDays, activeSalesMap, storeStateMap, targetKeyToName])
 
-  // National roll-up
+  // ── National roll-up ──────────────────────────────────────────────────────
+
   const national = useMemo(() => {
-    const elapsed    = Math.max(1, dayOfMonth)
-    const remaining  = Math.max(0, TOTAL_DAYS - elapsed)
+    const elapsed     = Math.max(1, dayOfMonth)
+    const remaining   = Math.max(0, totalDays - elapsed)
     const totalTarget = storeCalcs.reduce((s, d) => s + d.target, 0)
     const totalSales  = storeCalcs.reduce((s, d) => s + d.currentSales, 0)
     const achPct      = totalTarget > 0 ? (totalSales / totalTarget) * 100 : 0
-    const expectedPct = (elapsed / TOTAL_DAYS) * 100
+    const expectedPct = (elapsed / totalDays) * 100
     const gap         = totalTarget - totalSales
-    const projected   = elapsed > 0 ? (totalSales / elapsed) * TOTAL_DAYS : 0
+    const projected   = elapsed > 0 ? (totalSales / elapsed) * totalDays : 0
     const reqDRR      = remaining > 0 && gap > 0 ? gap / remaining : 0
     return {
       totalTarget, totalSales, achPct, expectedPct,
@@ -296,7 +534,7 @@ export default function TargetCommandCenter({ filters }: Props) {
       remaining_target: Math.max(0, gap),
       elapsed, remaining,
     }
-  }, [storeCalcs, dayOfMonth])
+  }, [storeCalcs, dayOfMonth, totalDays])
 
   // ── Gauge ─────────────────────────────────────────────────────────────────
 
@@ -325,33 +563,18 @@ export default function TargetCommandCenter({ filters }: Props) {
   }), [national.achPct, national.expectedPct])
 
   // ── Pace chart ────────────────────────────────────────────────────────────
-  // Shows three curves over days 1–31:
-  //   Ideal pace  : totalTarget × (day / 31)   — what cumulative sales should be each day
-  //   Actual so far: a line from 0 → (dayOfMonth, totalSales) — actual trajectory assumed linear
-  //   Projection  : extrapolation from dayOfMonth to day 31 at the same daily run rate
-  //
-  // The gap between "Ideal" and "Actual" at x = dayOfMonth is exactly
-  //   (totalTarget × dayOfMonth/31) − totalSales
-  // i.e., how far behind/ahead we are vs the linear pace target.
 
   const paceTraces = useMemo(() => {
     const elapsed    = national.elapsed
-    const days       = Array.from({ length: TOTAL_DAYS }, (_, i) => i + 1)
-    const idealY     = days.map(d => national.totalTarget * (d / TOTAL_DAYS))
+    const days       = Array.from({ length: totalDays }, (_, i) => i + 1)
+    const idealY     = days.map(d => national.totalTarget * (d / totalDays))
     const dailyRate  = elapsed > 0 ? national.totalSales / elapsed : 0
     const aheadColor = national.achPct >= national.expectedPct ? '#10b981' : '#ef4444'
-
-    // Actual: from day 0 to dayOfMonth — represents the cumulative sales trajectory
     const actualX = [0, elapsed]
     const actualY = [0, national.totalSales]
-
-    // Projection: from dayOfMonth to day 31 at the same daily rate
-    const projX = [elapsed, TOTAL_DAYS]
-    const projY = [national.totalSales, dailyRate * TOTAL_DAYS]
-
-    // Expected at today — annotation point on the ideal line
-    const expectedToday = national.totalTarget * (elapsed / TOTAL_DAYS)
-
+    const projX = [elapsed, totalDays]
+    const projY = [national.totalSales, dailyRate * totalDays]
+    const expectedToday = national.totalTarget * (elapsed / totalDays)
     return [
       { type: 'scatter' as const, mode: 'lines' as const, name: 'Ideal Pace (Target Ramp)',
         x: [0, ...days], y: [0, ...idealY],
@@ -367,18 +590,17 @@ export default function TargetCommandCenter({ filters }: Props) {
         line: { color: aheadColor + '70', width: 2, dash: 'dash' as const, shape: 'spline' as const },
         hovertemplate: 'Day %{x}<br>Projected: ₹%{y:,.0f}<extra>Projection</extra>' },
       { type: 'scatter' as const, mode: 'lines' as const, name: 'OOW Target',
-        x: [0, TOTAL_DAYS], y: [national.totalTarget, national.totalTarget],
+        x: [0, totalDays], y: [national.totalTarget, national.totalTarget],
         line: { color: '#f59e0b80', width: 1.5, dash: 'longdash' as const },
         hovertemplate: 'Target: ₹%{y:,.0f}<extra>OOW Target</extra>' },
-      // Marker showing "expected by today" on the ideal line
       { type: 'scatter' as const, mode: 'markers' as const, name: 'Expected by Today',
         x: [elapsed], y: [expectedToday],
         marker: { size: 10, color: '#6b7280', symbol: 'diamond' as const, line: { color: '#374151', width: 1.5 } },
         hovertemplate: `Day ${elapsed}<br>Should have: ₹%{y:,.0f}<extra>Expected by Day ${elapsed}</extra>` },
     ]
-  }, [national, targetMonth])
+  }, [national, targetMonth, totalDays])
 
-  // ── Daily Pace Matrix (ROW 3) ─────────────────────────────────────────────
+  // ── Daily Pace Matrix ─────────────────────────────────────────────────────
 
   const bubbleTraces = useMemo(() => {
     if (storeCalcs.length === 0) return []
@@ -392,8 +614,8 @@ export default function TargetCommandCenter({ filters }: Props) {
       type: 'scatter' as const, mode: 'markers' as const, name,
       x: data.map(d => d.expectedSales), y: data.map(d => d.currentSales),
       marker: { size: data.map(d => sz(d.target)), color, opacity: 0.72, line: { color: '#111827', width: 1 } },
-      customdata: data.map(d => [d.store.store_name ?? d.store.store_id, d.store.store_id, d.target, d.currentSales, d.achPct, d.expectedPct, d.gap]),
-      hovertemplate: '<b>%{customdata[0]}</b> (%{customdata[1]})<br>Target: ₹%{customdata[2]:,.0f}<br>Sales: ₹%{customdata[3]:,.0f}<br>Achievement: %{customdata[4]:.1f}%<br>Expected: %{customdata[5]:.1f}%<extra></extra>',
+      customdata: data.map(d => [d.store.store_name, d.store.store_id, d.target, d.currentSales, d.achPct, d.expectedPct, d.gap]),
+      hovertemplate: '<b>%{customdata[0]}</b><br>Target: ₹%{customdata[2]:,.0f}<br>Sales: ₹%{customdata[3]:,.0f}<br>Achievement: %{customdata[4]:.1f}%<br>Expected: %{customdata[5]:.1f}%<extra></extra>',
     })
     return [
       { type: 'scatter' as const, mode: 'lines' as const, name: 'On Pace (Y=X)',
@@ -405,7 +627,7 @@ export default function TargetCommandCenter({ filters }: Props) {
     ]
   }, [storeCalcs])
 
-  // ── Projection Matrix traces (ROW 4) ──────────────────────────────────────
+  // ── Projection Matrix ─────────────────────────────────────────────────────
 
   const projMatrixTraces = useMemo(() => {
     if (storeCalcs.length === 0) return []
@@ -419,18 +641,10 @@ export default function TargetCommandCenter({ filters }: Props) {
         name: `${status} (${data.length})`,
         x: data.map(d => d.target),
         y: data.map(d => d.projAchPct),
-        marker: {
-          size: data.map(d => sz(d.target)),
-          color: RISK_CFG[status].color,
-          opacity: 0.78,
-          line: { color: '#111827', width: 1 },
-        },
-        customdata: data.map(d => [
-          d.store.store_name ?? d.store.store_id, d.store.store_id,
-          d.target, d.currentSales, d.achPct, d.projAchPct, d.gap,
-        ]),
+        marker: { size: data.map(d => sz(d.target)), color: RISK_CFG[status].color, opacity: 0.78, line: { color: '#111827', width: 1 } },
+        customdata: data.map(d => [d.store.store_name, d.store.store_id, d.target, d.currentSales, d.achPct, d.projAchPct, d.gap]),
         hovertemplate:
-          '<b>%{customdata[0]}</b> (%{customdata[1]})<br>' +
+          '<b>%{customdata[0]}</b><br>' +
           'Target: ₹%{customdata[2]:,.0f}<br>' +
           'Sales: ₹%{customdata[3]:,.0f}<br>' +
           'Current Ach: %{customdata[4]:.1f}%<br>' +
@@ -441,12 +655,12 @@ export default function TargetCommandCenter({ filters }: Props) {
     })
   }, [storeCalcs])
 
-  // ── State-level aggregation (ROW 5) ──────────────────────────────────────
+  // ── State aggregation ─────────────────────────────────────────────────────
 
   const stateData = useMemo(() => {
     const map: Record<string, { target: number; achieved: number; projected: number; count: number }> = {}
     for (const d of storeCalcs) {
-      const st = d.store.state ?? 'Unknown'
+      const st = d.store.state || 'Unknown'
       if (!map[st]) map[st] = { target: 0, achieved: 0, projected: 0, count: 0 }
       map[st].target    += d.target
       map[st].achieved  += d.currentSales
@@ -467,7 +681,7 @@ export default function TargetCommandCenter({ filters }: Props) {
   }, [storeCalcs])
 
   const stateBarTraces = useMemo(() => {
-    const rev = [...stateData].reverse() // highest at top in horizontal bar chart
+    const rev = [...stateData].reverse()
     return [
       {
         type: 'bar' as const, orientation: 'h' as const, name: 'Current Ach %',
@@ -488,31 +702,25 @@ export default function TargetCommandCenter({ filters }: Props) {
     ]
   }, [stateData])
 
-  // ── Store table data (ROW 6) ──────────────────────────────────────────────
+  // ── Store table ───────────────────────────────────────────────────────────
 
   const storeTableData = useMemo(() => {
     let rows = [...storeCalcs]
     const q = tableSearch.trim().toLowerCase()
-    if (q) {
-      rows = rows.filter(r =>
-        (r.store.store_name ?? '').toLowerCase().includes(q) ||
-        r.store.store_id.toLowerCase().includes(q) ||
-        (r.store.state ?? '').toLowerCase().includes(q)
-      )
-    }
+    if (q) rows = rows.filter(r => r.store.store_name.toLowerCase().includes(q) || r.store.state.toLowerCase().includes(q))
     rows.sort((a, b) => {
       let diff = 0
       switch (tableSortKey) {
-        case 'name':      diff = (a.store.store_name ?? a.store.store_id).localeCompare(b.store.store_name ?? b.store.store_id); break
-        case 'state':     diff = (a.store.state ?? '').localeCompare(b.store.state ?? ''); break
-        case 'target':    diff = a.target - b.target; break
-        case 'sales':     diff = a.currentSales - b.currentSales; break
-        case 'achPct':    diff = a.achPct - b.achPct; break
-        case 'gapPct':    diff = a.gapPct - b.gapPct; break
-        case 'reqDRR':    diff = a.reqDRR - b.reqDRR; break
-        case 'projected': diff = a.projected - b.projected; break
-        case 'projAchPct':diff = a.projAchPct - b.projAchPct; break
-        case 'status':    diff = a.projAchPct - b.projAchPct; break
+        case 'name':       diff = a.store.store_name.localeCompare(b.store.store_name); break
+        case 'state':      diff = a.store.state.localeCompare(b.store.state); break
+        case 'target':     diff = a.target - b.target; break
+        case 'sales':      diff = a.currentSales - b.currentSales; break
+        case 'achPct':     diff = a.achPct - b.achPct; break
+        case 'gapPct':     diff = a.gapPct - b.gapPct; break
+        case 'reqDRR':     diff = a.reqDRR - b.reqDRR; break
+        case 'projected':  diff = a.projected - b.projected; break
+        case 'projAchPct': diff = a.projAchPct - b.projAchPct; break
+        case 'status':     diff = a.projAchPct - b.projAchPct; break
       }
       return tableSortDir === 'asc' ? diff : -diff
     })
@@ -528,108 +736,194 @@ export default function TargetCommandCenter({ filters }: Props) {
   }, [tableSortKey])
 
   const exportCsv = useCallback(() => {
-    const headers = [
-      'Store ID','Store Name','State','Category',
-      'Target (₹)','Current Sales (₹)','Achievement %',
-      'Gap (₹)','Gap %','Req Daily Sales (₹)',
-      'Projected Month-End (₹)','Projected %','Risk Status',
-    ]
+    const headers = ['Store Name', 'State', 'Target (₹)', 'Current Sales (₹)', 'Achievement %', 'Gap (₹)', 'Gap %', 'Req Daily Sales (₹)', 'Projected Month-End (₹)', 'Projected %', 'Risk Status']
     const rows = storeTableData.map(r => [
-      r.store.store_id, r.store.store_name ?? '', r.store.state ?? '', r.store.category ?? '',
+      r.store.store_name, r.store.state,
       r.target.toFixed(0), r.currentSales.toFixed(0),
       r.achPct.toFixed(1) + '%', r.gap.toFixed(0), r.gapPct.toFixed(1) + '%',
       r.reqDRR.toFixed(0), r.projected.toFixed(0), r.projAchPct.toFixed(1) + '%', r.status,
     ])
-    const csv = [headers, ...rows]
-      .map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
-      .join('\n')
+    const csv = [headers, ...rows].map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
     const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
     const url  = URL.createObjectURL(blob)
     const a    = document.createElement('a')
-    a.href = url
-    a.download = `target-tracker-day${dayOfMonth}-${targetMonth}.csv`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
+    a.href = url; a.download = `target-tracker-day${dayOfMonth}-${targetMonth}.csv`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
     URL.revokeObjectURL(url)
   }, [storeTableData, dayOfMonth, targetMonth])
 
   const exportXlsx = useCallback(() => {
-    const headers = [
-      'Store ID', 'Store Name', 'State', 'Category',
-      'Target (₹)', 'Current Sales (₹)', 'Achievement %',
-      'Gap (₹)', 'Gap %', 'Req Daily Sales (₹)',
-      'Projected Month-End (₹)', 'Projected %', 'Risk Status',
-    ]
+    const headers = ['Store Name', 'State', 'Target (₹)', 'Current Sales (₹)', 'Achievement %', 'Gap (₹)', 'Gap %', 'Req Daily Sales (₹)', 'Projected Month-End (₹)', 'Projected %', 'Risk Status']
     const rows = storeTableData.map(r => [
-      r.store.store_id, r.store.store_name ?? '', r.store.state ?? '', r.store.category ?? '',
+      r.store.store_name, r.store.state,
       r.target, r.currentSales,
       r.achPct.toFixed(1) + '%', r.gap, r.gapPct.toFixed(1) + '%',
-      r.reqDRR.toFixed(0), r.projected.toFixed(0),
-      r.projAchPct.toFixed(1) + '%', r.status,
+      r.reqDRR.toFixed(0), r.projected.toFixed(0), r.projAchPct.toFixed(1) + '%', r.status,
     ])
     exportExcel(`target-tracker-day${dayOfMonth}-${targetMonth}`, headers, rows)
   }, [storeTableData, dayOfMonth, targetMonth])
 
-  // DS vs DSG breakdown — must be before guards (hook rule)
-  const planSplit = useMemo(() => {
-    const dsTotal  = filteredStores.reduce((s, st) => s + (st.monthly_sales_ds?.[targetMonth]  ?? 0), 0)
-    const dsgTotal = filteredStores.reduce((s, st) => s + (st.monthly_sales_dsg?.[targetMonth] ?? 0), 0)
-    const overall  = dsTotal + dsgTotal
-    const target   = filteredStores.reduce((s, st) => s + ((st.target as number) ?? 0), 0)
-    return {
-      dsTotal, dsgTotal, overall,
-      dsAch:  target > 0 ? (dsTotal  / target) * 100 : 0,
-      dsgAch: target > 0 ? (dsgTotal / target) * 100 : 0,
-      allAch: target > 0 ? (overall  / target) * 100 : 0,
-    }
-  }, [filteredStores, targetMonth])
-
   // ── Guards ────────────────────────────────────────────────────────────────
 
-  if (!hasTargets) return (
-    <>
-      <div className="flex justify-end mb-3">
-        <ManageBtn onClick={() => setShowDrawer(true)} />
+  if (initStatus === 'loading') {
+    return (
+      <div className="min-h-[420px] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="h-8 w-8 text-blue-500 animate-spin" />
+          <p className="text-sm text-gray-500">Loading tracker data…</p>
+        </div>
       </div>
-      <NoTargetsPrompt onManage={() => setShowDrawer(true)} />
-      <TargetManagementDrawer
-        open={showDrawer}
-        onClose={() => setShowDrawer(false)}
-        onTargetChanged={refetchData}
-      />
-    </>
-  )
+    )
+  }
 
-  if (filteredStores.length === 0) {
+  if (initStatus === 'needs_upload') {
+    const activeMonth = trackerStatus?.active_target_month
     return (
       <>
-        <div className="flex justify-end mb-3">
-          <ManageBtn onClick={() => setShowDrawer(true)} />
-        </div>
-        <div className="rounded-xl border border-gray-200 bg-gray-50 min-h-72 flex items-center justify-center">
-          <p className="text-sm text-gray-500">No stores with targets match the current filters.</p>
-        </div>
         <TargetManagementDrawer
           open={showDrawer}
           onClose={() => setShowDrawer(false)}
-          onTargetChanged={refetchData}
+          onTargetChanged={initTracker}
         />
+        <div className="max-w-xl mx-auto py-8 space-y-5">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <h2 className="text-base font-bold text-gray-900">Target Command Center</h2>
+              <p className="text-[11px] text-gray-500 mt-0.5">Upload sales data to begin tracking</p>
+            </div>
+            <ManageBtn onClick={() => setShowDrawer(true)} />
+          </div>
+
+          {/* Target status */}
+          <div className={cn('rounded-xl border p-4', activeMonth ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50')}>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className={cn('h-9 w-9 rounded-lg flex items-center justify-center shrink-0', activeMonth ? 'bg-emerald-100' : 'bg-amber-100')}>
+                  <Target className={cn('h-5 w-5', activeMonth ? 'text-emerald-600' : 'text-amber-600')} />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-800">Monthly Target File</p>
+                  {activeMonth
+                    ? <p className="text-xs text-emerald-700 mt-0.5">Active: <span className="font-semibold">{activeMonth}</span></p>
+                    : <p className="text-xs text-amber-700 mt-0.5">No active target — click "Manage Targets" first</p>
+                  }
+                </div>
+              </div>
+              <button onClick={() => setShowDrawer(true)}
+                className="text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors"
+                style={activeMonth
+                  ? { borderColor: '#6ee7b7', color: '#047857', backgroundColor: '#d1fae5' }
+                  : { borderColor: '#fcd34d', color: '#92400e', backgroundColor: '#fef3c7' }}>
+                {activeMonth ? 'Change' : 'Upload Target'}
+              </button>
+            </div>
+          </div>
+
+          {/* Sales upload zone */}
+          <SalesUploadZone
+            phase={salesPhase}
+            onFile={handleSalesUpload}
+            onReset={() => setSalesPhase({ kind: 'idle' })}
+          />
+
+          {!activeMonth && (
+            <p className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2.5">
+              <span className="font-semibold">Tip:</span> Upload the OW Budget target file first, then upload the sales file.
+            </p>
+          )}
+
+          {/* Stored months */}
+          {trackerStatus && trackerStatus.months.length > 0 && (
+            <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
+                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Stored Months</p>
+              </div>
+              <div className="divide-y divide-gray-100">
+                {trackerStatus.months.slice(0, 6).map(m => (
+                  <div key={m.month} className="flex items-center justify-between px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs font-semibold text-gray-700">{m.month}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full font-medium', m.has_target ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-400')}>
+                          {m.has_target ? '✓ Target' : '– Target'}
+                        </span>
+                        <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full font-medium', m.has_sales ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-400')}>
+                          {m.has_sales ? '✓ Sales' : '– Sales'}
+                        </span>
+                      </div>
+                    </div>
+                    {m.has_target && m.has_sales && (
+                      <button onClick={() => loadMonth(m.month)} className="text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors">
+                        Load →
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </>
+    )
+  }
+
+  // initStatus === 'ready'
+
+  if (storeCalcs.length === 0) {
+    return (
+      <>
+        <div className="flex justify-end mb-3 gap-2">
+          <button onClick={() => { setInitStatus('needs_upload'); setSalesPhase({ kind: 'idle' }) }}
+            className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-white border border-gray-200 text-xs font-medium text-gray-600 hover:text-gray-900 hover:border-gray-400 shadow-sm transition-colors">
+            <RefreshCw className="h-3.5 w-3.5" /> New Sales
+          </button>
+          <ManageBtn onClick={() => setShowDrawer(true)} />
+        </div>
+        <div className="rounded-xl border border-gray-200 bg-gray-50 min-h-72 flex items-center justify-center">
+          <p className="text-sm text-gray-500">No stores with targets match the current filter.</p>
+        </div>
+        <TargetManagementDrawer open={showDrawer} onClose={() => setShowDrawer(false)} onTargetChanged={initTracker} />
       </>
     )
   }
 
   const achClass    = national.achPct >= 95 ? 'text-emerald-600' : national.achPct >= 80 ? 'text-amber-600' : 'text-red-600'
   const gapPositive = national.gap > 0
-
-  // projection matrix Y ceiling
-  const projYMax = Math.max(160, ...storeCalcs.map(d => d.projAchPct + 10))
+  const projYMax    = Math.max(160, ...storeCalcs.map(d => d.projAchPct + 10))
   const stateBarsHeight = Math.max(240, stateData.length * 36 + 80)
 
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-6">
+
+      {/* ── Inline "Upload New Sales" panel (collapsible) ── */}
+      <AnimatePresence>
+        {showNewSales && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.25, ease: 'easeInOut' }}
+            className="overflow-hidden"
+          >
+            <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-blue-900">Upload New Sales Data</p>
+                <button onClick={() => { setShowNewSales(false); setSalesPhase({ kind: 'idle' }) }}
+                  className="text-blue-400 hover:text-blue-600 transition-colors">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <SalesUploadZone
+                phase={salesPhase}
+                onFile={handleSalesUpload}
+                onReset={() => setSalesPhase({ kind: 'idle' })}
+              />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ── Page Header ── */}
       <motion.div
@@ -642,88 +936,41 @@ export default function TargetCommandCenter({ filters }: Props) {
           <h2 className="text-base font-bold text-gray-900">Target Command Center</h2>
           <p className="text-[11px] text-gray-500 mt-0.5">
             Target month: <span className="text-blue-600 font-semibold">{targetMonth || '—'}</span>
-            {apiTargetMonth && !months.includes(apiTargetMonth) && (
-              <span className="ml-2 text-amber-500">(no sales data yet for this month)</span>
-            )}
-            {' · '}{filteredStores.length} stores · OOW Budget
+            {' · '}{storeCalcs.length} stores · OOW Budget · Day {dayOfMonth} of {totalDays}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {/* Regular / Overall toggle */}
-          <div className="flex items-center rounded-lg border border-gray-200 bg-gray-50 p-0.5 shadow-sm">
-            {(['overall', 'regular'] as PlanView[]).map(v => (
-              <button
-                key={v}
-                onClick={() => setPlanView(v)}
-                className={cn(
-                  'h-7 px-3.5 rounded-md text-xs font-semibold transition-all duration-150',
-                  planView === v
-                    ? 'bg-white shadow text-gray-900 border border-gray-200'
-                    : 'text-gray-500 hover:text-gray-700',
-                )}
-              >
-                {v === 'overall' ? 'Overall (DS+DSG)' : 'Regular (DS)'}
-              </button>
-            ))}
-          </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* State filter — own isolated state, never reads global filter bar */}
+          <Select value={filterState || '__all__'} onValueChange={v => setFilterState(v === '__all__' ? '' : v)}>
+            <SelectTrigger className="h-8 w-36 text-xs">
+              <SelectValue placeholder="All States" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">All States</SelectItem>
+              {statesList.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+            </SelectContent>
+          </Select>
+
+          {/* Upload Sales toggle */}
+          <button
+            onClick={() => { setShowNewSales(v => !v); setSalesPhase({ kind: 'idle' }) }}
+            className={cn(
+              'flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-medium transition-colors shadow-sm',
+              showNewSales
+                ? 'bg-blue-600 text-white border-blue-600'
+                : 'bg-white border-gray-200 text-gray-600 hover:text-gray-900 hover:border-gray-400',
+            )}
+          >
+            <UploadCloud className="h-3.5 w-3.5" />
+            Upload Sales
+          </button>
+
           <ManageBtn onClick={() => setShowDrawer(true)} />
         </div>
       </motion.div>
 
       {/* ── Day Slider ── */}
       <DaySlider value={dayOfMonth} onChange={setDayOfMonth} targetMonth={targetMonth} />
-
-      {/* ── Plan Split Strip: DS vs DSG ── */}
-      <motion.div
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ type: 'spring', stiffness: 260, damping: 24, delay: 0.04 }}
-        className="grid grid-cols-3 gap-3"
-      >
-        {[
-          {
-            label: 'Device Secure (DS)',
-            value: fmtInr(planSplit.dsTotal),
-            pct:   planSplit.dsAch,
-            color: 'text-blue-600',
-            bar:   'bg-blue-500',
-            bg:    'bg-blue-50 border-blue-100',
-          },
-          {
-            label: 'Device Secure Gold (DSG)',
-            value: fmtInr(planSplit.dsgTotal),
-            pct:   planSplit.dsgAch,
-            color: 'text-violet-600',
-            bar:   'bg-violet-500',
-            bg:    'bg-violet-50 border-violet-100',
-          },
-          {
-            label: 'Overall (DS + DSG)',
-            value: fmtInr(planSplit.overall),
-            pct:   planSplit.allAch,
-            color: planSplit.allAch >= 95 ? 'text-emerald-600' : planSplit.allAch >= 80 ? 'text-amber-600' : 'text-red-600',
-            bar:   planSplit.allAch >= 95 ? 'bg-emerald-500' : planSplit.allAch >= 80 ? 'bg-amber-500' : 'bg-red-500',
-            bg:    'bg-white border-gray-200',
-          },
-        ].map(({ label, value, pct, color, bar, bg }) => (
-          <div key={label} className={cn('rounded-xl border p-4 shadow-sm', bg)}>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-2">{label}</p>
-            <div className="flex items-end justify-between gap-2">
-              <span className="text-xl font-bold text-gray-900">{value}</span>
-              <span className={cn('text-base font-bold tabular-nums', color)}>{pct.toFixed(1)}%</span>
-            </div>
-            <div className="mt-2 h-1.5 w-full rounded-full bg-gray-200 overflow-hidden">
-              <motion.div
-                className={cn('h-full rounded-full', bar)}
-                initial={{ scaleX: 0, originX: 0 }}
-                animate={{ scaleX: Math.min(pct / 100, 1) }}
-                transition={{ duration: 1.1, ease: [0.22, 1, 0.36, 1], delay: 0.3 }}
-              />
-            </div>
-            <p className="mt-1.5 text-[10px] text-gray-400">vs OOW target</p>
-          </div>
-        ))}
-      </motion.div>
 
       {/* ── ROW 1: KPI Cards ── */}
       <motion.div
@@ -733,10 +980,10 @@ export default function TargetCommandCenter({ filters }: Props) {
         animate="show"
       >
         <KPICard label="OOW Target" value={fmtInr(national.totalTarget)}
-          sub={`${filteredStores.length} stores`}
+          sub={`${storeCalcs.length} stores`}
           icon={<Target className="h-4 w-4" />} />
-        <KPICard label={planView === 'regular' ? 'DS Sales' : 'DS+DSG Sales'} value={fmtInr(national.totalSales)}
-          sub={`Day ${dayOfMonth} of ${TOTAL_DAYS}`}
+        <KPICard label="Sales" value={fmtInr(national.totalSales)}
+          sub={`Day ${dayOfMonth} of ${totalDays}`}
           icon={<BarChart2 className="h-4 w-4 text-blue-500" />} />
         <KPICard label="Achievement %"
           value={`${national.achPct.toFixed(1)}%`}
@@ -776,7 +1023,7 @@ export default function TargetCommandCenter({ filters }: Props) {
             OOW Target Achievement — {targetMonth}
           </h3>
           <p className="mb-2 text-[11px] text-gray-500">
-            {planView === 'regular' ? 'DS (Device Secure)' : 'DS + DSG'} sales vs OOW budget ·
+            Sales vs OOW budget ·
             <span className="text-red-500"> &lt;80%</span> ·
             <span className="text-amber-500"> 80–95%</span> ·
             <span className="text-emerald-500"> &gt;95%</span>
@@ -795,27 +1042,19 @@ export default function TargetCommandCenter({ filters }: Props) {
           className="lg:col-span-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
           <h3 className="mb-0.5 text-sm font-semibold text-gray-800">Sales Pace vs OOW Target — {targetMonth}</h3>
           <p className="mb-3 text-[11px] text-gray-500">
-            Ideal pace = OOW Target ÷ 31 days × day · Dot = expected by today · Solid line = actual sales · Dashed = projected at current run rate
+            Ideal pace = OOW Target ÷ {totalDays} days × day · Dot = expected by today · Solid line = actual sales · Dashed = projected at current run rate
           </p>
           <Plot data={paceTraces}
             layout={{
               paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
               font: { color: PF.font, family: 'Inter,sans-serif', size: 11 },
               legend: { bgcolor: 'rgba(0,0,0,0)', font: { color: PF.legend, size: 10 }, orientation: 'h' as const, y: -0.26 },
-              xaxis: { ...PLOTLY_AXES, title: { text: 'Day of Month' }, dtick: 5, range: [0, TOTAL_DAYS + 0.5] },
+              xaxis: { ...PLOTLY_AXES, title: { text: 'Day of Month' }, dtick: 5, range: [0, totalDays + 0.5] },
               yaxis: { ...PLOTLY_AXES, tickformat: ',.0s', title: { text: `Cumulative Sales (₹) — ${targetMonth}` } },
               hovermode: 'closest' as const,
               margin: { l: 70, r: 16, t: 8, b: 100 }, height: 310,
-              shapes: [{
-                type: 'line' as const, x0: dayOfMonth, x1: dayOfMonth, y0: 0, y1: 1,
-                xref: 'x' as const, yref: 'paper' as const,
-                line: { color: '#3b82f650', width: 1.5, dash: 'dot' as const },
-              }],
-              annotations: [{
-                x: dayOfMonth, y: 1, xref: 'x' as const, yref: 'paper' as const,
-                text: `Day ${dayOfMonth}`, showarrow: false,
-                font: { color: '#3b82f6', size: 10 }, yanchor: 'bottom' as const,
-              }],
+              shapes: [{ type: 'line' as const, x0: dayOfMonth, x1: dayOfMonth, y0: 0, y1: 1, xref: 'x' as const, yref: 'paper' as const, line: { color: '#3b82f650', width: 1.5, dash: 'dot' as const } }],
+              annotations: [{ x: dayOfMonth, y: 1, xref: 'x' as const, yref: 'paper' as const, text: `Day ${dayOfMonth}`, showarrow: false, font: { color: '#3b82f6', size: 10 }, yanchor: 'bottom' as const }],
             }}
             config={{ displayModeBar: false, responsive: true }} style={{ width: '100%' }} />
         </motion.div>
@@ -827,7 +1066,7 @@ export default function TargetCommandCenter({ filters }: Props) {
         <h3 className="mb-0.5 text-sm font-semibold text-gray-800">Daily Pace Matrix — {targetMonth}</h3>
         <p className="mb-3 text-[11px] text-gray-500">
           Each bubble = 1 store · Bubble size = OOW target ·
-          X = expected sales by Day {dayOfMonth} (OOW Target × {dayOfMonth}/{TOTAL_DAYS}) ·
+          X = expected sales by Day {dayOfMonth} ·
           Y = actual {targetMonth} sales ·
           <span className="text-emerald-500"> Green</span> = above pace ·
           <span className="text-red-500"> Red</span> = below pace
@@ -864,7 +1103,7 @@ export default function TargetCommandCenter({ filters }: Props) {
         <h3 className="mb-0.5 text-sm font-semibold text-gray-800">Month-End Projection Matrix — {targetMonth}</h3>
         <p className="mb-3 text-[11px] text-gray-500">
           Each bubble = 1 store · X = OOW target (log scale) · Y = projected achievement % ·
-          Projection = (actual sales ÷ Day {dayOfMonth}) × 31 ÷ OOW Target · Size = target magnitude
+          Projection = (actual sales ÷ Day {dayOfMonth}) × {totalDays} ÷ OOW Target
         </p>
         <Plot
           data={projMatrixTraces}
@@ -877,12 +1116,10 @@ export default function TargetCommandCenter({ filters }: Props) {
             hovermode: 'closest' as const,
             margin: { l: 64, r: 20, t: 16, b: 90 }, height: 420,
             shapes: [
-              // zone fills
               { type: 'rect' as const, xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 110,    y1: projYMax, fillcolor: RISK_CFG['Champion']['zone'],  line: { width: 0 } },
               { type: 'rect' as const, xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 95,     y1: 110,      fillcolor: RISK_CFG['On Track']['zone'],  line: { width: 0 } },
               { type: 'rect' as const, xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 80,     y1: 95,       fillcolor: RISK_CFG['Watchlist']['zone'], line: { width: 0 } },
               { type: 'rect' as const, xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 0,      y1: 80,       fillcolor: RISK_CFG['At Risk']['zone'],   line: { width: 0 } },
-              // boundary lines
               { type: 'line' as const, xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 110, y1: 110, line: { color: '#10b98130', width: 1.5, dash: 'dot' as const } },
               { type: 'line' as const, xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 100, y1: 100, line: { color: '#6b728060', width: 2,   dash: 'dash' as const } },
               { type: 'line' as const, xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 95,  y1: 95,  line: { color: '#3b82f630', width: 1.5, dash: 'dot' as const } },
@@ -901,8 +1138,6 @@ export default function TargetCommandCenter({ filters }: Props) {
             })) as any[],
           }}
           config={{ displayModeBar: false, responsive: true }} style={{ width: '100%' }} />
-
-        {/* Quadrant count legend */}
         <div className="mt-3 flex flex-wrap gap-3 px-1">
           {RISK_ORDER.map(status => {
             const count = storeCalcs.filter(d => d.status === status).length
@@ -927,7 +1162,6 @@ export default function TargetCommandCenter({ filters }: Props) {
           </p>
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-gray-100">
-          {/* Bar chart */}
           <div className="p-4">
             <Plot data={stateBarTraces}
               layout={{
@@ -938,18 +1172,11 @@ export default function TargetCommandCenter({ filters }: Props) {
                 yaxis: { ...PLOTLY_AXES },
                 hovermode: 'y unified' as const,
                 margin: { l: 110, r: 20, t: 8, b: 60 }, height: stateBarsHeight,
-                shapes: [
-                  { type: 'line' as const, xref: 'x', yref: 'paper', x0: 100, x1: 100, y0: 0, y1: 1, line: { color: '#4b556380', width: 1.5, dash: 'dash' as const } },
-                ],
-                annotations: [{
-                  x: 100, y: 1, xref: 'x' as const, yref: 'paper' as const,
-                  text: '100%', showarrow: false, font: { color: '#6b7280', size: 10 }, yanchor: 'bottom' as const,
-                }],
+                shapes: [{ type: 'line' as const, xref: 'x', yref: 'paper', x0: 100, x1: 100, y0: 0, y1: 1, line: { color: '#4b556380', width: 1.5, dash: 'dash' as const } }],
+                annotations: [{ x: 100, y: 1, xref: 'x' as const, yref: 'paper' as const, text: '100%', showarrow: false, font: { color: '#6b7280', size: 10 }, yanchor: 'bottom' as const }],
               }}
               config={{ displayModeBar: false, responsive: true }} style={{ width: '100%' }} />
           </div>
-
-          {/* State table */}
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -966,21 +1193,16 @@ export default function TargetCommandCenter({ filters }: Props) {
                     <td className="px-3 py-2.5 text-gray-500 tabular-nums text-xs">{row.storeCount}</td>
                     <td className="px-3 py-2.5 text-gray-700 tabular-nums text-xs whitespace-nowrap">{fmtInr(row.target)}</td>
                     <td className="px-3 py-2.5 text-gray-700 tabular-nums text-xs whitespace-nowrap">{fmtInr(row.achieved)}</td>
-                    <td className={cn('px-3 py-2.5 tabular-nums text-xs font-semibold',
-                      row.achPct >= 95 ? 'text-emerald-600' : row.achPct >= 80 ? 'text-amber-600' : 'text-red-600')}>
+                    <td className={cn('px-3 py-2.5 tabular-nums text-xs font-semibold', row.achPct >= 95 ? 'text-emerald-600' : row.achPct >= 80 ? 'text-amber-600' : 'text-red-600')}>
                       {row.achPct.toFixed(1)}%
                     </td>
-                    <td className={cn('px-3 py-2.5 tabular-nums text-xs whitespace-nowrap',
-                      row.gap <= 0 ? 'text-emerald-600' : 'text-red-600')}>
+                    <td className={cn('px-3 py-2.5 tabular-nums text-xs whitespace-nowrap', row.gap <= 0 ? 'text-emerald-600' : 'text-red-600')}>
                       {row.gap <= 0 ? `+${fmtInr(-row.gap)}` : fmtInr(row.gap)}
                     </td>
-                    <td className={cn('px-3 py-2.5 tabular-nums text-xs font-semibold',
-                      row.projPct >= 95 ? 'text-emerald-600' : row.projPct >= 80 ? 'text-amber-600' : 'text-red-600')}>
+                    <td className={cn('px-3 py-2.5 tabular-nums text-xs font-semibold', row.projPct >= 95 ? 'text-emerald-600' : row.projPct >= 80 ? 'text-amber-600' : 'text-red-600')}>
                       {row.projPct.toFixed(1)}%
                     </td>
-                    <td className="px-3 py-2.5">
-                      <RiskBadge status={row.status} />
-                    </td>
+                    <td className="px-3 py-2.5"><RiskBadge status={row.status} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -992,8 +1214,6 @@ export default function TargetCommandCenter({ filters }: Props) {
       {/* ── ROW 6: Store Command Center Table ── */}
       <motion.div {...panelSpring(0.35)}
         className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
-
-        {/* Table header + controls */}
         <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
           <div>
             <h3 className="text-sm font-semibold text-gray-800">Store Command Center</h3>
@@ -1002,13 +1222,10 @@ export default function TargetCommandCenter({ filters }: Props) {
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Search */}
             <div className="relative flex items-center">
               <Search className="absolute left-2.5 h-3.5 w-3.5 text-gray-400 pointer-events-none" />
               <input
-                type="text"
-                placeholder="Search store / state…"
-                value={tableSearch}
+                type="text" placeholder="Search store / state…" value={tableSearch}
                 onChange={e => setTableSearch(e.target.value)}
                 className="h-8 pl-8 pr-7 rounded-lg bg-gray-50 border border-gray-200 text-xs text-gray-900 placeholder:text-gray-400 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400/30 w-48"
               />
@@ -1018,40 +1235,32 @@ export default function TargetCommandCenter({ filters }: Props) {
                 </button>
               )}
             </div>
-            {/* Export */}
-            <button
-              onClick={exportCsv}
-              className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-white border border-gray-200 text-xs text-gray-600 hover:text-gray-900 hover:border-gray-400 shadow-sm transition-colors"
-            >
-              <Download className="h-3.5 w-3.5" />
-              CSV
+            <button onClick={exportCsv}
+              className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-white border border-gray-200 text-xs text-gray-600 hover:text-gray-900 hover:border-gray-400 shadow-sm transition-colors">
+              <Download className="h-3.5 w-3.5" /> CSV
             </button>
-            <button
-              onClick={exportXlsx}
-              className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-white border border-emerald-200 text-xs text-emerald-700 hover:text-emerald-900 hover:border-emerald-400 shadow-sm transition-colors"
-            >
-              <Download className="h-3.5 w-3.5" />
-              Excel
+            <button onClick={exportXlsx}
+              className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-white border border-emerald-200 text-xs text-emerald-700 hover:text-emerald-900 hover:border-emerald-400 shadow-sm transition-colors">
+              <Download className="h-3.5 w-3.5" /> Excel
             </button>
           </div>
         </div>
 
-        {/* Table */}
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-200 bg-gray-50">
                 <th className="px-3 py-2.5 text-left text-xs text-gray-400 w-8">#</th>
                 {([
-                  { col: 'name'      as TableSortKey, label: 'Store'         },
-                  { col: 'state'     as TableSortKey, label: 'State'         },
-                  { col: 'target'    as TableSortKey, label: 'OOW Target'    },
-                  { col: 'sales'     as TableSortKey, label: planView === 'regular' ? 'DS Sales' : 'Overall Sales' },
-                  { col: 'achPct'    as TableSortKey, label: 'Ach %'         },
-                  { col: 'gapPct'    as TableSortKey, label: 'Gap %'         },
-                  { col: 'reqDRR'    as TableSortKey, label: 'Req Daily'     },
-                  { col: 'projected' as TableSortKey, label: 'Projection'    },
-                  { col: 'status'    as TableSortKey, label: 'Risk Status'   },
+                  { col: 'name'       as TableSortKey, label: 'Store'       },
+                  { col: 'state'      as TableSortKey, label: 'State'       },
+                  { col: 'target'     as TableSortKey, label: 'OOW Target'  },
+                  { col: 'sales'      as TableSortKey, label: 'Sales'       },
+                  { col: 'achPct'     as TableSortKey, label: 'Ach %'       },
+                  { col: 'gapPct'     as TableSortKey, label: 'Gap %'       },
+                  { col: 'reqDRR'     as TableSortKey, label: 'Req Daily'   },
+                  { col: 'projected'  as TableSortKey, label: 'Projection'  },
+                  { col: 'status'     as TableSortKey, label: 'Risk Status' },
                 ] as const).map(({ col, label }) => (
                   <th key={col} className="px-3 py-2.5 text-left">
                     <SortBtn col={col} sortKey={tableSortKey} sortDir={tableSortDir} onSort={toggleSort} label={label} />
@@ -1072,46 +1281,29 @@ export default function TargetCommandCenter({ filters }: Props) {
                   <tr key={row.store.store_id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
                     <td className="px-3 py-2.5 text-gray-400 tabular-nums text-xs">{globalIdx}</td>
                     <td className="px-3 py-2.5">
-                      <p className="text-gray-900 font-medium text-xs truncate max-w-[150px]" title={row.store.store_name ?? row.store.store_id}>
-                        {row.store.store_name ?? row.store.store_id}
+                      <p className="text-gray-900 font-medium text-xs truncate max-w-[180px]" title={row.store.store_name}>
+                        {row.store.store_name}
                       </p>
-                      <div className="flex items-center gap-1.5 mt-0.5">
-                        <p className="text-[10px] text-gray-400">{row.store.store_id}</p>
-                        {row.store.category && (
-                          <span className="text-[9px] font-bold px-1 py-0 rounded bg-gray-100 text-gray-500">{row.store.category}</span>
-                        )}
-                      </div>
                     </td>
-                    <td className="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">{row.store.state ?? '—'}</td>
+                    <td className="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">{row.store.state || '—'}</td>
                     <td className="px-3 py-2.5 text-gray-700 tabular-nums text-xs whitespace-nowrap">{fmtInr(row.target)}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap">
                       <p className="text-gray-900 tabular-nums text-xs font-medium">{fmtInr(row.currentSales)}</p>
-                      {row.store.monthly_sales_ds && (
-                        <p className="text-[10px] text-gray-400 tabular-nums">
-                          DS {fmtInr(row.store.monthly_sales_ds[targetMonth] ?? 0)}
-                          {' · '}DSG {fmtInr((row.store.monthly_sales_dsg?.[targetMonth] ?? 0))}
-                        </p>
-                      )}
                     </td>
-                    <td className={cn('px-3 py-2.5 tabular-nums text-xs font-semibold whitespace-nowrap',
-                      row.achPct >= 95 ? 'text-emerald-600' : row.achPct >= 80 ? 'text-amber-600' : 'text-red-600')}>
+                    <td className={cn('px-3 py-2.5 tabular-nums text-xs font-semibold whitespace-nowrap', row.achPct >= 95 ? 'text-emerald-600' : row.achPct >= 80 ? 'text-amber-600' : 'text-red-600')}>
                       {row.achPct.toFixed(1)}%
                     </td>
-                    <td className={cn('px-3 py-2.5 tabular-nums text-xs whitespace-nowrap',
-                      row.gapPct <= 0 ? 'text-emerald-600' : row.gapPct <= 20 ? 'text-amber-600' : 'text-red-600')}>
+                    <td className={cn('px-3 py-2.5 tabular-nums text-xs whitespace-nowrap', row.gapPct <= 0 ? 'text-emerald-600' : row.gapPct <= 20 ? 'text-amber-600' : 'text-red-600')}>
                       {row.gap <= 0 ? `+${fmtPct(-row.gapPct)}` : fmtPct(row.gapPct)}
                     </td>
                     <td className="px-3 py-2.5 text-amber-600 tabular-nums text-xs whitespace-nowrap">
                       {row.reqDRR > 0 ? fmtInr(row.reqDRR) : '—'}
                     </td>
-                    <td className={cn('px-3 py-2.5 tabular-nums text-xs font-medium whitespace-nowrap',
-                      row.projected >= row.target ? 'text-emerald-600' : 'text-red-600')}>
+                    <td className={cn('px-3 py-2.5 tabular-nums text-xs font-medium whitespace-nowrap', row.projected >= row.target ? 'text-emerald-600' : 'text-red-600')}>
                       {fmtInr(row.projected)}
                       <span className="text-[10px] text-gray-400 ml-1">({row.projAchPct.toFixed(0)}%)</span>
                     </td>
-                    <td className="px-3 py-2.5">
-                      <RiskBadge status={row.status} />
-                    </td>
+                    <td className="px-3 py-2.5"><RiskBadge status={row.status} /></td>
                   </tr>
                 )
               })}
@@ -1119,57 +1311,33 @@ export default function TargetCommandCenter({ filters }: Props) {
           </table>
         </div>
 
-        {/* Pagination */}
         {totalPages > 1 && (
           <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-between gap-3 flex-wrap">
             <p className="text-xs text-gray-500">
               Showing {(tablePage - 1) * TABLE_PAGE_SIZE + 1}–{Math.min(tablePage * TABLE_PAGE_SIZE, storeTableData.length)} of {storeTableData.length} stores
             </p>
             <div className="flex items-center gap-1">
-              <button
-                onClick={() => setTablePage(1)}
-                disabled={tablePage === 1}
-                className="h-7 px-2.5 rounded text-xs text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-default transition-colors"
-              >«</button>
-              <button
-                onClick={() => setTablePage(p => Math.max(1, p - 1))}
-                disabled={tablePage === 1}
-                className="h-7 px-2.5 rounded text-xs text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-default transition-colors"
-              >‹</button>
+              <button onClick={() => setTablePage(1)} disabled={tablePage === 1}
+                className="h-7 px-2.5 rounded text-xs text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-default transition-colors">«</button>
+              <button onClick={() => setTablePage(p => Math.max(1, p - 1))} disabled={tablePage === 1}
+                className="h-7 px-2.5 rounded text-xs text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-default transition-colors">‹</button>
               {Array.from({ length: Math.min(5, totalPages) }, (_, k) => {
                 let page: number
-                if (totalPages <= 5) {
-                  page = k + 1
-                } else if (tablePage <= 3) {
-                  page = k + 1
-                } else if (tablePage >= totalPages - 2) {
-                  page = totalPages - 4 + k
-                } else {
-                  page = tablePage - 2 + k
-                }
+                if (totalPages <= 5) { page = k + 1 }
+                else if (tablePage <= 3) { page = k + 1 }
+                else if (tablePage >= totalPages - 2) { page = totalPages - 4 + k }
+                else { page = tablePage - 2 + k }
                 return (
-                  <button
-                    key={page}
-                    onClick={() => setTablePage(page)}
-                    className={cn(
-                      'h-7 w-7 rounded text-xs transition-colors',
-                      page === tablePage
-                        ? 'bg-blue-500 text-white font-bold'
-                        : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100',
-                    )}
-                  >{page}</button>
+                  <button key={page} onClick={() => setTablePage(page)}
+                    className={cn('h-7 w-7 rounded text-xs transition-colors', page === tablePage ? 'bg-blue-500 text-white font-bold' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100')}>
+                    {page}
+                  </button>
                 )
               })}
-              <button
-                onClick={() => setTablePage(p => Math.min(totalPages, p + 1))}
-                disabled={tablePage === totalPages}
-                className="h-7 px-2.5 rounded text-xs text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-default transition-colors"
-              >›</button>
-              <button
-                onClick={() => setTablePage(totalPages)}
-                disabled={tablePage === totalPages}
-                className="h-7 px-2.5 rounded text-xs text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-default transition-colors"
-              >»</button>
+              <button onClick={() => setTablePage(p => Math.min(totalPages, p + 1))} disabled={tablePage === totalPages}
+                className="h-7 px-2.5 rounded text-xs text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-default transition-colors">›</button>
+              <button onClick={() => setTablePage(totalPages)} disabled={tablePage === totalPages}
+                className="h-7 px-2.5 rounded text-xs text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-default transition-colors">»</button>
             </div>
           </div>
         )}
@@ -1179,7 +1347,7 @@ export default function TargetCommandCenter({ filters }: Props) {
       <TargetManagementDrawer
         open={showDrawer}
         onClose={() => setShowDrawer(false)}
-        onTargetChanged={refetchData}
+        onTargetChanged={initTracker}
       />
 
     </div>

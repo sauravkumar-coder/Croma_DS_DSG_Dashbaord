@@ -5,7 +5,7 @@ import {
   useTransform,
   animate,
 } from 'framer-motion'
-import { TrendingUp, TrendingDown, Users, Star, Moon } from 'lucide-react'
+import { TrendingUp, TrendingDown, Users, Star, Moon, IndianRupee } from 'lucide-react'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import createPlotlyComponent from 'react-plotly.js/factory'
 // @ts-ignore — plotly.js-dist-min does not ship its own .d.ts
@@ -13,6 +13,7 @@ import Plotly from 'plotly.js-dist-min'
 import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
+import { allocatePhases } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
 import { fmtInr, fmtPct } from '@/lib/formatting'
 import { kpiContainer, kpiItem, panelSpring } from '@/lib/animations'
@@ -54,17 +55,6 @@ const SANKEY_LINK_COLORS = [
 const nodeBorder = PT.line
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function halve(months: string[]): { early: string[]; recent: string[] } {
-  const n = months.length
-  if (n === 0) return { early: [], recent: [] }
-  if (n === 1) return { early: [], recent: months }
-  const half = Math.floor(n / 2)
-  return {
-    early:  months.slice(0, half),
-    recent: n % 2 === 0 ? months.slice(half) : months.slice(half + 1),
-  }
-}
 
 function winRev(store: StoreRecord, months: string[]): number {
   return months.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0)
@@ -144,16 +134,17 @@ function MiniBar({ ratio, color }: { ratio: number; color: string }) {
 // ── KPI Card ──────────────────────────────────────────────────────────────────
 
 interface KPICardProps {
-  label:     string
-  value:     number
-  sub:       string
-  icon:      React.ReactNode
-  barRatio?: number
-  barColor?: string
-  danger?:   boolean
+  label:          string
+  value:          number
+  sub:            string
+  icon:           React.ReactNode
+  barRatio?:      number
+  barColor?:      string
+  danger?:        boolean
+  formattedValue?: string
 }
 
-function KPICard({ label, value, sub, icon, barRatio, barColor, danger }: KPICardProps) {
+function KPICard({ label, value, sub, icon, barRatio, barColor, danger, formattedValue }: KPICardProps) {
   return (
     <motion.div
       variants={kpiItem}
@@ -181,13 +172,28 @@ function KPICard({ label, value, sub, icon, barRatio, barColor, danger }: KPICar
         </motion.span>
       </div>
 
-      <AnimatedNumber
-        value={value}
-        className={cn(
-          'text-2xl font-bold tabular-nums block',
-          danger ? 'text-red-600' : 'text-gray-900',
-        )}
-      />
+      {formattedValue !== undefined ? (
+        <motion.span
+          key={formattedValue}
+          initial={{ opacity: 0, y: 4 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, ease: 'easeOut' }}
+          className={cn(
+            'text-2xl font-bold tabular-nums block',
+            danger ? 'text-red-600' : 'text-gray-900',
+          )}
+        >
+          {formattedValue}
+        </motion.span>
+      ) : (
+        <AnimatedNumber
+          value={value}
+          className={cn(
+            'text-2xl font-bold tabular-nums block',
+            danger ? 'text-red-600' : 'text-gray-900',
+          )}
+        />
+      )}
 
       <p className="text-[11px] text-gray-500 truncate">{sub}</p>
 
@@ -206,7 +212,7 @@ export default function ExecutiveOverview({ filters }: Props) {
   const { stores, months, classification } = useDataContext()
 
   // ── Filter + split ─────────────────────────────────────────────────────────
-  const { fs, fm, early, recent } = useMemo(() => {
+  const { fs, fm, early, mid, recent } = useMemo(() => {
     let fs = stores
     if (filters.state)    fs = fs.filter(s => s.state    === filters.state)
     if (filters.category) fs = fs.filter(s => s.category === filters.category)
@@ -217,8 +223,8 @@ export default function ExecutiveOverview({ filters }: Props) {
     if (filters.toMonth) {
       const i = months.indexOf(filters.toMonth); if (i >= 0) fm = fm.slice(0, i + 1)
     }
-    const { early, recent } = halve(fm)
-    return { fs, fm, early, recent }
+    const { earlyMonths: early, midMonths: mid, recentMonths: recent } = allocatePhases(fm)
+    return { fs, fm, early, mid, recent }
   }, [stores, months, filters])
 
   // ── Journey data ───────────────────────────────────────────────────────────
@@ -240,7 +246,10 @@ export default function ExecutiveOverview({ filters }: Props) {
 
   // ── KPIs ───────────────────────────────────────────────────────────────────
   const kpis = useMemo(() => {
-    const scope    = journeys.length
+    // Always show the state/category filtered store count, regardless of whether
+    // the date window is wide enough for phase analysis. This keeps "Stores in Scope"
+    // consistent with the count shown on every other dashboard page.
+    const scope    = fs.length
     const improved = journeys.filter(j => j.rPct > j.ePct).length
     const declined = journeys.filter(j => j.rPct <= j.ePct).length
     const dormant  = journeys.filter(j => j.rRev === 0).length
@@ -253,7 +262,7 @@ export default function ExecutiveOverview({ filters }: Props) {
     const fallen = engineScope.filter(m => m.category === 'Fallen Star').length
 
     return { scope, improved, declined, rising, fallen, dormant }
-  }, [journeys, classification, filters])
+  }, [fs, journeys, classification, filters])
 
   // ── Sankey ─────────────────────────────────────────────────────────────────
   const sankeyTrace = useMemo(() => {
@@ -290,13 +299,9 @@ export default function ExecutiveOverview({ filters }: Props) {
     early.map(m => ({ m, rev: fs.reduce((s, st) => s + (st.monthly_sales[m] ?? 0), 0) })),
   [fs, early])
 
-  const barMid = useMemo(() => {
-    const earlySet  = new Set(early)
-    const recentSet = new Set(recent)
-    return fm
-      .filter(m => !earlySet.has(m) && !recentSet.has(m))
-      .map(m => ({ m, rev: fs.reduce((s, st) => s + (st.monthly_sales[m] ?? 0), 0) }))
-  }, [fs, fm, early, recent])
+  const barMid = useMemo(() =>
+    mid.map(m => ({ m, rev: fs.reduce((s, st) => s + (st.monthly_sales[m] ?? 0), 0) })),
+  [fs, mid])
 
   const barRecent = useMemo(() =>
     recent.map(m => ({ m, rev: fs.reduce((s, st) => s + (st.monthly_sales[m] ?? 0), 0) })),
@@ -307,9 +312,9 @@ export default function ExecutiveOverview({ filters }: Props) {
   const totalRecent = barRecent.reduce((s, d) => s + d.rev, 0)
   const phaseShift  = totalEarly > 0 ? (totalRecent - totalEarly) / totalEarly * 100 : null
 
-  const earlyLabel  = early.length  ? `${early[0]} – ${early[early.length - 1]}`    : ''
-  const midLabel    = barMid.length ? `${barMid[0].m} – ${barMid[barMid.length - 1].m}` : ''
-  const recentLabel = recent.length ? `${recent[0]} – ${recent[recent.length - 1]}` : ''
+  const earlyLabel  = early.length   ? `${early[0]} – ${early[early.length - 1]}`     : ''
+  const midLabel    = mid.length     ? `${mid[0]} – ${mid[mid.length - 1]}`            : ''
+  const recentLabel = recent.length  ? `${recent[0]} – ${recent[recent.length - 1]}`  : ''
 
   // ── Revenue Context Narrative ───────────────────────────────────────────────
   const phaseNarrative = useMemo(() => {
@@ -321,12 +326,12 @@ export default function ExecutiveOverview({ filters }: Props) {
     const recentShare = totalAll > 0 ? (totalRecent / totalAll * 100) : 0
 
     const earlyMonthAvg  = early.length  ? totalEarly  / early.length  : 0
-    const midMonthAvg    = barMid.length ? totalMid    / barMid.length : 0
+    const midMonthAvg    = mid.length    ? totalMid    / mid.length    : 0
     const recentMonthAvg = recent.length ? totalRecent / recent.length : 0
 
     // How many stores contributed revenue in each phase
     const earlyActive  = fs.filter(s => early.some(m => (s.monthly_sales[m] ?? 0) > 0)).length
-    const midActive    = fs.filter(s => barMid.some(d => (s.monthly_sales[d.m] ?? 0) > 0)).length
+    const midActive    = fs.filter(s => mid.some(m => (s.monthly_sales[m] ?? 0) > 0)).length
     const recentActive = fs.filter(s => recent.some(m => (s.monthly_sales[m] ?? 0) > 0)).length
 
     // Month-over-month momentum within early phase
@@ -345,11 +350,11 @@ export default function ExecutiveOverview({ filters }: Props) {
     const networkGrowthPct = phaseShift
 
     // Mid vs early
-    const midGrowth = earlyMonthAvg > 0 ? (midMonthAvg - earlyMonthAvg) / earlyMonthAvg * 100 : null
+    const midGrowth    = earlyMonthAvg > 0 ? (midMonthAvg    - earlyMonthAvg) / earlyMonthAvg * 100 : null
     const recentGrowth = earlyMonthAvg > 0 ? (recentMonthAvg - earlyMonthAvg) / earlyMonthAvg * 100 : null
 
     return { earlyShare, midShare, recentShare, earlyMonthAvg, midMonthAvg, recentMonthAvg, earlyActive, midActive, recentActive, earlyMomAvg, recentMomAvg, earlyPeak, recentPeak, earlyLow, recentLow, networkGrowthPct, midGrowth, recentGrowth, totalAll }
-  }, [barEarly, barMid, barRecent, totalEarly, totalMid, totalRecent, fs, early, recent, phaseShift])
+  }, [barEarly, barMid, barRecent, totalEarly, totalMid, totalRecent, fs, early, mid, recent, phaseShift])
 
   const n       = kpis.scope || 1
   const cardCls = 'rounded-xl border border-gray-200 bg-white p-4 shadow-sm'
@@ -377,11 +382,18 @@ export default function ExecutiveOverview({ filters }: Props) {
 
       {/* ── KPI Row — staggered spring entrance ── */}
       <motion.div
-        className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6"
+        className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-7"
         variants={kpiContainer}
         initial="hidden"
         animate="show"
       >
+        <KPICard
+          label="Total Revenue"
+          value={totalEarly + totalMid + totalRecent}
+          formattedValue={fmtInr(totalEarly + totalMid + totalRecent)}
+          sub="Revenue in current scope"
+          icon={<IndianRupee className="h-4 w-4 text-emerald-500" />}
+        />
         <KPICard
           label="Stores in Scope" value={kpis.scope}
           sub={`of ${stores.length} tracked`}

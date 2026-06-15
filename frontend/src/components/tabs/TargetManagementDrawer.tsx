@@ -12,6 +12,23 @@ import { cn } from '@/lib/utils'
 
 const MONTH_RE = /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4}$/i
 
+const MONTH_NAMES: Record<string, string> = {
+  january: 'Jan', february: 'Feb', march: 'Mar', april: 'Apr',
+  may: 'May', june: 'Jun', july: 'Jul', august: 'Aug',
+  september: 'Sep', october: 'Oct', november: 'Nov', december: 'Dec',
+}
+
+function detectMonthFromFilename(name: string): string {
+  const lower = name.toLowerCase()
+  const yearMatch = lower.match(/20\d{2}/)
+  if (!yearMatch) return ''
+  const year = yearMatch[0]
+  for (const [full, abbr] of Object.entries(MONTH_NAMES)) {
+    if (lower.includes(full)) return `${abbr}-${year}`
+  }
+  return ''
+}
+
 const STATUS_CFG = {
   active:   { label: 'Active',   cls: 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' },
   inactive: { label: 'Inactive', cls: 'bg-gray-700/40 text-gray-400 border border-gray-600/30' },
@@ -208,9 +225,14 @@ export default function TargetManagementDrawer({ open, onClose, onTargetChanged 
                     accept=".xlsx,.xls"
                     className="hidden"
                     onChange={e => {
-                      setFile(e.target.files?.[0] ?? null)
+                      const picked = e.target.files?.[0] ?? null
+                      setFile(picked)
                       setUploadErr(null)
                       setUploadOk(false)
+                      if (picked) {
+                        const detected = detectMonthFromFilename(picked.name)
+                        if (detected) setMonthLabel(detected)
+                      }
                     }}
                   />
                 </div>

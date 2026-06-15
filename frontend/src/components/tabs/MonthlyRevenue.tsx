@@ -41,6 +41,17 @@ interface MonthStats {
   iqr: number; minR: number; maxR: number; outliers: number
 }
 
+interface OutlierRow {
+  storeId: string
+  storeName: string
+  state: string
+  month: string
+  revenue: number
+  type: 'High Outlier' | 'Low Outlier'
+  fence: number
+  distance: number
+}
+
 function computeMonthStats(values: number[]): MonthStats | null {
   const sorted = [...values].sort((a, b) => a - b)
   const n = sorted.length
@@ -198,33 +209,113 @@ export default function MonthlyRevenue({ filters }: Props) {
     return anns
   }, [early, mid, recent])
 
-  // ── Box-plot y-axis with Indian number formatting ──────────────────────────
-  const boxYAxis = useMemo(() => {
-    const allVals = fm.flatMap(m => fs.map(s => s.monthly_sales[m] ?? 0))
-    const maxVal = allVals.length > 0 ? Math.max(...allVals) : 0
-    if (maxVal === 0) return { ...PT_AXIS, title: { text: 'Store Revenue' } }
+  // ── Box-plot y-axis — active stores only, log scale when outliers are extreme ─
+  const { boxYAxis, boxScaleIsLog } = useMemo(() => {
+    const allActive = fm.flatMap(m => fs.map(s => s.monthly_sales[m] ?? 0).filter(v => v > 0))
+    const fallback = { boxYAxis: { ...PT_AXIS, title: { text: 'Store Revenue' } }, boxScaleIsLog: false }
+    if (!allActive.length) return fallback
+
+    const sorted = [...allActive].sort((a, b) => a - b)
+    const q1  = pctile(sorted, 25)
+    const q3  = pctile(sorted, 75)
+    const iqr = q3 - q1
+    const uf  = q3 + 1.5 * iqr
+    const maxVal = sorted[sorted.length - 1]
+
+    // Switch to log scale when the max is more than 6× the upper fence
+    const needsLog = uf > 0 && maxVal > uf * 6 && q1 > 0
+
+    if (needsLog) {
+      const logFloor = Math.floor(Math.log10(Math.max(sorted[0], 1)))
+      const logCeil  = Math.ceil(Math.log10(maxVal * 1.1))
+      const tickvals: number[] = []
+      for (let e = logFloor; e <= logCeil; e++) {
+        tickvals.push(Math.pow(10, e))
+        if (e < logCeil) { tickvals.push(2 * Math.pow(10, e)); tickvals.push(5 * Math.pow(10, e)) }
+      }
+      return {
+        boxYAxis: { ...PT_AXIS, title: { text: 'Store Revenue (log scale)' }, type: 'log' as const, tickmode: 'array' as const, tickvals, ticktext: tickvals.map(fmtInrFull) },
+        boxScaleIsLog: true,
+      }
+    }
+
+    // Linear scale based on active-store range
+    if (maxVal === 0) return fallback
     const rough = maxVal / 5
-    const exp = Math.pow(10, Math.floor(Math.log10(rough)))
-    const norm = rough / exp
-    const step = (norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10) * exp
+    const exp   = Math.pow(10, Math.floor(Math.log10(rough)))
+    const norm  = rough / exp
+    const step  = (norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10) * exp
     const tickvals: number[] = []
     for (let t = 0; t <= maxVal * 1.05; t += step) tickvals.push(Math.round(t))
     return {
-      ...PT_AXIS,
-      title: { text: 'Store Revenue' },
-      tickmode: 'array' as const,
-      tickvals,
-      ticktext: tickvals.map(fmtInrFull),
+      boxYAxis: { ...PT_AXIS, title: { text: 'Store Revenue' }, tickmode: 'array' as const, tickvals, ticktext: tickvals.map(fmtInrFull) },
+      boxScaleIsLog: false,
     }
   }, [fs, fm])
 
-  // ── Box-plot traces ────────────────────────────────────────────────────────
+  // ── Per-month outlier detection (active stores only) ─────────────────────
+  const outlierData = useMemo((): OutlierRow[] => {
+    const rows: OutlierRow[] = []
+    for (const month of fm) {
+      // Exclude inactive stores (revenue = 0) so the IQR reflects genuine revenue spread
+      const revs = fs.map(s => s.monthly_sales[month] ?? 0).filter(v => v > 0).sort((a, b) => a - b)
+      if (revs.length < 4) continue
+      const q1 = pctile(revs, 25)
+      const q3 = pctile(revs, 75)
+      const iqr = q3 - q1
+      const lf = q1 - 1.5 * iqr
+      const uf = q3 + 1.5 * iqr
+      for (const store of fs) {
+        const rev = store.monthly_sales[month] ?? 0
+        if (rev > uf) {
+          rows.push({
+            storeId: store.store_id,
+            storeName: store.store_name ?? store.store_id,
+            state: store.state ?? '—',
+            month,
+            revenue: rev,
+            type: 'High Outlier',
+            fence: uf,
+            distance: rev - uf,
+          })
+        } else if (rev < lf) {
+          rows.push({
+            storeId: store.store_id,
+            storeName: store.store_name ?? store.store_id,
+            state: store.state ?? '—',
+            month,
+            revenue: rev,
+            type: 'Low Outlier',
+            fence: lf,
+            distance: lf - rev,
+          })
+        }
+      }
+    }
+    return rows
+  }, [fs, fm])
+
+  // ── Outlier summary KPIs ──────────────────────────────────────────────────
+  const outliersKpi = useMemo(() => {
+    const total = outlierData.length
+    const high  = outlierData.filter(o => o.type === 'High Outlier').length
+    const low   = total - high
+    const topOutlier = outlierData.reduce<OutlierRow | null>(
+      (best, o) => (!best || o.revenue > best.revenue) ? o : best,
+      null,
+    )
+    return { total, high, low, topOutlier }
+  }, [outlierData])
+
+  // ── Box-plot traces (active stores only) ──────────────────────────────────
   const boxTraces = useMemo(() => {
-    const traces: object[] = fm.map((month, i) => {
-      const values = fs.map(s => s.monthly_sales[month] ?? 0)
+    // Only plot active stores — zeros bias Q1 to 0, collapsing the lower distribution
+    const traces: object[] = fm.flatMap((month, i) => {
+      const values = fs.map(s => s.monthly_sales[month] ?? 0).filter(v => v > 0)
+      if (values.length === 0) return []
       const stats = computeMonthStats(values)
       const color = STATE_PALETTE[i % STATE_PALETTE.length]
-      return {
+      return [{
         type: 'box' as const,
         y: values,
         name: month,
@@ -233,27 +324,78 @@ export default function MonthlyRevenue({ filters }: Props) {
         line: { color, width: 2 },
         fillcolor: `${color}3a`,
         hovertemplate: buildBoxHover(month, stats),
-      }
+      }]
     })
 
-    // Mean diamond markers as a separate scatter trace
-    const means = fm.map(m => {
-      const vals = fs.map(s => s.monthly_sales[m] ?? 0)
-      return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0
+    // Mean diamonds — active stores only, skip months with no active stores
+    const meanPoints = fm.flatMap(m => {
+      const vals = fs.map(s => s.monthly_sales[m] ?? 0).filter(v => v > 0)
+      if (!vals.length) return []
+      return [{ x: m, y: vals.reduce((a, b) => a + b, 0) / vals.length }]
     })
-    traces.push({
-      type: 'scatter' as const,
-      mode: 'markers' as const,
-      name: 'Mean',
-      x: fm,
-      y: means,
-      marker: { symbol: 'diamond', size: 8, color: '#f59e0b', line: { width: 2, color: '#b45309' } },
-      hoverinfo: 'skip' as const,
-      showlegend: true,
-    })
+    if (meanPoints.length > 0) {
+      traces.push({
+        type: 'scatter' as const,
+        mode: 'markers' as const,
+        name: 'Mean',
+        x: meanPoints.map(p => p.x),
+        y: meanPoints.map(p => p.y),
+        marker: { symbol: 'diamond', size: 8, color: '#f59e0b', line: { width: 2, color: '#b45309' } },
+        hoverinfo: 'skip' as const,
+        showlegend: true,
+      })
+    }
+
+    // High outlier scatter overlay
+    const highOuts = outlierData.filter(o => o.type === 'High Outlier')
+    if (highOuts.length > 0) {
+      traces.push({
+        type: 'scatter' as const,
+        mode: 'markers' as const,
+        name: 'High Outlier',
+        x: highOuts.map(o => o.month),
+        y: highOuts.map(o => o.revenue),
+        customdata: highOuts.map(o => [o.storeName, o.state, o.storeId, fmtInrFull(o.distance)]),
+        marker: { symbol: 'circle', size: 9, color: '#ef4444', opacity: 0.9, line: { width: 1.5, color: '#b91c1c' } },
+        hovertemplate: [
+          '<b>%{customdata[0]}</b>',
+          'Store Code: %{customdata[2]}',
+          'State: %{customdata[1]}',
+          'Month: %{x}',
+          'Revenue: <b>₹%{y:,.0f}</b>',
+          'Above upper fence by: <b>%{customdata[3]}</b>',
+          '<i>▲ High Outlier</i>',
+        ].join('<br>') + '<extra></extra>',
+        showlegend: true,
+      })
+    }
+
+    // Low outlier scatter overlay
+    const lowOuts = outlierData.filter(o => o.type === 'Low Outlier')
+    if (lowOuts.length > 0) {
+      traces.push({
+        type: 'scatter' as const,
+        mode: 'markers' as const,
+        name: 'Low Outlier',
+        x: lowOuts.map(o => o.month),
+        y: lowOuts.map(o => o.revenue),
+        customdata: lowOuts.map(o => [o.storeName, o.state, o.storeId, fmtInrFull(o.distance)]),
+        marker: { symbol: 'triangle-down', size: 9, color: '#f97316', opacity: 0.9, line: { width: 1.5, color: '#c2410c' } },
+        hovertemplate: [
+          '<b>%{customdata[0]}</b>',
+          'Store Code: %{customdata[2]}',
+          'State: %{customdata[1]}',
+          'Month: %{x}',
+          'Revenue: <b>₹%{y:,.0f}</b>',
+          'Below lower fence by: <b>%{customdata[3]}</b>',
+          '<i>▼ Low Outlier</i>',
+        ].join('<br>') + '<extra></extra>',
+        showlegend: true,
+      })
+    }
 
     return traces
-  }, [fs, fm])
+  }, [fs, fm, outlierData])
 
   // PT_AXIS is imported from @/lib/plotlyTheme — shared axis style
 
@@ -387,7 +529,8 @@ export default function MonthlyRevenue({ filters }: Props) {
       <motion.div {...panelSpring(0.22)} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
         <h3 className="text-sm font-semibold text-gray-800">Store Revenue Distribution by Month</h3>
         <p className="text-[11px] text-gray-500 mt-0.5 mb-3">
-          Box plot showing how revenues spread across individual stores each month — outlier-free view of the core distribution
+          Revenue spread across active stores each month. IQR outlier fences: Q1 − 1.5×IQR (low) and Q3 + 1.5×IQR (high).
+          {boxScaleIsLog ? ' Log scale — extreme outliers detected.' : ''}
         </p>
         <Plot
           data={boxTraces as any}
@@ -406,8 +549,8 @@ export default function MonthlyRevenue({ filters }: Props) {
             },
             xaxis: { ...PT_AXIS },
             yaxis: boxYAxis,
-            margin: { l: 90, r: 16, t: 12, b: 90 },
-            height: 360,
+            margin: { l: 90, r: 16, t: 12, b: 100 },
+            height: 460,
             hoverlabel: {
               bgcolor: '#ffffff',
               bordercolor: '#e5e7eb',
@@ -420,12 +563,105 @@ export default function MonthlyRevenue({ filters }: Props) {
         {/* Interpretation footer */}
         <div className="mt-2 rounded-lg bg-gray-50 border border-gray-100 px-3 py-2 text-[10px] text-gray-500 leading-relaxed">
           <span className="font-semibold text-gray-600">How to read: </span>
-          Box = middle 50% of stores (Q1–Q3) &nbsp;·&nbsp;
-          Line inside box = Median Revenue &nbsp;·&nbsp;
-          <span className="font-semibold text-amber-500">♦</span> = Mean Revenue &nbsp;·&nbsp;
-          Whiskers = Min &amp; Max Revenue (excluding outliers)
+          Active stores only (inactive excluded) &nbsp;·&nbsp;
+          Box = Q1–Q3 &nbsp;·&nbsp;
+          Line = Median &nbsp;·&nbsp;
+          <span className="font-semibold text-amber-500">♦</span> = Mean &nbsp;·&nbsp;
+          Whiskers = non-outlier min/max &nbsp;·&nbsp;
+          <span className="font-semibold text-red-500">● High Outlier</span> &nbsp;·&nbsp;
+          <span className="font-semibold text-orange-500">▼ Low Outlier</span>
+          {boxScaleIsLog && (
+            <span className="ml-2 font-semibold text-indigo-500">· Log scale active (extreme outliers detected)</span>
+          )}
         </div>
+
+        {/* ── Outlier summary cards ── */}
+        {outliersKpi.total > 0 && (
+          <div className="mt-4 border-t border-gray-100 pt-4">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-3">
+              Outlier Summary
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1">Total Outlier Stores</p>
+                <p className="text-2xl font-bold text-gray-800">{outliersKpi.total}</p>
+              </div>
+              <div className="rounded-lg border border-red-100 bg-red-50 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-red-500 mb-1">High Outliers</p>
+                <p className="text-2xl font-bold text-red-700">{outliersKpi.high}</p>
+              </div>
+              <div className="rounded-lg border border-orange-100 bg-orange-50 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-orange-500 mb-1">Low Outliers</p>
+                <p className="text-2xl font-bold text-orange-700">{outliersKpi.low}</p>
+              </div>
+              {outliersKpi.topOutlier && (
+                <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1">Highest Revenue Outlier</p>
+                  <p className="text-xs font-semibold text-gray-800 truncate" title={outliersKpi.topOutlier.storeName}>
+                    {outliersKpi.topOutlier.storeName}
+                  </p>
+                  <p className="text-[11px] text-gray-600 mt-0.5">
+                    {fmtInr(outliersKpi.topOutlier.revenue)} · {outliersKpi.topOutlier.month}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </motion.div>
+
+      {/* ── Outlier Stores Table ── */}
+      {outlierData.length > 0 && (
+        <motion.div {...panelSpring(0.30)} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+          <h3 className="text-sm font-semibold text-gray-800 mb-0.5">Outlier Stores</h3>
+          <p className="text-[11px] text-gray-500 mb-3">
+            Stores whose monthly revenue falls outside Q1 − 1.5×IQR (low) or Q3 + 1.5×IQR (high) for that month.
+            Updates dynamically with all active filters and date ranges.
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[11px] text-gray-700 border-collapse">
+              <thead>
+                <tr className="border-b border-gray-200 bg-gray-50">
+                  <th className="text-left px-3 py-2 font-semibold text-gray-600 whitespace-nowrap">Store Name</th>
+                  <th className="text-left px-3 py-2 font-semibold text-gray-600 whitespace-nowrap">Store Code</th>
+                  <th className="text-left px-3 py-2 font-semibold text-gray-600 whitespace-nowrap">State</th>
+                  <th className="text-left px-3 py-2 font-semibold text-gray-600 whitespace-nowrap">Month</th>
+                  <th className="text-right px-3 py-2 font-semibold text-gray-600 whitespace-nowrap">Revenue</th>
+                  <th className="text-center px-3 py-2 font-semibold text-gray-600 whitespace-nowrap">Outlier Type</th>
+                  <th className="text-right px-3 py-2 font-semibold text-gray-600 whitespace-nowrap">Distance from Bound</th>
+                </tr>
+              </thead>
+              <tbody>
+                {outlierData.map((row, i) => (
+                  <tr
+                    key={`${row.storeId}-${row.month}`}
+                    className={cn('border-b border-gray-100', i % 2 === 0 ? 'bg-white' : 'bg-gray-50/60')}
+                  >
+                    <td className="px-3 py-2 font-medium text-gray-800 max-w-[180px] truncate" title={row.storeName}>
+                      {row.storeName}
+                    </td>
+                    <td className="px-3 py-2 text-gray-500 font-mono">{row.storeId}</td>
+                    <td className="px-3 py-2">{row.state}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{row.month}</td>
+                    <td className="px-3 py-2 text-right font-medium">{fmtInrFull(row.revenue)}</td>
+                    <td className="px-3 py-2 text-center">
+                      <span className={cn(
+                        'px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap',
+                        row.type === 'High Outlier'
+                          ? 'bg-red-100 text-red-700'
+                          : 'bg-orange-100 text-orange-700',
+                      )}>
+                        {row.type === 'High Outlier' ? '▲ High Outlier' : '▼ Low Outlier'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-right text-gray-600 whitespace-nowrap">{fmtInrFull(row.distance)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </motion.div>
+      )}
 
     </div>
   )

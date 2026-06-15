@@ -7,7 +7,7 @@ import Plotly from 'plotly.js-dist-min'
 import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
-import { allocatePhases, classifyAllStores } from '@/lib/classificationEngine'
+import { allocatePhases } from '@/lib/classificationEngine'
 import type { StoreCategory } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
 import { fmtInr, fmtPct, fmtCount, monthAbbr, fmtStore } from '@/lib/formatting'
@@ -41,7 +41,7 @@ function phasePlanSum(store: StoreRecord, ms: string[]) {
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function RevenueMovers({ filters }: { filters: FilterState }) {
-  const { stores, months } = useDataContext()
+  const { stores, months, classification } = useDataContext()
   const [tableSort, setTableSort] = useState<TableSort>('change')
   const [tableDir,  setTableDir]  = useState<TableDir>('desc')
   const [topN,      setTopN]      = useState<TopN>(5)
@@ -78,30 +78,39 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
       }
     }
 
-    // Use classifyAllStores so category comes from the same engine as the rest of the app
-    const classResult = classifyAllStores(fs, fm)
-    const { earlyMonths: early, midMonths: mid, recentMonths: recent } = classResult.phases
+    // Phase allocation uses the filtered month window for accurate revenue figures
+    const { earlyMonths: early, midMonths: mid, recentMonths: recent } = allocatePhases(fm)
 
     const earlyRange  = `${monthAbbr(early[0])} – ${monthAbbr(early[early.length - 1])}`
     const midRange    = mid.length > 0 ? `${monthAbbr(mid[0])} – ${monthAbbr(mid[mid.length - 1])}` : '—'
     const recentRange = `${monthAbbr(recent[0])} – ${monthAbbr(recent[recent.length - 1])}`
 
-    // Build allMovers from classification metrics — avoids recomputing phases
-    const allMovers: MoverRow[] = classResult.metrics
-      .filter(m => m.earlyTotal > 0 || m.recentTotal > 0)
-      .map(m => {
-        const earlyAvg  = early.length  > 0 ? m.earlyTotal  / early.length  : 0
-        const midAvg    = mid.length    > 0 ? m.midTotal    / mid.length    : 0
-        const recentAvg = recent.length > 0 ? m.recentTotal / recent.length : 0
+    // Category from the central classification engine (full date range) — consistent with all other pages
+    const categoryMap = new Map<string, StoreCategory>(
+      classification.metrics.map(m => [m.store.store_id, m.category])
+    )
+
+    const allMovers: MoverRow[] = fs
+      .filter(store => {
+        const earlyTotal  = early.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0)
+        const recentTotal = recent.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0)
+        return earlyTotal > 0 || recentTotal > 0
+      })
+      .map(store => {
+        const earlyTotal  = early.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0)
+        const midTotal    = mid.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0)
+        const recentTotal = recent.reduce((s, m) => s + (store.monthly_sales[m] ?? 0), 0)
+        const earlyAvg  = early.length  > 0 ? earlyTotal  / early.length  : 0
+        const midAvg    = mid.length    > 0 ? midTotal    / mid.length    : 0
+        const recentAvg = recent.length > 0 ? recentTotal / recent.length : 0
         const absChange = recentAvg - earlyAvg
-        // growthPct from engine = (recentTotal-earlyTotal)/earlyTotal×100 — same ratio as avg-based pctChange
-        const pctChange = m.growthPct
+        const pctChange: number | null = earlyAvg > 0 ? (recentAvg - earlyAvg) / earlyAvg * 100 : null
         return {
-          store: m.store, recentAvg, midAvg, earlyAvg, absChange, pctChange,
-          earlyPlanCount:  phasePlanSum(m.store, early),
-          midPlanCount:    phasePlanSum(m.store, mid),
-          recentPlanCount: phasePlanSum(m.store, recent),
-          category: m.category,
+          store, recentAvg, midAvg, earlyAvg, absChange, pctChange,
+          earlyPlanCount:  phasePlanSum(store, early),
+          midPlanCount:    phasePlanSum(store, mid),
+          recentPlanCount: phasePlanSum(store, recent),
+          category: categoryMap.get(store.store_id) ?? ('Constant Store' as StoreCategory),
         }
       })
       .sort((a, b) => b.absChange - a.absChange)
@@ -142,7 +151,7 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
         avgGrowthPct: 0, avgDeclinePct: 0,
       }
     }
-  }, [stores, months, filters])
+  }, [stores, months, filters, classification])
 
   // ── Slope chart traces ────────────────────────────────────────────────────
   const slopeTraces = useMemo(() => {
