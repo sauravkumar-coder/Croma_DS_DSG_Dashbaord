@@ -41,6 +41,14 @@ _MONTH_SHORT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Matches ISO date strings produced by pandas Timestamp.str: "2026-03-01 00:00:00" or "2026-03-01"
+_ISO_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-\d{2}")
+
+_MONTH_ABBR_LIST = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+]
+
 _MONTH_ORDER = {
     m: i for i, m in enumerate(
         ["jan", "feb", "mar", "apr", "may", "jun",
@@ -78,13 +86,34 @@ def detect_month_from_filename(filename: str) -> str | None:
 
 
 def _normalise_month(m: str) -> str:
-    """Convert 'Mar-26' → 'Mar-2026'. Full-year 'Mar-2026' is returned as-is."""
+    """Normalise any common month representation to 'Mmm-YYYY' (e.g. 'Mar-2026').
+
+    Handles:
+      'Mar-26'               → 'Mar-2026'   (short-year DSG format)
+      'Mar-2026'             → 'Mar-2026'   (already normalised)
+      '2026-03-01 00:00:00'  → 'Mar-2026'   (pandas Timestamp.str / ISO datetime)
+      '2026-03-01'           → 'Mar-2026'   (ISO date)
+    """
     m = str(m).strip()
-    match = _MONTH_SHORT_RE.match(m)
-    if match:
-        name, yy = match.group(1), match.group(2)
-        # Assume 20xx for 2-digit years
-        return f"{name.capitalize()}-20{yy}"
+
+    # Already in canonical form "Mmm-YYYY" — re-capitalise to be safe
+    if _MONTH_RE.match(m):
+        parts = m.split("-")
+        return f"{parts[0].capitalize()}-{parts[1]}"
+
+    # Short-year "Mar-26" (most common DSG export format)
+    short = _MONTH_SHORT_RE.match(m)
+    if short:
+        return f"{short.group(1).capitalize()}-20{short.group(2)}"
+
+    # ISO date string from pandas Timestamp: "2026-03-01 00:00:00" or "2026-03-01"
+    iso = _ISO_DATE_RE.match(m)
+    if iso:
+        yr, mo = iso.group(1), int(iso.group(2))
+        if 1 <= mo <= 12:
+            return f"{_MONTH_ABBR_LIST[mo - 1]}-{yr}"
+
+    logger.warning("_normalise_month: unrecognised format %r — revenue for this month may be lost", m)
     return m
 
 
@@ -211,8 +240,29 @@ def _parse_transactional(df: pd.DataFrame) -> list[dict[str, Any]]:
     df = df.copy()
     df[c_amt]   = pd.to_numeric(df[c_amt], errors="coerce").fillna(0)
     df[c_store] = df[c_store].astype(str).str.strip()
-    df[c_month] = df[c_month].astype(str).str.strip().apply(_normalise_month)
     df[c_sub]   = df[c_sub].astype(str).str.strip()
+
+    # Excel sometimes auto-formats "Mar-26" cells as date values.
+    # pandas reads those as datetime64; .strftime gives the canonical form directly.
+    # For plain text cells, fall back to the string-based normaliser.
+    if pd.api.types.is_datetime64_any_dtype(df[c_month]):
+        df[c_month] = df[c_month].dt.strftime("%b-%Y")
+        logger.info(
+            "_parse_transactional: Month column was datetime64 — converted via strftime. "
+            "Distinct months: %s",
+            sorted(df[c_month].unique()),
+        )
+    else:
+        df[c_month] = df[c_month].astype(str).str.strip().apply(_normalise_month)
+
+    # Validate: warn if any month key still doesn't match the canonical pattern
+    bad = [m for m in df[c_month].unique() if not _MONTH_RE.match(str(m))]
+    if bad:
+        logger.warning(
+            "_parse_transactional: %d unrecognised month value(s) — revenue under "
+            "these keys will be excluded from the dashboard: %s",
+            len(bad), bad[:10],
+        )
 
     # Collect per-store metadata (take first occurrence)
     meta: dict[str, dict] = {}
