@@ -46,6 +46,7 @@ import io
 import logging
 import os
 import tempfile
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
@@ -54,6 +55,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from database import close_client, get_client
 from parser import (
     analyze_sheet,
     detect_month_from_filename,
@@ -68,7 +70,15 @@ import tracker as trk
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="StoreWise API", version="3.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    get_client()          # connect on startup
+    yield
+    await close_client()  # disconnect on shutdown
+
+
+app = FastAPI(title="StoreWise API", version="3.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
