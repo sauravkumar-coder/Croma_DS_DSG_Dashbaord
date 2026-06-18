@@ -1,0 +1,166 @@
+[
+  {
+    "storeId": "CR001", "brandId": "BRAND_DS", "categoryId": "CAT_ELEC", "year": 2026,
+    "monthlySales": [
+      {"month": 1, "deviceSales": 52, "planSales": 60, "attachPct": 86.7, "revenue": 286000.0},
+      {"month": 2, "deviceSales": 55, "planSales": 62, "attachPct": 88.7, "revenue": 302500.0},
+      {"month": 3, "deviceSales": 60, "planSales": 68, "attachPct": 88.2, "revenue": 330000.0},
+      {"month": 4, "deviceSales": 65, "planSales": 72, "attachPct": 90.3, "revenue": 357500.0},
+      {"month": 5, "deviceSales": 70, "planSales": 78, "attachPct": 89.7, "revenue": 385000.0},
+      {"month": 6, "deviceSales": 75, "planSales": 83, "attachPct": 90.4, "revenue": 412500.0}
+    ],
+    "dailySales": {}
+  },
+  {
+    "storeId": "CR001", "brandId": "BRAND_DSG", "categoryId": "CAT_ELEC", "year": 2026,
+    "monthlySales": [
+      {"month": 1, "deviceSales": 30, "planSales": 35, "attachPct": 85.7, "revenue": 210000.0},
+      {"month": 2, "deviceSales": 33, "planSales": 38, "attachPct": 86.8, "revenue": 231000.0},
+      {"month": 3, "deviceSales": 36, "planSales": 41, "attachPct": 87.8, "revenue": 252000.0},
+      {"month": 4, "deviceSales": 40, "planSales": 45, "attachPct": 88.9, "revenue": 280000.0},
+      {"month": 5, "deviceSales": 44, "planSales": 50, "attachPct": 88.0, "revenue": 308000.0},
+      {"month": 6, "deviceSales": 48, "planSales": 54, "attachPct": 88.9, "revenue": 336000.0}
+    ],
+    "dailySales": {}
+  },
+  {
+    "storeId": "CR002", "brandId": "BRAND_DS", "categoryId": "CAT_MOB", "year": 2026,
+    "monthlySales": [
+      {"month": 1, "deviceSales": 70, "planSales": 78, "attachPct": 89.7, "revenue": 350000.0},
+      {"month": 2, "deviceSales": 68, "planSales": 76, "attachPct": 89.5, "revenue": 340000.0},
+      {"month": 3, "deviceSales": 66, "planSales": 74, "attachPct": 89.2, "revenue": 330000.0},
+      {"month": 4, "deviceSales": 64, "planSales": 72, "attachPct": 88.9, "revenue": 320000.0},
+      {"month": 5, "deviceSales": 61, "planSales": 70, "attachPct": 87.1, "revenue": 305000.0},
+      {"month": 6, "deviceSales": 58, "planSales": 67, "attachPct": 86.6, "revenue": 290000.0}
+    ],
+    "dailySales": {}
+  },
+  {
+    "storeId": "CR002", "brandId": "BRAND_DSG", "categoryId": "CAT_MOB", "year": 2026,
+    "monthlySales": [
+      {"month": 1, "deviceSales": 40, "planSales": 46, "attachPct": 87.0, "revenue": 280000.0},
+      {"month": 2, "deviceSales": 38, "planSales": 44, "attachPct": 86.4, "revenue": 266000.0},
+      {"month": 3, "deviceSales": 37, "planSales": 43, "attachPct": 86.0, "revenue": 259000.0},
+      {"month": 4, "deviceSales": 35, "planSales": 41, "attachPct": 85.4, "revenue": 245000.0},
+      {"month": 5, "deviceSales": 33, "planSales": 39, "attachPct": 84.6, "revenue": 231000.0},
+      {"month": 6, "deviceSales": 31, "planSales": 37, "attachPct": 83.8, "revenue": 217000.0}
+    ],
+    "dailySales": {}
+  },
+  {
+    "storeId": "CR019", "brandId": "BRAND_DS", "categoryId": "CAT_COMP", "year": 2026,
+    "monthlySales": [
+      {"month": 1, "deviceSales": 45, "planSales": 52, "attachPct": 86.5, "revenue": 270000.0},
+      {"month": 2, "deviceSales": 46, "planSales": 53, "attachPct": 86.8, "revenue": 276000.0},
+      {"month": 3, "deviceSales": 46, "planSales": 53, "attachPct": 86.8, "revenue": 276000.0},
+      {"month": 4, "deviceSales": 47, "planSales": 54, "attachPct": 87.0, "revenue": 282000.0},
+      {"month": 5, "deviceSales": 48, "planSales": 55, "attachPct": 87.3, "revenue": 288000.0},
+      {"month": 6, "deviceSales": 49, "planSales": 56, "attachPct": 87.5, "revenue": 294000.0}
+    ],
+    "dailySales": {}
+  },
+  {
+    "storeId": "CR019", "brandId": "BRAND_DSG", "categoryId": "CAT_COMP", "year": 2026,
+    "monthlySales": [
+      {"month": 1, "deviceSales": 22, "planSales": 26, "attachPct": 84.6, "revenue": 165000.0},
+      {"month": 2, "deviceSales": 23, "planSales": 27, "attachPct": 85.2, "revenue": 172500.0},
+      {"month": 3, "deviceSales": 23, "planSales": 27, "attachPct": 85.2, "revenue": 172500.0},
+      {"month": 4, "deviceSales": 24, "planSales": 28, "attachPct": 85.7, "revenue": 180000.0},
+      {"month": 5, "deviceSales": 24, "planSales": 28, "attachPct": 85.7, "revenue": 180000.0},
+      {"month": 6, "deviceSales": 25, "planSales": 29, "attachPct": 86.2, "revenue": 187500.0}
+    ],
+    "dailySales": {}
+  },
+  {
+    "storeId": "CR027", "brandId": "BRAND_DS", "categoryId": "CAT_LA", "year": 2026,
+    "monthlySales": [
+      {"month": 3, "deviceSales": 30, "planSales": 38, "attachPct": 78.9, "revenue": 195000.0},
+      {"month": 4, "deviceSales": 40, "planSales": 48, "attachPct": 83.3, "revenue": 260000.0},
+      {"month": 5, "deviceSales": 50, "planSales": 58, "attachPct": 86.2, "revenue": 325000.0},
+      {"month": 6, "deviceSales": 62, "planSales": 70, "attachPct": 88.6, "revenue": 403000.0}
+    ],
+    "dailySales": {}
+  },
+  {
+    "storeId": "CR027", "brandId": "BRAND_DSG", "categoryId": "CAT_LA", "year": 2026,
+    "monthlySales": [
+      {"month": 3, "deviceSales": 15, "planSales": 20, "attachPct": 75.0, "revenue": 112500.0},
+      {"month": 4, "deviceSales": 20, "planSales": 26, "attachPct": 76.9, "revenue": 150000.0},
+      {"month": 5, "deviceSales": 27, "planSales": 33, "attachPct": 81.8, "revenue": 202500.0},
+      {"month": 6, "deviceSales": 35, "planSales": 42, "attachPct": 83.3, "revenue": 262500.0}
+    ],
+    "dailySales": {}
+  },
+  {
+    "storeId": "CR043", "brandId": "BRAND_DS", "categoryId": "CAT_SA", "year": 2026,
+    "monthlySales": [
+      {"month": 1, "deviceSales": 20, "planSales": 28, "attachPct": 71.4, "revenue": 90000.0},
+      {"month": 2, "deviceSales": 19, "planSales": 27, "attachPct": 70.4, "revenue": 85500.0},
+      {"month": 3, "deviceSales": 18, "planSales": 26, "attachPct": 69.2, "revenue": 81000.0},
+      {"month": 4, "deviceSales": 17, "planSales": 25, "attachPct": 68.0, "revenue": 76500.0},
+      {"month": 5, "deviceSales": 16, "planSales": 24, "attachPct": 66.7, "revenue": 72000.0},
+      {"month": 6, "deviceSales": 15, "planSales": 23, "attachPct": 65.2, "revenue": 67500.0}
+    ],
+    "dailySales": {}
+  },
+  {
+    "storeId": "CR049", "brandId": "BRAND_DS", "categoryId": "CAT_ELEC", "year": 2026,
+    "monthlySales": [
+      {"month": 1, "deviceSales": 58, "planSales": 66, "attachPct": 87.9, "revenue": 319000.0},
+      {"month": 2, "deviceSales": 60, "planSales": 68, "attachPct": 88.2, "revenue": 330000.0},
+      {"month": 3, "deviceSales": 61, "planSales": 69, "attachPct": 88.4, "revenue": 335500.0},
+      {"month": 4, "deviceSales": 62, "planSales": 70, "attachPct": 88.6, "revenue": 341000.0},
+      {"month": 5, "deviceSales": 63, "planSales": 71, "attachPct": 88.7, "revenue": 346500.0},
+      {"month": 6, "deviceSales": 65, "planSales": 73, "attachPct": 89.0, "revenue": 357500.0}
+    ],
+    "dailySales": {}
+  },
+  {
+    "storeId": "CR049", "brandId": "BRAND_DSG", "categoryId": "CAT_ELEC", "year": 2026,
+    "monthlySales": [
+      {"month": 1, "deviceSales": 35, "planSales": 41, "attachPct": 85.4, "revenue": 262500.0},
+      {"month": 2, "deviceSales": 36, "planSales": 42, "attachPct": 85.7, "revenue": 270000.0},
+      {"month": 3, "deviceSales": 37, "planSales": 43, "attachPct": 86.0, "revenue": 277500.0},
+      {"month": 4, "deviceSales": 38, "planSales": 44, "attachPct": 86.4, "revenue": 285000.0},
+      {"month": 5, "deviceSales": 39, "planSales": 45, "attachPct": 86.7, "revenue": 292500.0},
+      {"month": 6, "deviceSales": 41, "planSales": 47, "attachPct": 87.2, "revenue": 307500.0}
+    ],
+    "dailySales": {}
+  },
+  {
+    "storeId": "CR055", "brandId": "BRAND_DS", "categoryId": "CAT_MOB", "year": 2026,
+    "monthlySales": [
+      {"month": 1, "deviceSales": 80, "planSales": 90, "attachPct": 88.9, "revenue": 440000.0},
+      {"month": 2, "deviceSales": 78, "planSales": 88, "attachPct": 88.6, "revenue": 429000.0},
+      {"month": 3, "deviceSales": 82, "planSales": 92, "attachPct": 89.1, "revenue": 451000.0},
+      {"month": 4, "deviceSales": 85, "planSales": 95, "attachPct": 89.5, "revenue": 467500.0},
+      {"month": 5, "deviceSales": 88, "planSales": 98, "attachPct": 89.8, "revenue": 484000.0},
+      {"month": 6, "deviceSales": 92, "planSales": 102, "attachPct": 90.2, "revenue": 506000.0}
+    ],
+    "dailySales": {}
+  },
+  {
+    "storeId": "CR055", "brandId": "BRAND_DSG", "categoryId": "CAT_MOB", "year": 2026,
+    "monthlySales": [
+      {"month": 1, "deviceSales": 50, "planSales": 58, "attachPct": 86.2, "revenue": 375000.0},
+      {"month": 2, "deviceSales": 48, "planSales": 56, "attachPct": 85.7, "revenue": 360000.0},
+      {"month": 3, "deviceSales": 52, "planSales": 60, "attachPct": 86.7, "revenue": 390000.0},
+      {"month": 4, "deviceSales": 55, "planSales": 63, "attachPct": 87.3, "revenue": 412500.0},
+      {"month": 5, "deviceSales": 58, "planSales": 66, "attachPct": 87.9, "revenue": 435000.0},
+      {"month": 6, "deviceSales": 62, "planSales": 70, "attachPct": 88.6, "revenue": 465000.0}
+    ],
+    "dailySales": {}
+  },
+  {
+    "storeId": "CR067", "brandId": "BRAND_DS", "categoryId": "CAT_SA", "year": 2026,
+    "monthlySales": [
+      {"month": 1, "deviceSales": 25, "planSales": 32, "attachPct": 78.1, "revenue": 112500.0},
+      {"month": 2, "deviceSales": 26, "planSales": 33, "attachPct": 78.8, "revenue": 117000.0},
+      {"month": 3, "deviceSales": 27, "planSales": 34, "attachPct": 79.4, "revenue": 121500.0},
+      {"month": 4, "deviceSales": 28, "planSales": 35, "attachPct": 80.0, "revenue": 126000.0},
+      {"month": 5, "deviceSales": 29, "planSales": 36, "attachPct": 80.6, "revenue": 130500.0},
+      {"month": 6, "deviceSales": 30, "planSales": 37, "attachPct": 81.1, "revenue": 135000.0}
+    ],
+    "dailySales": {}
+  }
+]

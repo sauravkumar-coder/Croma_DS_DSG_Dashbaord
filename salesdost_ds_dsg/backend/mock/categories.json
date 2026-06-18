@@ -1,0 +1,7 @@
+[
+  { "_id": "CAT_ELEC",  "categoryName": "Electronics" },
+  { "_id": "CAT_LA",    "categoryName": "Large Appliances" },
+  { "_id": "CAT_MOB",   "categoryName": "Mobile & Tablets" },
+  { "_id": "CAT_COMP",  "categoryName": "Computers & Peripherals" },
+  { "_id": "CAT_SA",    "categoryName": "Small Appliances" }
+]

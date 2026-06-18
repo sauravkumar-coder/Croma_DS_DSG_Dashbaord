@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+env/
+.venv/
+.env
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+*.local
+
+# Vite build output
+frontend/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Data uploads — keep folder structure, ignore uploaded files at all depths
+backend/data/**/*.xlsx
+backend/data/**/*.xls
+backend/data/*.xlsx
+backend/data/*.xls
+
+# Old file-based storage artifacts (replaced by MongoDB)
+backend/data/archive/
+backend/data/cache/
+backend/data/targets_meta.json
+backend/data/metadata/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# TypeScript
+*.tsbuildinfo
+2026-06_tracker_sales.xlsx
+202/6-07_tracker.xlsx
+Croma_DSG_Platform_Documnetation.docx
