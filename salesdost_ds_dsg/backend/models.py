@@ -5,12 +5,14 @@ Single source of truth for the database schema.  Every collection used by
 the application is defined here as a Beanie Document subclass.
 
 Collections:
-    Store         — Store master data (name, location, category, tier)
-    Brand         — Brand master data
-    Category      — Category master data
-    StoreBrand    — Store ↔ Brand mapping (junction table)
-    SalesRecord   — Monthly + daily sales per (store, brand, category, year)
-    StoreTarget   — Monthly revenue/unit targets per (store, brand, category, year)
+    Store              — Store master data (name, location, category, tier)
+    Brand              — Brand master data
+    ProductCategory    — Product category master data
+    StoreBrand         — Store ↔ Brand mapping (junction table)
+    SalesRecord        — Monthly + daily sales per (store, brand, category, year)
+    StoreTarget        — Monthly revenue/unit targets per (store, brand, category, year)
+    ProductModel       — Product model master data
+    ProductSubCategory — Product sub-category master data
 """
 
 from datetime import datetime
@@ -35,6 +37,13 @@ class Priority(str, Enum):
     HIGH   = "HIGH"
     MEDIUM = "MEDIUM"
     LOW    = "LOW"
+
+
+class PlanType(str, Enum):
+    ADLD  = "ADLD"
+    SP    = "SP"
+    COMBO = "COMBO"
+    EW    = "EW"
 
 
 # ── Nested models for JSON fields ──────────────────────────────────────────────
@@ -96,15 +105,15 @@ class Brand(Document):
         name = "Brand"
 
 
-# ── Collection 3: Category ─────────────────────────────────────────────────────
+# ── Collection 3: ProductCategory ─────────────────────────────────────────────
 
-class Category(Document):
+class ProductCategory(Document):
     id: str = Field(..., alias="_id")           # custom string ID from source
 
     categoryName: str
 
     class Settings:
-        name = "Category"
+        name = "ProductCategory"
 
 
 # ── Collection 4: StoreBrand (junction) ───────────────────────────────────────
@@ -125,10 +134,10 @@ class StoreBrand(Document):
 # Holds both monthly summary and daily breakdown.
 
 class SalesRecord(Document):
-    storeId:    str
-    brandId:    str
-    categoryId: str
-    year:       int
+    storeId:           str
+    brandId:           str
+    productCategoryId: str
+    year:              int
 
     # Monthly summary — 12 entries, one per month
     # [{ month: 1, deviceSales, planSales, attachPct, revenue }, ...]
@@ -147,14 +156,36 @@ class SalesRecord(Document):
 # Monthly revenue + unit targets per store per brand per category.
 
 class StoreTarget(Document):
-    storeId:    str
-    brandId:    str
-    categoryId: str
-    month:      int            # 1–12
-    year:       int            # e.g. 2026
+    storeId:           str
+    brandId:           str
+    productCategoryId: str
+    month:             int            # 1–12
+    year:              int            # e.g. 2026
 
     targetRevenue: Optional[float] = None
     targetUnits:   Optional[int]   = None
 
     class Settings:
         name = "StoreTarget"
+
+
+# ── Collection 7: ProductModel ─────────────────────────────────────────────────
+
+class ProductModel(Document):
+    name:      str
+    createdAt: datetime = Field(default_factory=datetime.utcnow)
+    updatedAt: datetime = Field(default_factory=datetime.utcnow)
+
+    class Settings:
+        name = "ProductModel"
+
+
+# ── Collection 8: ProductSubCategory ──────────────────────────────────────────
+
+class ProductSubCategory(Document):
+    name:      str
+    createdAt: datetime = Field(default_factory=datetime.utcnow)
+    updatedAt: datetime = Field(default_factory=datetime.utcnow)
+
+    class Settings:
+        name = "ProductSubCategory"

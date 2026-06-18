@@ -54,7 +54,7 @@ async def get_monthly_targets_by_store(
                 continue
             if brand_id and t.get("brandId") != brand_id:
                 continue
-            if category_id and t.get("categoryId") != category_id:
+            if category_id and t.get("productCategoryId") != category_id:
                 continue
             sid = t["storeId"]
             month = t["month"]
@@ -74,7 +74,7 @@ async def get_monthly_targets_by_store(
     if brand_id:
         match["brandId"] = brand_id
     if category_id:
-        match["categoryId"] = category_id
+        match["productCategoryId"] = category_id
 
     pipeline = [
         {"$match": match},

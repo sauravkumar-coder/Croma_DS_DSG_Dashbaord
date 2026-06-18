@@ -33,10 +33,12 @@ class Settings(BaseSettings):
     # ── Collection names — must match models.py Settings.name values ──────────
     STORE_COLLECTION: str = "Store"
     BRAND_COLLECTION: str = "Brand"
-    CATEGORY_COLLECTION: str = "Category"
+    PRODUCT_CATEGORY_COLLECTION: str = "ProductCategory"
     SALES_RECORD_COLLECTION: str = "SalesRecord"
     STORE_TARGET_COLLECTION: str = "StoreTarget"
     STORE_BRAND_COLLECTION: str = "StoreBrand"
+    PRODUCT_MODEL_COLLECTION: str = "ProductModel"
+    PRODUCT_SUB_CATEGORY_COLLECTION: str = "ProductSubCategory"
 
     # ── CORS ──────────────────────────────────────────────────────────────────
     # Comma-separated list of allowed origins.

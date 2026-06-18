@@ -37,7 +37,9 @@ async def connect_to_mongo() -> None:
     try:
         from models import (  # noqa: F401 — imported so Beanie registers them
             Brand,
-            Category,
+            ProductCategory,
+            ProductModel,
+            ProductSubCategory,
             SalesRecord,
             Store,
             StoreBrand,
@@ -49,7 +51,10 @@ async def connect_to_mongo() -> None:
         db = _client.get_default_database()
         await init_beanie(
             database=db,
-            document_models=[Store, Brand, Category, StoreBrand, SalesRecord, StoreTarget],
+            document_models=[
+                Store, Brand, ProductCategory, StoreBrand,
+                SalesRecord, StoreTarget, ProductModel, ProductSubCategory,
+            ],
         )
         logger.info(
             "MongoDB connected — database: %s  environment: %s",

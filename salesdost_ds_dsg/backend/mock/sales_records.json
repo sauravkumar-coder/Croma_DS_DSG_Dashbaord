@@ -1,6 +1,6 @@
 [
   {
-    "storeId": "CR001", "brandId": "BRAND_DS", "categoryId": "CAT_ELEC", "year": 2026,
+    "storeId": "CR001", "brandId": "BRAND_DS", "productCategoryId": "CAT_ELEC", "year": 2026,
     "monthlySales": [
       {"month": 1, "deviceSales": 52, "planSales": 60, "attachPct": 86.7, "revenue": 286000.0},
       {"month": 2, "deviceSales": 55, "planSales": 62, "attachPct": 88.7, "revenue": 302500.0},
@@ -12,7 +12,7 @@
     "dailySales": {}
   },
   {
-    "storeId": "CR001", "brandId": "BRAND_DSG", "categoryId": "CAT_ELEC", "year": 2026,
+    "storeId": "CR001", "brandId": "BRAND_DSG", "productCategoryId": "CAT_ELEC", "year": 2026,
     "monthlySales": [
       {"month": 1, "deviceSales": 30, "planSales": 35, "attachPct": 85.7, "revenue": 210000.0},
       {"month": 2, "deviceSales": 33, "planSales": 38, "attachPct": 86.8, "revenue": 231000.0},
@@ -24,7 +24,7 @@
     "dailySales": {}
   },
   {
-    "storeId": "CR002", "brandId": "BRAND_DS", "categoryId": "CAT_MOB", "year": 2026,
+    "storeId": "CR002", "brandId": "BRAND_DS", "productCategoryId": "CAT_MOB", "year": 2026,
     "monthlySales": [
       {"month": 1, "deviceSales": 70, "planSales": 78, "attachPct": 89.7, "revenue": 350000.0},
       {"month": 2, "deviceSales": 68, "planSales": 76, "attachPct": 89.5, "revenue": 340000.0},
@@ -36,7 +36,7 @@
     "dailySales": {}
   },
   {
-    "storeId": "CR002", "brandId": "BRAND_DSG", "categoryId": "CAT_MOB", "year": 2026,
+    "storeId": "CR002", "brandId": "BRAND_DSG", "productCategoryId": "CAT_MOB", "year": 2026,
     "monthlySales": [
       {"month": 1, "deviceSales": 40, "planSales": 46, "attachPct": 87.0, "revenue": 280000.0},
       {"month": 2, "deviceSales": 38, "planSales": 44, "attachPct": 86.4, "revenue": 266000.0},
@@ -48,7 +48,7 @@
     "dailySales": {}
   },
   {
-    "storeId": "CR019", "brandId": "BRAND_DS", "categoryId": "CAT_COMP", "year": 2026,
+    "storeId": "CR019", "brandId": "BRAND_DS", "productCategoryId": "CAT_COMP", "year": 2026,
     "monthlySales": [
       {"month": 1, "deviceSales": 45, "planSales": 52, "attachPct": 86.5, "revenue": 270000.0},
       {"month": 2, "deviceSales": 46, "planSales": 53, "attachPct": 86.8, "revenue": 276000.0},
@@ -60,7 +60,7 @@
     "dailySales": {}
   },
   {
-    "storeId": "CR019", "brandId": "BRAND_DSG", "categoryId": "CAT_COMP", "year": 2026,
+    "storeId": "CR019", "brandId": "BRAND_DSG", "productCategoryId": "CAT_COMP", "year": 2026,
     "monthlySales": [
       {"month": 1, "deviceSales": 22, "planSales": 26, "attachPct": 84.6, "revenue": 165000.0},
       {"month": 2, "deviceSales": 23, "planSales": 27, "attachPct": 85.2, "revenue": 172500.0},
@@ -72,7 +72,7 @@
     "dailySales": {}
   },
   {
-    "storeId": "CR027", "brandId": "BRAND_DS", "categoryId": "CAT_LA", "year": 2026,
+    "storeId": "CR027", "brandId": "BRAND_DS", "productCategoryId": "CAT_LA", "year": 2026,
     "monthlySales": [
       {"month": 3, "deviceSales": 30, "planSales": 38, "attachPct": 78.9, "revenue": 195000.0},
       {"month": 4, "deviceSales": 40, "planSales": 48, "attachPct": 83.3, "revenue": 260000.0},
@@ -82,7 +82,7 @@
     "dailySales": {}
   },
   {
-    "storeId": "CR027", "brandId": "BRAND_DSG", "categoryId": "CAT_LA", "year": 2026,
+    "storeId": "CR027", "brandId": "BRAND_DSG", "productCategoryId": "CAT_LA", "year": 2026,
     "monthlySales": [
       {"month": 3, "deviceSales": 15, "planSales": 20, "attachPct": 75.0, "revenue": 112500.0},
       {"month": 4, "deviceSales": 20, "planSales": 26, "attachPct": 76.9, "revenue": 150000.0},
@@ -92,7 +92,7 @@
     "dailySales": {}
   },
   {
-    "storeId": "CR043", "brandId": "BRAND_DS", "categoryId": "CAT_SA", "year": 2026,
+    "storeId": "CR043", "brandId": "BRAND_DS", "productCategoryId": "CAT_SA", "year": 2026,
     "monthlySales": [
       {"month": 1, "deviceSales": 20, "planSales": 28, "attachPct": 71.4, "revenue": 90000.0},
       {"month": 2, "deviceSales": 19, "planSales": 27, "attachPct": 70.4, "revenue": 85500.0},
@@ -104,7 +104,7 @@
     "dailySales": {}
   },
   {
-    "storeId": "CR049", "brandId": "BRAND_DS", "categoryId": "CAT_ELEC", "year": 2026,
+    "storeId": "CR049", "brandId": "BRAND_DS", "productCategoryId": "CAT_ELEC", "year": 2026,
     "monthlySales": [
       {"month": 1, "deviceSales": 58, "planSales": 66, "attachPct": 87.9, "revenue": 319000.0},
       {"month": 2, "deviceSales": 60, "planSales": 68, "attachPct": 88.2, "revenue": 330000.0},
@@ -116,7 +116,7 @@
     "dailySales": {}
   },
   {
-    "storeId": "CR049", "brandId": "BRAND_DSG", "categoryId": "CAT_ELEC", "year": 2026,
+    "storeId": "CR049", "brandId": "BRAND_DSG", "productCategoryId": "CAT_ELEC", "year": 2026,
     "monthlySales": [
       {"month": 1, "deviceSales": 35, "planSales": 41, "attachPct": 85.4, "revenue": 262500.0},
       {"month": 2, "deviceSales": 36, "planSales": 42, "attachPct": 85.7, "revenue": 270000.0},
@@ -128,7 +128,7 @@
     "dailySales": {}
   },
   {
-    "storeId": "CR055", "brandId": "BRAND_DS", "categoryId": "CAT_MOB", "year": 2026,
+    "storeId": "CR055", "brandId": "BRAND_DS", "productCategoryId": "CAT_MOB", "year": 2026,
     "monthlySales": [
       {"month": 1, "deviceSales": 80, "planSales": 90, "attachPct": 88.9, "revenue": 440000.0},
       {"month": 2, "deviceSales": 78, "planSales": 88, "attachPct": 88.6, "revenue": 429000.0},
@@ -140,7 +140,7 @@
     "dailySales": {}
   },
   {
-    "storeId": "CR055", "brandId": "BRAND_DSG", "categoryId": "CAT_MOB", "year": 2026,
+    "storeId": "CR055", "brandId": "BRAND_DSG", "productCategoryId": "CAT_MOB", "year": 2026,
     "monthlySales": [
       {"month": 1, "deviceSales": 50, "planSales": 58, "attachPct": 86.2, "revenue": 375000.0},
       {"month": 2, "deviceSales": 48, "planSales": 56, "attachPct": 85.7, "revenue": 360000.0},
@@ -152,7 +152,7 @@
     "dailySales": {}
   },
   {
-    "storeId": "CR067", "brandId": "BRAND_DS", "categoryId": "CAT_SA", "year": 2026,
+    "storeId": "CR067", "brandId": "BRAND_DS", "productCategoryId": "CAT_SA", "year": 2026,
     "monthlySales": [
       {"month": 1, "deviceSales": 25, "planSales": 32, "attachPct": 78.1, "revenue": 112500.0},
       {"month": 2, "deviceSales": 26, "planSales": 33, "attachPct": 78.8, "revenue": 117000.0},
