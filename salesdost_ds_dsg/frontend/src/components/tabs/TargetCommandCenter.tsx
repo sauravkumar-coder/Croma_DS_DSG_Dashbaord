@@ -178,11 +178,11 @@ function RiskBadge({ status }: { status: RiskStatus }) {
 }
 
 
-function DaySlider({ value, onChange, maxDay, targetMonth }: {
+function DaySlider({ value, onChange, maxDay, targetMonth, hasDailyData, latestSalesDate }: {
   value: number; onChange: (v: number) => void; maxDay: number; targetMonth: string
+  hasDailyData: boolean; latestSalesDate?: string | null
 }) {
   const totalDays = getDaysInMonth(targetMonth)
-  // Cap the slider at the latest day that has actual sales data.
   const effectiveMax = Math.min(Math.max(1, maxDay), totalDays)
   const pct = effectiveMax > 1 ? ((value - 1) / (effectiveMax - 1)) * 100 : 100
   return (
@@ -198,7 +198,14 @@ function DaySlider({ value, onChange, maxDay, targetMonth }: {
           <div>
             <p className="text-sm font-semibold text-gray-900">Day of Month Simulator</p>
             <p className="text-[11px] text-gray-500">
-              Tracking: <span className="text-gray-700 font-medium">{targetMonth}</span> · Sales data available through Day {effectiveMax} of {totalDays}
+              Tracking: <span className="text-gray-700 font-medium">{targetMonth}</span>
+              {hasDailyData
+                ? <> · Sales data available through Day {effectiveMax} of {totalDays}</>
+                : <> · Monthly aggregate · {totalDays} days</>
+              }
+              {latestSalesDate && (
+                <> · <span className="text-emerald-600 font-medium">Latest: {formatSalesDate(latestSalesDate)}</span></>
+              )}
             </p>
           </div>
         </div>
@@ -369,19 +376,36 @@ export default function TargetCommandCenter() {
 
   useEffect(() => { initTracker() }, [initTracker])
 
+  // ── Fallback: use DataContext monthly_sales when tracker has no sales rows ──
+  // This fires when a month is loaded with targets but empty sales_rows (e.g.
+  // sales haven't been ingested into the tracker collection yet).  We populate
+  // salesMap from the dashboard store records so KPIs and charts show real data.
+  useEffect(() => {
+    if (!currentMonth || salesMap.size > 0 || !dashboardStores.length) return
+    const fb = new Map<string, number>()
+    for (const store of dashboardStores) {
+      const s = store.monthly_sales[currentMonth]
+      if (s && s > 0) fb.set(store.store_id, s)
+    }
+    if (fb.size > 0) setSalesMap(fb)
+  }, [currentMonth, salesMap, dashboardStores])
+
   // ── Sales active map: respects day slider ─────────────────────────────────
 
+  // filtered_sales = sales_data[sales_date <= selected_date]
+  // effectiveDay caps the selected day at maxElapsed so future-date data can never leak in.
   const activeSalesMap = useMemo(() => {
     const hasDateInfo = rawSalesRows.some(r => r.day > 0)
     if (!hasDateInfo) return salesMap
+    const effectiveDay = Math.min(dayOfMonth, maxElapsed)
     const map = new Map<string, number>()
     for (const r of rawSalesRows) {
-      if (r.day === 0 || r.day <= dayOfMonth) {
+      if (r.day === 0 || r.day <= effectiveDay) {
         map.set(r.storeName, (map.get(r.storeName) ?? 0) + r.sales)
       }
     }
     return map
-  }, [rawSalesRows, dayOfMonth, salesMap])
+  }, [rawSalesRows, dayOfMonth, maxElapsed, salesMap])
 
   const targetMonth = currentMonth ?? ''
   const totalDays   = useMemo(() => getDaysInMonth(targetMonth), [targetMonth])
@@ -397,7 +421,7 @@ export default function TargetCommandCenter() {
   // ── Per-store calculations ────────────────────────────────────────────────
 
   const storeCalcs = useMemo(() => {
-    const elapsed   = Math.max(1, dayOfMonth)
+    const elapsed   = Math.max(1, Math.min(dayOfMonth, maxElapsed))
     const remaining = Math.max(0, totalDays - elapsed)
     return filteredEntries.map(([storeName, target]) => {
       const store: LocalStore = {
@@ -420,12 +444,12 @@ export default function TargetCommandCenter() {
       const remainingStatus = getRemainingStatus(projAchPct)
       return { store, target, currentSales, achPct, expectedPct, gap, gapPct, projected, projAchPct, reqDRR, expectedSales, status, dailyTarget, runRateAchPct, remainingStatus }
     })
-  }, [filteredEntries, dayOfMonth, totalDays, activeSalesMap, storeStateMap, targetKeyToName])
+  }, [filteredEntries, dayOfMonth, maxElapsed, totalDays, activeSalesMap, storeStateMap, targetKeyToName])
 
   // ── National roll-up ──────────────────────────────────────────────────────
 
   const national = useMemo(() => {
-    const elapsed     = Math.max(1, dayOfMonth)
+    const elapsed     = Math.max(1, Math.min(dayOfMonth, maxElapsed))
     const remaining   = Math.max(0, totalDays - elapsed)
     const totalTarget = storeCalcs.reduce((s, d) => s + d.target, 0)
     const totalSales  = storeCalcs.reduce((s, d) => s + d.currentSales, 0)
@@ -440,7 +464,7 @@ export default function TargetCommandCenter() {
       remaining_target: Math.max(0, gap),
       elapsed, remaining,
     }
-  }, [storeCalcs, dayOfMonth, totalDays])
+  }, [storeCalcs, dayOfMonth, maxElapsed, totalDays])
 
   // ── Gauge ─────────────────────────────────────────────────────────────────
 
@@ -993,10 +1017,15 @@ export default function TargetCommandCenter() {
         )}
       </AnimatePresence>
 
-      {/* ── Day Slider — shown only when per-day sales data is available ── */}
-      {rawSalesRows.some(r => r.day > 0) && (
-        <DaySlider value={dayOfMonth} onChange={setDayOfMonth} maxDay={maxElapsed} targetMonth={targetMonth} />
-      )}
+      {/* ── Day Slider ── */}
+      <DaySlider
+        value={dayOfMonth}
+        onChange={setDayOfMonth}
+        maxDay={maxElapsed}
+        targetMonth={targetMonth}
+        hasDailyData={rawSalesRows.some(r => r.day > 0)}
+        latestSalesDate={latestSalesDate}
+      />
 
       {/* ── ROW 1: KPI Cards ── */}
       <motion.div

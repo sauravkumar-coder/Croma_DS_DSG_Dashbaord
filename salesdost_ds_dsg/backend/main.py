@@ -412,6 +412,13 @@ async def get_tracker_data(month: str):
         year, month_int, brand_id, from_daily
     )
 
+    # Determine the ceiling for day filtering.  For the current month, we must
+    # never expose entries dated beyond today — the database may contain
+    # erroneously future-dated rows that would otherwise inflate max_elapsed
+    # and show data that doesn't yet exist.
+    now = datetime.now()
+    current_month_day_cap = now.day if (year == now.year and month_int == now.month) else None
+
     sales_rows: list[dict[str, Any]] = []
     for sid, monthly_rev in revenue_map.items():
         if month_int not in monthly_rev:
@@ -424,7 +431,10 @@ async def get_tracker_data(month: str):
         daily_entries = daily_rev_map.get(sid, [])
         if daily_entries:
             # One row per calendar day so the frontend can filter by slider day.
+            # Cap at current_month_day_cap to exclude any future-dated DB rows.
             for day, revenue in daily_entries:
+                if current_month_day_cap is not None and day > current_month_day_cap:
+                    continue
                 sales_rows.append({
                     "store_name": store_name_val,
                     "store_key":  store_code,
@@ -448,14 +458,14 @@ async def get_tracker_data(month: str):
     # For current-month brands with daily data this reflects the last loaded
     # day (e.g. Jun 16), not today's calendar day — so the slider never shows
     # days beyond the available data.  Past months always use full month total.
-    now = datetime.now()
     if year < now.year or (year == now.year and month_int < now.month):
         _, total_days = monthrange(year, month_int)
         max_elapsed = total_days
     elif year == now.year and month_int == now.month:
-        # Prefer the highest day number found in the actual daily data.
+        # Only count days that passed the cap above — excludes future-dated rows.
         actual_max_day = max(
-            (day for entries in daily_rev_map.values() for day, _ in entries),
+            (day for entries in daily_rev_map.values() for day, _ in entries
+             if day <= now.day),
             default=0,
         )
         max_elapsed = actual_max_day if actual_max_day > 0 else now.day

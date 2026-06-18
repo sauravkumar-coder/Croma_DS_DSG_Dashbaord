@@ -89,15 +89,16 @@ function buildRows(
   targetMap: Map<string, number>,
   salesMap:  Map<string, number>,
   elapsed:   number,
+  totalDays: number,
 ): StoreRow[] {
   return [...targetMap.entries()].map(([storeName, monthlyTarget]) => {
     const currentSales          = salesMap.get(storeName) ?? 0
-    const dailyTarget           = monthlyTarget / 30
+    const dailyTarget           = monthlyTarget / totalDays
     const expectedSalesTillDate = dailyTarget * elapsed
     const runRateAchPct         = expectedSalesTillDate > 0 ? (currentSales / expectedSalesTillDate) * 100 : 0
     const monthlyAchPct         = monthlyTarget > 0 ? (currentSales / monthlyTarget) * 100 : 0
     const remainingTarget       = Math.max(0, monthlyTarget - currentSales)
-    const projectedMonthEnd     = elapsed > 0 ? (currentSales / elapsed) * 30 : 0
+    const projectedMonthEnd     = elapsed > 0 ? (currentSales / elapsed) * totalDays : 0
     const projectedAchPct       = monthlyTarget > 0 ? (projectedMonthEnd / monthlyTarget) * 100 : 0
     return {
       storeName, monthlyTarget, currentSales, dailyTarget, elapsedDays: elapsed,
@@ -126,6 +127,21 @@ function formatSalesDate(dateStr: string): string {
   if (parts.length < 3) return dateStr
   const [year, month, day] = parts
   return `${day} ${MONTHS[month - 1]} ${year}`
+}
+
+function getDaysInMonth(monthStr: string): number {
+  const DAYS: Record<string, number> = {
+    Jan: 31, Feb: 28, Mar: 31, Apr: 30, May: 31, Jun: 30,
+    Jul: 31, Aug: 31, Sep: 30, Oct: 31, Nov: 30, Dec: 31,
+  }
+  const parts = monthStr.split('-')
+  if (parts.length !== 2) return 30
+  const [abbr, yearStr] = parts
+  const year = parseInt(yearStr, 10)
+  if (abbr === 'Feb' && !isNaN(year)) {
+    if ((year % 4 === 0 && year % 100 !== 0) || year % 400 === 0) return 29
+  }
+  return DAYS[abbr] ?? 30
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -336,8 +352,8 @@ function ThermometerChart({ rows, filter, onFilter }: { rows: StoreRow[]; filter
 // Chart 3: Target Risk Matrix
 // ─────────────────────────────────────────────────────────────────────────────
 
-function RiskMatrix({ rows, elapsed }: { rows: StoreRow[]; elapsed: number }) {
-  const midX = (elapsed / 30) * 100
+function RiskMatrix({ rows, elapsed, totalDays }: { rows: StoreRow[]; elapsed: number; totalDays: number }) {
+  const midX = (elapsed / totalDays) * 100
   const minS = Math.max(1, Math.min(...rows.map(r => r.currentSales)))
   const maxS = Math.max(1, Math.max(...rows.map(r => r.currentSales)))
   const sz   = (s: number) => 8 + ((Math.log(Math.max(1, s)) - Math.log(minS)) / (Math.log(maxS) - Math.log(minS) || 1)) * 30
@@ -737,23 +753,29 @@ export default function TargetTrackerPage() {
 
   // ── Computed rows ──────────────────────────────────────────────────────────
 
+  const totalDays = useMemo(() => getDaysInMonth(currentMonth ?? ''), [currentMonth])
+
+  // filtered_sales = sales_data[sales_date <= selected_date]
+  // Cap at maxElapsed so a future day can never slip through even if slider state is stale.
   const activeSalesMap = useMemo(() => {
     if (!rawSalesRows.length) return salesMap
     const hasDateInfo = rawSalesRows.some(r => r.day > 0)
     if (!hasDateInfo) return salesMap
+    const effectiveDay = Math.min(sliderDay, maxElapsed)
     const map = new Map<string, number>()
     for (const r of rawSalesRows) {
-      if (r.day === 0 || r.day <= sliderDay) {
+      if (r.day === 0 || r.day <= effectiveDay) {
         map.set(r.storeName, (map.get(r.storeName) ?? 0) + r.sales)
       }
     }
     return map
-  }, [rawSalesRows, sliderDay, salesMap])
+  }, [rawSalesRows, sliderDay, maxElapsed, salesMap])
 
   const rows = useMemo<StoreRow[]>(() => {
-    if (!targetMap.size || !activeSalesMap.size) return []
-    return buildRows(targetMap, activeSalesMap, sliderDay > 0 ? sliderDay : elapsed)
-  }, [targetMap, activeSalesMap, sliderDay, elapsed])
+    if (!targetMap.size) return []
+    const effectiveDay = Math.min(sliderDay > 0 ? sliderDay : elapsed, maxElapsed)
+    return buildRows(targetMap, activeSalesMap, effectiveDay, totalDays)
+  }, [targetMap, activeSalesMap, sliderDay, elapsed, maxElapsed, totalDays])
 
   const filteredRows = useMemo(() => {
     if (!selectedState || !storeStateMap.size) return rows
@@ -874,7 +896,7 @@ export default function TargetTrackerPage() {
               <div>
                 <p className="text-sm font-bold leading-none" style={{ color:C.text }}>Target Command Center</p>
                 <p className="text-[10px] mt-0.5" style={{ color:C.dim }}>
-                  {filteredRows.length} stores{selectedState ? ` · ${selectedState}` : ''}{currentMonth ? ` · ${currentMonth}` : ''} · Day {sliderDay || elapsed} of 30
+                  {filteredRows.length} stores{selectedState ? ` · ${selectedState}` : ''}{currentMonth ? ` · ${currentMonth}` : ''} · Day {sliderDay || elapsed} of {totalDays}
                 </p>
               </div>
             </div>
@@ -945,7 +967,7 @@ export default function TargetTrackerPage() {
                 sub={`${filteredRows.length} stores${selectedState ? ` · ${selectedState}` : ''}`}
                 glowColor={C.blue} icon={<Target className="h-4 w-4" />} />
               <KPICard label="Current Sales" value={fmtInr(kpis!.totSales)}
-                sub={`Day ${sliderDay || elapsed} of 30`} icon={<BarChart2 className="h-4 w-4" />} />
+                sub={`Day ${sliderDay || elapsed} of ${totalDays}`} icon={<BarChart2 className="h-4 w-4" />} />
               <KPICard label="Overall Achievement" value={fmtPct(kpis!.overallAch)}
                 sub="vs monthly target" glowColor={maAchColor}
                 icon={kpis!.overallAch >= 100 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />} />
@@ -974,7 +996,7 @@ export default function TargetTrackerPage() {
           {/* ── Date Slider ── */}
           {maxElapsed > 0 && rawSalesRows.some(r => r.day > 0) && (
             <section>
-              <SectionHeader title="Time Travel" sub={`Replay month progress · Viewing Day ${sliderDay} of ${maxElapsed}`} accent={C.violet} />
+              <SectionHeader title="Time Travel" sub={`Replay month progress · Viewing Day ${sliderDay} of ${totalDays} · Data available through Day ${maxElapsed}`} accent={C.violet} />
               <div className="rounded-xl border p-5" style={{ backgroundColor:C.surface, borderColor:C.border }}>
                 <div className="flex items-start justify-between gap-4 mb-4 flex-wrap">
                   <div className="flex flex-wrap items-center gap-2">
@@ -998,7 +1020,7 @@ export default function TargetTrackerPage() {
                   </div>
                   <div className="text-right shrink-0">
                     <p className="text-3xl font-bold tabular-nums leading-none" style={{ color:C.blue }}>Day {sliderDay}</p>
-                    <p className="text-[10px] mt-1" style={{ color:C.dim }}>{Math.round((sliderDay / 30) * 100)}% through month</p>
+                    <p className="text-[10px] mt-1" style={{ color:C.dim }}>{Math.round((sliderDay / totalDays) * 100)}% through month</p>
                   </div>
                 </div>
                 <input type="range" min={1} max={maxElapsed} value={sliderDay}
@@ -1030,7 +1052,7 @@ export default function TargetTrackerPage() {
           <section className="grid grid-cols-1 gap-6 xl:grid-cols-3">
             <div className="xl:col-span-2">
               <SectionHeader title="Target Risk Matrix" sub="The primary management view — where to intervene" accent={C.violet} />
-              <RiskMatrix rows={filteredRows} elapsed={sliderDay || elapsed} />
+              <RiskMatrix rows={filteredRows} elapsed={sliderDay || elapsed} totalDays={totalDays} />
             </div>
             <div>
               <SectionHeader title="Network Distribution" sub="Achievement band breakdown" accent={C.amber} />
