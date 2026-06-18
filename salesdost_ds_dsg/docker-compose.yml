@@ -1,32 +1,28 @@
-services:
+version: '3.8'
 
+services:
   backend:
-    build:
-      context: ./salesdost_ds_dsg/backend
-    restart: unless-stopped
+    build: ./backend
+    container_name: samsung-dashboard-backend
     ports:
-      - "8000:8000"          # optional: expose for direct API access / debugging
+      - "8000:8000"
+    volumes:
+      - backend-data:/app/data
     environment:
-      - MONGO_URI=${MONGO_URI:-}
-      - DATABASE_NAME=${DATABASE_NAME:-ds_dsg_tracker}
-      - BRAND_ID=${BRAND_ID:-brand_007}
-      - BRAND_USES_DAILY_SALES=${BRAND_USES_DAILY_SALES:-true}
-      - USE_MOCK_DATA=${USE_MOCK_DATA:-true}
-      - ENVIRONMENT=${ENVIRONMENT:-production}
-      - ALLOWED_ORIGINS=*
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+      # Direct connection parameter is important for SSH tunnels / replica sets
+      - MONGO_URI=mongodb://host.docker.internal:27018/zoppertrack?directConnection=true
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: always
 
   frontend:
-    build:
-      context: ./salesdost_ds_dsg/frontend
-    restart: unless-stopped
+    build: ./frontend
+    container_name: samsung-dashboard-frontend
     ports:
       - "80:80"
     depends_on:
-      backend:
-        condition: service_healthy
+      - backend
+    restart: always
+
+volumes:
+  backend-data:

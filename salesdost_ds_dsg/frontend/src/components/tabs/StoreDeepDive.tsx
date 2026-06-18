@@ -10,7 +10,7 @@ import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
 import { allocatePhases, type StoreCategory } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
-import { fmtInr, fmtPct, fmtCount } from '@/lib/formatting'
+import { fmtInr, fmtPct, plotlyInrTickVals } from '@/lib/formatting'
 import { PT } from '@/lib/plotlyTheme'
 
 const Plot = createPlotlyComponent(Plotly)
@@ -387,8 +387,6 @@ interface Props { filters: FilterState; initialStoreId?: string | null }
 export default function StoreDeepDive({ filters, initialStoreId }: Props) {
   const { stores, months, classification } = useDataContext()
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [showWfInfo, setShowWfInfo]         = useState(false)
-  const [showWfValidate, setShowWfValidate] = useState(false)
   const lastFilterKey = useRef('')
   const autoSelected = useRef(false)
   const filtersRef = useRef(filters)
@@ -519,67 +517,11 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
       return { month: m, rev, mom, rank, total: stores.length, activity }
     })
 
-    // ── Waterfall — identical revenue source as the Revenue Trend chart ──────────
-    // Uses revByMonth (already computed from selectedStore.monthly_sales[m] above)
-    // so both charts are guaranteed to show the same per-month revenue figures.
-    const wfMonthly = fm.map((m, i) => {
-      const rev    = revByMonth[i]               // same array that Revenue Trend renders
-      const prev   = i > 0 ? revByMonth[i - 1] : 0
-      const change = i === 0 ? rev : rev - prev
-      return { month: m, rev, change, isFirst: i === 0, isTotal: false as const }
+    const waterfallData = fm.map((m, i) => {
+      const rev  = selectedStore.monthly_sales[m] ?? 0
+      const prev = i > 0 ? (selectedStore.monthly_sales[fm[i - 1]] ?? 0) : 0
+      return { month: m, rev, change: i === 0 ? rev : rev - prev, isFirst: i === 0 }
     })
-
-    const wfStartingRev = wfMonthly[0]?.rev ?? 0
-    const wfFinalRev    = wfMonthly[wfMonthly.length - 1]?.rev ?? 0
-    const wfPositive    = wfMonthly.slice(1).reduce((s, d) => s + (d.change > 0 ? d.change : 0), 0)
-    const wfNegative    = Math.abs(wfMonthly.slice(1).reduce((s, d) => s + (d.change < 0 ? d.change : 0), 0))
-    const wfNetChange   = wfPositive - wfNegative
-    const wfReconcile   = wfFinalRev - (wfStartingRev + wfNetChange)
-
-    // Running cumulative sum of monthly revenues (Jan → Feb → … → last month)
-    let _cumulRev = 0
-    const wfRunningTotals = wfMonthly.map(d => { _cumulRev += d.rev; return _cumulRev })
-    const totalOrders = fm.reduce((s, m) => s + (selectedStore.monthly_plans_count?.[m] ?? 0), 0)
-
-    // No "Total" bar in the chart — the waterfall ends at the last month naturally.
-    // Period total is shown in the summary cards below the chart.
-    const waterfallData = wfMonthly
-
-    // customdata per bar — 8 slots:
-    //   [0] actual revenue (numeric)  [1] formatted revenue string
-    //   [2] MoM change (formatted ₹)  [3] MoM change (formatted %)
-    //   [4] cumulative YTD (string)   [5] % of period total (string)
-    //   [6] plans sold (number)       [7] bar label
-    const wfCustomData = wfMonthly.map((d, i) => {
-      const orders  = selectedStore.monthly_plans_count?.[d.month] ?? 0
-      const contrib = totalRev > 0 ? (d.rev / totalRev * 100) : 0
-      const runTot  = wfRunningTotals[i] ?? d.rev
-
-      if (d.isFirst) {
-        return [
-          d.rev, fmtInr(d.rev),
-          '—', '—',
-          fmtInr(runTot),
-          `${contrib.toFixed(1)}%`,
-          orders,
-          'Baseline',
-        ]
-      }
-      const prevRev = wfMonthly[i - 1]?.rev ?? 0
-      const momPct  = prevRev > 0 ? (d.change / prevRev * 100) : 0
-      const label   = d.change > 0 ? '▲ Gain' : d.change < 0 ? '▼ Loss' : '→ Flat'
-      return [
-        d.rev, fmtInr(d.rev),
-        d.change >= 0 ? `+${fmtInr(d.change)}` : fmtInr(d.change),
-        fmtPct(momPct),
-        fmtInr(runTot),
-        `${contrib.toFixed(1)}%`,
-        orders,
-        label,
-      ]
-    })
-
-    const wfReconciliation = { wfStartingRev, wfPositive, wfNegative, wfNetChange, wfFinalRev, wfReconcile }
 
     const selectorLabel = `${selectedStore.store_id} · ${fmtInr(totalRev)} · ${tag}`
 
@@ -589,53 +531,10 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
       earlyAvgVal, recentAvgVal, earlyHalf, recentHalf,
       rankEarly, rankMid, rankRecent, rankImprovement,
       networkRank, stateRank, stateTotal: stateStores.length,
-      tableRows, wfMonthly, waterfallData, wfCustomData, wfReconciliation, selectorLabel,
+      tableRows, waterfallData, selectorLabel,
       currMonthLabel, prevMonthLabel, currDailyRev, prevDailyRev, dailyRevMoM,
     }
   }, [selectedStore, stores, fm])
-
-  useEffect(() => {
-    if (!derived || !selectedId || !selectedStore) return
-    const r         = derived.wfReconciliation
-    const wfMonths  = derived.wfMonthly
-    const trendRevs = derived.revByMonth   // Revenue Trend chart source
-
-    console.group(`[Revenue Journey Audit] Store: ${selectedId}`)
-    console.log('Revenue source: selectedStore.monthly_sales[m] — shared by Revenue Trend chart and Waterfall')
-    console.log('Aggregation  : monthly_sales = DS + DSG combined (backend parser)')
-    console.log('')
-    console.log('Month         | Revenue Trend | Waterfall Rev | Diff | Plans | Cumulative YTD')
-
-    let allOk    = true
-    let cumulYTD = 0
-    wfMonths.forEach((d, i) => {
-      const trendRev = trendRevs[i]
-      const wfRev    = d.rev
-      const diff     = +(trendRev - wfRev).toFixed(2)
-      const plans    = selectedStore.monthly_plans_count?.[d.month] ?? 0
-      cumulYTD      += wfRev
-      if (Math.abs(diff) > 0.01) allOk = false
-      console.log(
-        `${d.month.padEnd(12)} | ${fmtInr(trendRev).padEnd(13)} | ${fmtInr(wfRev).padEnd(13)} | ${Math.abs(diff) <= 0.01 ? '✓ 0' : `⚠ ${diff}`} | ${fmtCount(plans).padEnd(5)} | ${fmtInr(cumulYTD)}`,
-      )
-    })
-
-    if (!allOk) {
-      console.error('⚠ MISMATCH — Revenue Trend and Waterfall diverge for some months. Check monthly_sales keys.')
-    } else {
-      console.log('✓ Revenue Trend and Waterfall are identical — both use the same monthly_sales source.')
-    }
-
-    console.log('')
-    console.log('─── Waterfall Reconciliation ───')
-    console.log('Starting Revenue (first month) :', fmtInr(r.wfStartingRev))
-    console.log('+ Positive Contributions        :', fmtInr(r.wfPositive))
-    console.log('- Negative Contributions        :', fmtInr(r.wfNegative))
-    console.log('= Net Change                    :', fmtInr(r.wfNetChange))
-    console.log('Final Revenue (last month)      :', fmtInr(r.wfFinalRev))
-    console.log('Reconciliation Difference       :', r.wfReconcile.toFixed(4), Math.abs(r.wfReconcile) <= 0.01 ? '✓' : '⚠')
-    console.groupEnd()
-  }, [derived, selectedId, selectedStore])
 
   const cardBase = 'rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden'
 
@@ -713,7 +612,7 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
     totalRev, avgMonthRev, activeMonths,
     rankEarly, rankMid, rankRecent, rankImprovement,
     networkRank, stateRank, stateTotal,
-    tableRows, wfMonthly, waterfallData, wfCustomData, wfReconciliation, selectorLabel,
+    tableRows, waterfallData, selectorLabel,
     currMonthLabel, prevMonthLabel, currDailyRev, prevDailyRev, dailyRevMoM,
   } = derived
 
@@ -920,8 +819,8 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
                       orientation: 'h' as const, x: 0, y: -0.22,
                     },
                     xaxis:  { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true },
-                    yaxis:  { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true, tickformat: ',.0s', title: { text: 'Monthly Rev (₹)' } },
-                    yaxis2: { gridcolor: 'transparent', linecolor: PT.line, tickcolor: PT.line, overlaying: 'y' as const, side: 'right' as const, tickformat: ',.0s', title: { text: 'Daily Avg (₹)' } },
+                    yaxis:  { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true, title: { text: 'Monthly Rev (₹)' }, ...plotlyInrTickVals(revByMonth.length ? Math.max(...revByMonth) : 0) },
+                    yaxis2: { gridcolor: 'transparent', linecolor: PT.line, tickcolor: PT.line, overlaying: 'y' as const, side: 'right' as const, title: { text: 'Daily Avg (₹)' }, ...plotlyInrTickVals(dailyRevByMonth.length ? Math.max(...dailyRevByMonth) : 0, 4) },
                     hovermode: 'x unified' as const,
                     margin: { l: 52, r: 62, t: 12, b: 80 },
                     height: 270,
@@ -1106,80 +1005,10 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
             <motion.div {...panelSpring(0.23)} className={cn(cardBase, 'lg:col-span-3')}>
               <div className="h-[3px] bg-gradient-to-r from-blue-500 to-sky-400" />
               <div className="p-4">
-
-                {/* Header + info toggle */}
-                <div className="flex items-start justify-between gap-2 mb-1">
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-800">Revenue Journey Waterfall</h3>
-                    <p className="text-[11px] text-gray-500 mt-0.5">
-                      Month-by-month revenue movement — baseline → gains / losses → final revenue
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => setShowWfInfo(v => !v)}
-                      className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-100 transition-colors"
-                    >
-                      <span>{showWfInfo ? 'Hide' : 'How to read'}</span>
-                      <svg className={cn('h-3 w-3 transition-transform', showWfInfo && 'rotate-180')} viewBox="0 0 20 20" fill="currentColor">
-                        <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowWfValidate(v => !v)}
-                      className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold text-slate-500 bg-slate-50 hover:bg-slate-100 border border-slate-200 transition-colors"
-                    >
-                      <span>{showWfValidate ? 'Hide data' : 'Validate'}</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Collapsible info panel */}
-                <AnimatePresence>
-                  {showWfInfo && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0 }}
-                      transition={{ duration: 0.2 }}
-                      className="overflow-hidden"
-                    >
-                      <div className="mb-3 rounded-lg border border-blue-100 bg-blue-50/50 px-3 py-2.5 space-y-2 text-[10.5px] text-gray-500 leading-relaxed">
-                        <p>
-                          <span className="font-semibold text-gray-700">What it shows:</span>{' '}
-                          The Revenue Journey traces how this store's revenue changed{' '}
-                          <span className="font-medium text-gray-600">month by month</span>{' '}
-                          across the selected period — from the very first month's baseline to the final month's revenue.
-                          Each bar adds or subtracts from the running total.
-                        </p>
-                        <div className="space-y-1.5">
-                          <p className="font-semibold text-gray-600">Each bar represents:</p>
-                          {[
-                            { color: '#6366f1', label: 'First bar — Starting Baseline', desc: 'The absolute revenue earned in the first selected month. This anchors the entire journey.' },
-                            { color: '#10b981', label: 'Green bars — Monthly Gains',    desc: 'Months where revenue increased vs the prior month. Bar height = the rupee gain.' },
-                            { color: '#ef4444', label: 'Red bars — Monthly Losses',     desc: 'Months where revenue declined vs the prior month. Bar depth = the rupee loss.' },
-                            { color: '#6366f1', label: 'Final bar — Period Total',      desc: "The cumulative running total at period end, equal to the last month's actual revenue." },
-                          ].map(({ color, label, desc }) => (
-                            <div key={label} className="flex items-start gap-2">
-                              <span className="mt-0.5 h-2.5 w-2.5 rounded shrink-0" style={{ background: color }} />
-                              <div>
-                                <span className="font-semibold text-gray-600">{label}:</span>
-                                <span className="ml-1 text-gray-400">{desc}</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                        <p className="text-[10px] text-gray-400 pt-1.5 border-t border-blue-100">
-                          <span className="font-medium text-gray-500">Formula:</span>{' '}
-                          Final Revenue = Starting Baseline + Σ Gains − Σ Losses · The reconciliation difference is always zero.
-                        </p>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
+                <h3 className="text-sm font-semibold text-gray-800">Revenue Journey Waterfall</h3>
+                <p className="text-[11px] text-gray-500 mt-0.5 mb-3">
+                  How the store moved from early baseline to recent revenue, month by month
+                </p>
                 <Plot
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   data={[{
@@ -1187,128 +1016,29 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
                     orientation: 'v',
                     x:           waterfallData.map(d => d.month),
                     y:           waterfallData.map(d => d.change),
-                    measure:     waterfallData.map(d => d.isFirst ? 'absolute' : 'relative'),
-                    customdata:  wfCustomData,
+                    measure:     waterfallData.map((_, i) => i === 0 ? 'absolute' : 'relative'),
                     connector:   { line: { color: '#e2e8f0', width: 1 } },
                     increasing:  { marker: { color: '#10b981', opacity: 0.88 } },
                     decreasing:  { marker: { color: '#ef4444', opacity: 0.88 } },
-                    texttemplate: '%{customdata[1]}',
-                    textposition: 'outside' as const,
+                    totals:      { marker: { color: '#6366f1', opacity: 0.88 } },
+                    text:        waterfallData.map(d => fmtInr(d.change)),
+                    textposition: 'outside',
                     textfont:    { size: 9, color: '#374151' },
-                    hovertemplate: [
-                      '<b>%{x}</b>',
-                      '<i>%{customdata[7]}</i>',
-                      '─────────────────────',
-                      'Monthly Revenue : <b>%{customdata[1]}</b>',
-                      'MoM Change      : <b>%{customdata[2]}</b>  <b>%{customdata[3]}</b>',
-                      '─────────────────────',
-                      'Cumul. YTD      : <b>%{customdata[4]}</b>',
-                      '% of Period     : <b>%{customdata[5]}</b>',
-                      'Plans Sold      : <b>%{customdata[6]}</b>',
-                      '<extra></extra>',
-                    ].join('<br>'),
+                    hovertemplate: '<b>%{x}</b><br>%{text}<extra></extra>',
                   } as any]}
                   layout={{
                     paper_bgcolor: 'rgba(0,0,0,0)',
                     plot_bgcolor:  'rgba(0,0,0,0)',
                     font:   { color: PT.font, family: 'Inter, sans-serif', size: 11 },
                     xaxis:  { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true },
-                    yaxis:  { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true, tickformat: ',.0s' },
+                    yaxis:  { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true, ...plotlyInrTickVals(waterfallData.length ? Math.max(...waterfallData.map(d => d.rev)) : 0) },
                     showlegend: false,
                     margin: { l: 52, r: 12, t: 12, b: 80 },
-                    height: 270,
+                    height: 320,
                   }}
                   config={{ displayModeBar: false, responsive: true }}
                   style={{ width: '100%' }}
                 />
-
-                {/* Reconciliation summary */}
-                <div className="mt-2 grid grid-cols-5 gap-1.5 text-center">
-                  {([
-                    { label: 'Starting', value: fmtInr(wfReconciliation.wfStartingRev), cls: 'text-indigo-600' },
-                    { label: '+ Gains',  value: fmtInr(wfReconciliation.wfPositive),    cls: 'text-emerald-600' },
-                    { label: '− Losses', value: fmtInr(wfReconciliation.wfNegative),    cls: 'text-red-500' },
-                    { label: 'Net',      value: fmtInr(wfReconciliation.wfNetChange),   cls: wfReconciliation.wfNetChange >= 0 ? 'text-emerald-600' : 'text-red-500' },
-                    { label: 'Total Rev',value: fmtInr(totalRev),                       cls: 'text-indigo-600' },
-                  ] as const).map(item => (
-                    <div key={item.label} className="rounded-lg bg-slate-50 border border-slate-100 px-1.5 py-1.5">
-                      <p className="text-[9px] font-bold uppercase tracking-wider text-gray-400">{item.label}</p>
-                      <p className={cn('text-xs font-bold tabular-nums mt-0.5', item.cls)}>{item.value}</p>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Per-month revenue validation table */}
-                <AnimatePresence>
-                  {showWfValidate && (() => {
-                    let cumulYTD = 0
-                    const monthRows = wfMonthly.map((d, i) => {
-                      cumulYTD += d.rev
-                      const trendRev = revByMonth[i]
-                      const diff     = +(trendRev - d.rev).toFixed(2)
-                      const plans    = selectedStore.monthly_plans_count?.[d.month] ?? 0
-                      return { ...d, trendRev, diff, cumulYTD, plans, ok: Math.abs(diff) <= 0.01 }
-                    })
-                    const allOk = monthRows.every(r => r.ok)
-                    return (
-                      <motion.div
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: 'auto' }}
-                        exit={{ opacity: 0, height: 0 }}
-                        transition={{ duration: 0.2 }}
-                        className="overflow-hidden mt-2"
-                      >
-                        <div className="rounded-lg border border-slate-200 overflow-hidden">
-                          <div className="px-3 py-1.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
-                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Revenue Validation — Revenue Trend vs Waterfall</p>
-                            <span className={cn('text-[10px] font-bold', allOk ? 'text-emerald-600' : 'text-red-600')}>
-                              {allOk ? '✓ All match' : '⚠ Mismatch detected'}
-                            </span>
-                          </div>
-                          <div className="overflow-x-auto" style={{ maxHeight: 240, overflowY: 'auto' }}>
-                            <table className="w-full text-[10.5px]">
-                              <thead className="sticky top-0 bg-slate-50">
-                                <tr>
-                                  {['Month', 'Revenue Trend', 'Waterfall Rev', 'MoM Chg', 'Cumulative YTD', 'Plans', 'Diff'].map(h => (
-                                    <th key={h} className="px-3 py-1.5 text-left font-semibold text-slate-500 whitespace-nowrap border-b border-slate-200">{h}</th>
-                                  ))}
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {monthRows.map((row, idx) => (
-                                  <tr
-                                    key={row.month}
-                                    className={cn(
-                                      'border-b border-slate-100',
-                                      idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/40',
-                                      !row.ok && 'bg-red-50',
-                                    )}
-                                  >
-                                    <td className="px-3 py-1 font-semibold text-gray-700 whitespace-nowrap">{row.month}</td>
-                                    <td className="px-3 py-1 tabular-nums text-blue-700 font-medium whitespace-nowrap">{fmtInr(row.trendRev)}</td>
-                                    <td className="px-3 py-1 tabular-nums text-gray-800 whitespace-nowrap">{fmtInr(row.rev)}</td>
-                                    <td className={cn('px-3 py-1 tabular-nums font-medium whitespace-nowrap', row.change >= 0 ? 'text-emerald-600' : 'text-red-500')}>
-                                      {row.isFirst ? '—' : (row.change >= 0 ? `+${fmtInr(row.change)}` : fmtInr(row.change))}
-                                    </td>
-                                    <td className="px-3 py-1 tabular-nums text-gray-600 whitespace-nowrap">{fmtInr(row.cumulYTD)}</td>
-                                    <td className="px-3 py-1 tabular-nums text-gray-500 whitespace-nowrap">{fmtCount(row.plans)}</td>
-                                    <td className={cn('px-3 py-1 tabular-nums font-bold whitespace-nowrap', row.ok ? 'text-emerald-600' : 'text-red-600')}>
-                                      {row.ok ? '✓ 0' : `⚠ ${row.diff}`}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                          <div className="px-3 py-1.5 bg-slate-50 border-t border-slate-200 text-[10px] text-slate-400">
-                            Revenue Trend = <span className="font-medium text-blue-600">selectedStore.monthly_sales[m]</span> · Waterfall Rev = same source · Diff must be 0 · See console for full audit
-                          </div>
-                        </div>
-                      </motion.div>
-                    )
-                  })()}
-                </AnimatePresence>
-
               </div>
             </motion.div>
           </div>

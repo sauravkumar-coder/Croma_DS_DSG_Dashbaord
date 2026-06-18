@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Activity, AlertTriangle, ArrowLeft, BarChart2, ChevronDown, ChevronUp,
-  Crosshair, Database, Download, Loader2,
-  RefreshCw, Search, Target, TrendingDown, TrendingUp, Trophy,
-  X, Zap,
+  Crosshair, Download, FileSpreadsheet, Loader2,
+  RefreshCw, Search, Settings, Target, TrendingDown, TrendingUp, Trophy,
+  UploadCloud, X, XCircle, Zap,
 } from 'lucide-react'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import createPlotlyComponent from 'react-plotly.js/factory'
@@ -14,10 +14,10 @@ import * as XLSX from 'xlsx'
 import { Link } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import {
-  getTrackerStatus, getTrackerData,
-  type TrackerData,
-  type TrackerStatus,
+  getTrackerStatus, getTrackerData, uploadTrackerSales,
+  type TrackerStatus, type TrackerData,
 } from '@/lib/api'
+import TargetManagementDrawer from '@/components/tabs/TargetManagementDrawer'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -80,6 +80,11 @@ type ChartFilter = 'all' | 'top' | 'bottom'
 type SortKey  = keyof StoreRow
 type SortDir  = 'asc' | 'desc'
 type InitStatus = 'loading' | 'ready' | 'needs_upload'
+type SalesPhase =
+  | { kind: 'idle' }
+  | { kind: 'uploading'; progress: number }
+  | { kind: 'done'; month: string; storeCount: number }
+  | { kind: 'error'; message: string }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Business logic
@@ -89,16 +94,15 @@ function buildRows(
   targetMap: Map<string, number>,
   salesMap:  Map<string, number>,
   elapsed:   number,
-  totalDays: number,
 ): StoreRow[] {
   return [...targetMap.entries()].map(([storeName, monthlyTarget]) => {
     const currentSales          = salesMap.get(storeName) ?? 0
-    const dailyTarget           = monthlyTarget / totalDays
+    const dailyTarget           = monthlyTarget / 30
     const expectedSalesTillDate = dailyTarget * elapsed
     const runRateAchPct         = expectedSalesTillDate > 0 ? (currentSales / expectedSalesTillDate) * 100 : 0
     const monthlyAchPct         = monthlyTarget > 0 ? (currentSales / monthlyTarget) * 100 : 0
     const remainingTarget       = Math.max(0, monthlyTarget - currentSales)
-    const projectedMonthEnd     = elapsed > 0 ? (currentSales / elapsed) * totalDays : 0
+    const projectedMonthEnd     = elapsed > 0 ? (currentSales / elapsed) * 30 : 0
     const projectedAchPct       = monthlyTarget > 0 ? (projectedMonthEnd / monthlyTarget) * 100 : 0
     return {
       storeName, monthlyTarget, currentSales, dailyTarget, elapsedDays: elapsed,
@@ -120,29 +124,6 @@ function fmtInr(n: number): string {
   return `${s}₹${abs.toFixed(0)}`
 }
 const fmtPct = (n: number) => `${n.toFixed(1)}%`
-
-function formatSalesDate(dateStr: string): string {
-  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-  const parts = dateStr.split('-').map(Number)
-  if (parts.length < 3) return dateStr
-  const [year, month, day] = parts
-  return `${day} ${MONTHS[month - 1]} ${year}`
-}
-
-function getDaysInMonth(monthStr: string): number {
-  const DAYS: Record<string, number> = {
-    Jan: 31, Feb: 28, Mar: 31, Apr: 30, May: 31, Jun: 30,
-    Jul: 31, Aug: 31, Sep: 30, Oct: 31, Nov: 30, Dec: 31,
-  }
-  const parts = monthStr.split('-')
-  if (parts.length !== 2) return 30
-  const [abbr, yearStr] = parts
-  const year = parseInt(yearStr, 10)
-  if (abbr === 'Feb' && !isNaN(year)) {
-    if ((year % 4 === 0 && year % 100 !== 0) || year % 400 === 0) return 29
-  }
-  return DAYS[abbr] ?? 30
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Color helpers
@@ -352,8 +333,8 @@ function ThermometerChart({ rows, filter, onFilter }: { rows: StoreRow[]; filter
 // Chart 3: Target Risk Matrix
 // ─────────────────────────────────────────────────────────────────────────────
 
-function RiskMatrix({ rows, elapsed, totalDays }: { rows: StoreRow[]; elapsed: number; totalDays: number }) {
-  const midX = (elapsed / totalDays) * 100
+function RiskMatrix({ rows, elapsed }: { rows: StoreRow[]; elapsed: number }) {
+  const midX = (elapsed / 30) * 100
   const minS = Math.max(1, Math.min(...rows.map(r => r.currentSales)))
   const maxS = Math.max(1, Math.max(...rows.map(r => r.currentSales)))
   const sz   = (s: number) => 8 + ((Math.log(Math.max(1, s)) - Math.log(minS)) / (Math.log(maxS) - Math.log(minS) || 1)) * 30
@@ -632,17 +613,116 @@ function KPICard({ label, value, sub, glowColor, icon }: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Tracker Sales Upload Zone
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SalesUploadZone({ phase, onFile, onReset }: {
+  phase: SalesPhase
+  onFile: (f: File) => void
+  onReset: () => void
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const dragRef  = useRef(0)
+  const [drag, setDrag] = useState(false)
+  const canInteract = phase.kind === 'idle' || phase.kind === 'error'
+
+  return (
+    <div
+      onClick={() => canInteract && inputRef.current?.click()}
+      onDragEnter={e => { e.preventDefault(); dragRef.current++; setDrag(true) }}
+      onDragLeave={e => { e.preventDefault(); dragRef.current--; if (dragRef.current <= 0) { dragRef.current = 0; setDrag(false) } }}
+      onDragOver={e => e.preventDefault()}
+      onDrop={e => { e.preventDefault(); dragRef.current = 0; setDrag(false); const f = e.dataTransfer.files[0]; if (f) onFile(f) }}
+      className={cn(
+        'relative rounded-2xl border-2 border-dashed transition-all duration-200 p-6 min-h-[200px] flex flex-col',
+        canInteract && 'cursor-pointer',
+        phase.kind === 'idle' && !drag && 'border-slate-200 bg-slate-50 hover:border-blue-400 hover:bg-blue-50/50',
+        drag              && 'border-blue-500 bg-blue-50 ring-2 ring-blue-400/20',
+        phase.kind === 'uploading' && 'border-blue-300 bg-blue-50/50',
+        phase.kind === 'done'    && 'border-emerald-400 bg-emerald-50/60',
+        phase.kind === 'error'   && 'border-red-300 bg-red-50/50',
+      )}
+    >
+      <input ref={inputRef} type="file" accept=".xlsx,.xls,.XLSX,.XLS" className="hidden"
+        onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = '' }} />
+
+      <div className="flex items-center gap-2.5 mb-4">
+        <FileSpreadsheet className="h-5 w-5 text-slate-400" />
+        <div>
+          <p className="text-sm font-semibold text-slate-800">Monthly Sales File</p>
+          <p className="text-xs text-slate-500">Required · .xlsx</p>
+        </div>
+      </div>
+
+      <div className="flex-1 flex flex-col items-center justify-center gap-3">
+        <AnimatePresence mode="wait">
+          {phase.kind === 'idle' && (
+            <motion.div key="idle" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}
+              className="flex flex-col items-center gap-2.5 text-center">
+              <div className={cn('h-12 w-12 rounded-xl flex items-center justify-center', drag ? 'bg-blue-100' : 'bg-slate-100')}>
+                <UploadCloud className={cn('h-6 w-6', drag ? 'text-blue-500' : 'text-slate-400')} />
+              </div>
+              <p className="text-sm text-slate-500">{drag ? 'Drop to upload' : 'Drag & drop or click to browse'}</p>
+              <div className="flex flex-wrap justify-center gap-1 mt-1">
+                {['Store Name', 'Sales', 'Date'].map(h => (
+                  <span key={h} className="text-[10px] px-2 py-0.5 rounded-full bg-slate-200 text-slate-500 font-mono">{h}</span>
+                ))}
+              </div>
+            </motion.div>
+          )}
+          {phase.kind === 'uploading' && (
+            <motion.div key="uploading" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}
+              className="flex flex-col items-center gap-2 w-full">
+              <Loader2 className="h-8 w-8 text-blue-500 animate-spin" />
+              <p className="text-sm text-slate-500">Uploading… {phase.progress}%</p>
+              <div className="w-full max-w-[180px] h-1.5 rounded-full bg-slate-200 overflow-hidden">
+                <div className="h-full rounded-full bg-blue-500 transition-all" style={{width:`${phase.progress}%`}} />
+              </div>
+            </motion.div>
+          )}
+          {phase.kind === 'done' && (
+            <motion.div key="done" initial={{opacity:0, scale:0.9}} animate={{opacity:1, scale:1}} exit={{opacity:0}}
+              className="flex flex-col items-center gap-2 text-center">
+              <div className="h-12 w-12 rounded-xl bg-emerald-100 flex items-center justify-center">
+                <FileSpreadsheet className="h-6 w-6 text-emerald-600" />
+              </div>
+              <p className="text-sm font-semibold text-emerald-700">Saved to server</p>
+              <p className="text-xs text-slate-500">{phase.storeCount} stores · {phase.month}</p>
+              <button onClick={e => { e.stopPropagation(); onReset() }}
+                className="mt-1 text-xs text-slate-400 hover:text-red-500 flex items-center gap-1 transition-colors">
+                <X className="h-3 w-3" /> Upload new file
+              </button>
+            </motion.div>
+          )}
+          {phase.kind === 'error' && (
+            <motion.div key="error" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}
+              className="flex flex-col items-center gap-2 text-center">
+              <XCircle className="h-10 w-10 text-red-400" />
+              <p className="text-sm font-semibold text-red-600">Upload failed</p>
+              <p className="text-xs text-slate-500 max-w-[220px] leading-relaxed">{phase.message}</p>
+              <button onClick={e => { e.stopPropagation(); onReset() }} className="text-xs text-blue-500 underline">Try again</button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main page
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function TargetTrackerPage() {
 
   // ── Init state ──────────────────────────────────────────────────────────────
-  const [initStatus,      setInitStatus]      = useState<InitStatus>('loading')
-  const [currentMonth,    setCurrentMonth]    = useState<string | null>(null)
-  const [trackerStatus,   setTrackerStatus]   = useState<TrackerStatus | null>(null)
-  const [isMonthSwitching,setIsMonthSwitching]= useState(false)
-  const [latestSalesDate, setLatestSalesDate] = useState<string | null>(null)
+  const [initStatus,    setInitStatus]    = useState<InitStatus>('loading')
+  const [currentMonth,  setCurrentMonth]  = useState<string | null>(null)
+  const [trackerStatus, setTrackerStatus] = useState<TrackerStatus | null>(null)
+  const [managerOpen,   setManagerOpen]   = useState(false)
+
+  // ── Upload state (upload screen) ───────────────────────────────────────────
+  const [salesPhase, setSalesPhase] = useState<SalesPhase>({ kind: 'idle' })
 
   // ── Computed data state ────────────────────────────────────────────────────
   const [targetMap,     setTargetMap]     = useState<Map<string, number>>(new Map())
@@ -695,7 +775,6 @@ export default function TargetTrackerPage() {
     setSliderDay(data.max_elapsed)
     setStoreStateMap(stateMapNew)
     setStatesList([...new Set(stateMapNew.values())].sort())
-    setLatestSalesDate(data.latest_sales_date ?? null)
   }, [])
 
   // ── Initialize: check backend, auto-load if data exists ───────────────────
@@ -713,7 +792,7 @@ export default function TargetTrackerPage() {
   const loadMonth = useCallback(async (month: string) => {
     try {
       const { data } = await getTrackerData(month)
-      if (data.has_target) {
+      if (data.has_target && data.has_sales) {
         applyTrackerData(data)
         setCurrentMonth(month)
         setInitStatus('ready')
@@ -730,9 +809,8 @@ export default function TargetTrackerPage() {
     const status = await refreshStatus()
     if (!status) { setInitStatus('needs_upload'); return }
 
-    // Prefer a month with both targets and sales; fall back to targets-only
+    // Auto-load the most recent month that has both target and sales
     const ready = status.months.find(m => m.has_target && m.has_sales)
-      ?? status.months.find(m => m.has_target)
     if (ready) {
       const ok = await loadMonth(ready.month)
       if (ok) return
@@ -740,42 +818,53 @@ export default function TargetTrackerPage() {
     setInitStatus('needs_upload')
   }, [refreshStatus, loadMonth])
 
-  const handleMonthChange = useCallback(async (month: string) => {
-    if (month === currentMonth || isMonthSwitching) return
-    setIsMonthSwitching(true)
-    setSearch('')
-    setPage(1)
-    await loadMonth(month)
-    setIsMonthSwitching(false)
-  }, [currentMonth, isMonthSwitching, loadMonth])
-
   useEffect(() => { initTracker() }, [initTracker])
+
+  // ── Upload handler ─────────────────────────────────────────────────────────
+
+  const handleSalesUpload = useCallback(async (file: File) => {
+    setSalesPhase({ kind: 'uploading', progress: 0 })
+    try {
+      const { data: result } = await uploadTrackerSales(file, pct =>
+        setSalesPhase({ kind: 'uploading', progress: pct })
+      )
+      setSalesPhase({ kind: 'done', month: result.month, storeCount: result.store_count })
+
+      // Re-initialize to pick up the new data
+      const status = await refreshStatus()
+      if (status) {
+        const ready = status.months.find(m => m.month === result.month && m.has_target && m.has_sales)
+          ?? status.months.find(m => m.has_target && m.has_sales)
+        if (ready) {
+          await loadMonth(ready.month)
+        }
+      }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        ?? 'Upload failed. Check file format.'
+      setSalesPhase({ kind: 'error', message: msg })
+    }
+  }, [refreshStatus, loadMonth])
 
   // ── Computed rows ──────────────────────────────────────────────────────────
 
-  const totalDays = useMemo(() => getDaysInMonth(currentMonth ?? ''), [currentMonth])
-
-  // filtered_sales = sales_data[sales_date <= selected_date]
-  // Cap at maxElapsed so a future day can never slip through even if slider state is stale.
   const activeSalesMap = useMemo(() => {
     if (!rawSalesRows.length) return salesMap
     const hasDateInfo = rawSalesRows.some(r => r.day > 0)
     if (!hasDateInfo) return salesMap
-    const effectiveDay = Math.min(sliderDay, maxElapsed)
     const map = new Map<string, number>()
     for (const r of rawSalesRows) {
-      if (r.day === 0 || r.day <= effectiveDay) {
+      if (r.day === 0 || r.day <= sliderDay) {
         map.set(r.storeName, (map.get(r.storeName) ?? 0) + r.sales)
       }
     }
     return map
-  }, [rawSalesRows, sliderDay, maxElapsed, salesMap])
+  }, [rawSalesRows, sliderDay, salesMap])
 
   const rows = useMemo<StoreRow[]>(() => {
-    if (!targetMap.size) return []
-    const effectiveDay = Math.min(sliderDay > 0 ? sliderDay : elapsed, maxElapsed)
-    return buildRows(targetMap, activeSalesMap, effectiveDay, totalDays)
-  }, [targetMap, activeSalesMap, sliderDay, elapsed, maxElapsed, totalDays])
+    if (!targetMap.size || !activeSalesMap.size) return []
+    return buildRows(targetMap, activeSalesMap, sliderDay > 0 ? sliderDay : elapsed)
+  }, [targetMap, activeSalesMap, sliderDay, elapsed])
 
   const filteredRows = useMemo(() => {
     if (!selectedState || !storeStateMap.size) return rows
@@ -841,38 +930,153 @@ export default function TargetTrackerPage() {
     )
   }
 
-  // ── No data in MongoDB ─────────────────────────────────────────────────────
+  // ── Upload screen (needs_upload) ───────────────────────────────────────────
 
   if (initStatus === 'needs_upload') {
+    const activeMonth = trackerStatus?.active_target_month
+    const hasActiveTarget = !!activeMonth
+
     return (
-      <div className="fixed inset-0 bg-gradient-to-br from-slate-50 to-blue-50/40 flex items-center justify-center p-8">
-        <div className="max-w-sm w-full rounded-2xl border border-slate-200 bg-white p-8 shadow-xl text-center space-y-5">
-          <div className="h-14 w-14 rounded-2xl flex items-center justify-center mx-auto shadow"
-            style={{ background:`linear-gradient(135deg,#1d4ed8,${C.blue})` }}>
-            <Database className="h-7 w-7 text-white" />
+      <>
+        <TargetManagementDrawer
+          open={managerOpen}
+          onClose={() => setManagerOpen(false)}
+          onTargetChanged={async () => {
+            await initTracker()
+          }}
+        />
+
+        <div className="fixed inset-0 overflow-y-auto bg-gradient-to-br from-slate-50 to-blue-50/40">
+          <div className="pointer-events-none absolute inset-0 overflow-hidden">
+            <div className="absolute top-1/4 -left-24 h-[500px] w-[500px] rounded-full opacity-[0.06] blur-[120px] bg-blue-500" />
+            <div className="absolute bottom-1/3 -right-24 h-[400px] w-[400px] rounded-full opacity-[0.05] blur-[100px] bg-emerald-500" />
           </div>
-          <div>
-            <h2 className="text-lg font-bold text-slate-900">No Tracker Data in MongoDB</h2>
-            <p className="mt-2 text-sm text-slate-500 leading-relaxed">
-              No target or sales records were found for the current month.
-              Please ensure MongoDB is populated with target and sales data.
-            </p>
-          </div>
-          <div className="flex flex-col gap-2">
-            <button
-              onClick={initTracker}
-              className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
-            >
-              <RefreshCw className="h-4 w-4" /> Retry
-            </button>
-            <Link to="/"
-              className="inline-flex items-center justify-center gap-1.5 h-9 px-4 rounded-lg text-sm font-medium transition-colors"
-              style={{ color:C.blue, border:`1px solid ${C.blue}30`, backgroundColor:`${C.blue}08` }}>
-              <ArrowLeft className="h-3.5 w-3.5" /> Back to Dashboard
-            </Link>
+
+          <div className="relative z-10 flex min-h-full items-center justify-center p-6">
+            <motion.div initial={{ opacity:0, y:32 }} animate={{ opacity:1, y:0 }}
+              transition={{ duration:0.4, ease:'easeOut' }} className="w-full max-w-2xl">
+
+              {/* Back + Manage Targets */}
+              <div className="flex items-center justify-between mb-6">
+                <Link to="/"
+                  className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-medium transition-colors"
+                  style={{ color:C.blue, border:`1px solid ${C.blue}30`, backgroundColor:`${C.blue}08` }}>
+                  <ArrowLeft className="h-3.5 w-3.5" /> Back to Dashboard
+                </Link>
+                <button
+                  onClick={() => setManagerOpen(true)}
+                  className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-medium border border-slate-200 text-slate-600 hover:border-blue-400 hover:text-blue-600 transition-colors bg-white shadow-sm">
+                  <Settings className="h-3.5 w-3.5" /> Manage Targets
+                </button>
+              </div>
+
+              {/* Title */}
+              <div className="text-center mb-8">
+                <div className="inline-flex items-center justify-center h-16 w-16 rounded-2xl mb-5 shadow-lg"
+                  style={{ background:`linear-gradient(135deg,#1d4ed8,${C.blue})`, boxShadow:`0 8px 32px ${C.blue}30` }}>
+                  <Target className="h-8 w-8 text-white" />
+                </div>
+                <h1 className="text-2xl font-bold tracking-tight text-slate-900">Target Command Center</h1>
+                <p className="mt-2 text-sm max-w-md mx-auto text-slate-500">
+                  Files are stored on the server — upload once, access from any session.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/60 space-y-5">
+
+                {/* Active Target Status */}
+                <div className={cn(
+                  'rounded-xl border p-4',
+                  hasActiveTarget
+                    ? 'border-emerald-200 bg-emerald-50'
+                    : 'border-amber-200 bg-amber-50'
+                )}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className={cn(
+                        'h-9 w-9 rounded-lg flex items-center justify-center shrink-0',
+                        hasActiveTarget ? 'bg-emerald-100' : 'bg-amber-100'
+                      )}>
+                        <Target className={cn('h-5 w-5', hasActiveTarget ? 'text-emerald-600' : 'text-amber-600')} />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-slate-800">Monthly Target File</p>
+                        {hasActiveTarget
+                          ? <p className="text-xs text-emerald-700 mt-0.5">Active: <span className="font-semibold">{activeMonth}</span></p>
+                          : <p className="text-xs text-amber-700 mt-0.5">No active target configured</p>
+                        }
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setManagerOpen(true)}
+                      className="text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors"
+                      style={hasActiveTarget
+                        ? { borderColor:'#6ee7b7', color:'#047857', backgroundColor:'#d1fae5' }
+                        : { borderColor:'#fcd34d', color:'#92400e', backgroundColor:'#fef3c7' }
+                      }>
+                      {hasActiveTarget ? 'Change' : 'Upload Target'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Sales Upload */}
+                <SalesUploadZone
+                  phase={salesPhase}
+                  onFile={handleSalesUpload}
+                  onReset={() => setSalesPhase({ kind: 'idle' })}
+                />
+
+                {!hasActiveTarget && (
+                  <div className="rounded-lg px-3 py-2.5 text-xs bg-blue-50 border border-blue-100 text-blue-700">
+                    <span className="font-semibold">Tip:</span> Click "Upload Target" above to add this month's target file before uploading sales.
+                  </div>
+                )}
+
+                <div className="rounded-lg p-3 text-xs space-y-1 bg-slate-50 border border-slate-100">
+                  <p className="font-semibold text-slate-700">Sales file format</p>
+                  <p className="text-slate-500">Columns: <span className="font-mono">Store Name · Sales / Amount · Date (for day detection) · State (optional)</span></p>
+                  <p className="text-slate-500">Month is auto-detected from the Date column.</p>
+                </div>
+              </div>
+
+              {/* Stored months */}
+              {trackerStatus && trackerStatus.months.length > 0 && (
+                <div className="mt-5 rounded-xl border border-slate-200 bg-white overflow-hidden">
+                  <div className="px-4 py-3 border-b border-slate-100 bg-slate-50">
+                    <p className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Stored Months</p>
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {trackerStatus.months.slice(0, 6).map(m => (
+                      <div key={m.month} className="flex items-center justify-between px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs font-semibold text-slate-700">{m.month}</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full font-medium',
+                              m.has_target ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400')}>
+                              {m.has_target ? '✓ Target' : '– Target'}
+                            </span>
+                            <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full font-medium',
+                              m.has_sales ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400')}>
+                              {m.has_sales ? '✓ Sales' : '– Sales'}
+                            </span>
+                          </div>
+                        </div>
+                        {m.has_target && m.has_sales && (
+                          <button
+                            onClick={() => loadMonth(m.month)}
+                            className="text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors">
+                            Load →
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </motion.div>
           </div>
         </div>
-      </div>
+      </>
     )
   }
 
@@ -883,6 +1087,12 @@ export default function TargetTrackerPage() {
 
   return (
     <>
+      <TargetManagementDrawer
+        open={managerOpen}
+        onClose={() => setManagerOpen(false)}
+        onTargetChanged={initTracker}
+      />
+
       <div className="min-h-screen bg-gray-50 text-gray-900">
 
         {/* ── Header ── */}
@@ -896,48 +1106,11 @@ export default function TargetTrackerPage() {
               <div>
                 <p className="text-sm font-bold leading-none" style={{ color:C.text }}>Target Command Center</p>
                 <p className="text-[10px] mt-0.5" style={{ color:C.dim }}>
-                  {filteredRows.length} stores{selectedState ? ` · ${selectedState}` : ''}{currentMonth ? ` · ${currentMonth}` : ''} · Day {sliderDay || elapsed} of {totalDays}
+                  {filteredRows.length} stores{selectedState ? ` · ${selectedState}` : ''}{currentMonth ? ` · ${currentMonth}` : ''} · Day {sliderDay || elapsed} of 30
                 </p>
               </div>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              {/* Latest sales date */}
-              {latestSalesDate && (
-                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg"
-                  style={{ backgroundColor:`${C.emerald}10`, border:`1px solid ${C.emerald}25` }}>
-                  <span className="h-1.5 w-1.5 rounded-full shrink-0"
-                    style={{ backgroundColor: C.emerald, boxShadow:`0 0 4px ${C.emerald}` }} />
-                  <span className="text-[10px]" style={{ color: C.muted }}>
-                    Sales data till:{' '}
-                    <span className="font-semibold" style={{ color: C.emerald }}>{formatSalesDate(latestSalesDate)}</span>
-                  </span>
-                </div>
-              )}
-
-              {/* Month selector */}
-              {trackerStatus && trackerStatus.months.filter(m => m.has_target).length > 1 && (
-                <div className="relative flex items-center">
-                  <select
-                    value={currentMonth ?? ''}
-                    onChange={e => handleMonthChange(e.target.value)}
-                    disabled={isMonthSwitching}
-                    className="h-8 pl-2.5 pr-7 rounded-lg text-xs outline-none cursor-pointer disabled:opacity-50"
-                    style={{ border:`1px solid ${C.border}`, color: C.muted, backgroundColor: C.surface,
-                      backgroundImage:`url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")`,
-                      backgroundRepeat:'no-repeat', backgroundPosition:'right 8px center', appearance:'none' }}>
-                    {trackerStatus.months.filter(m => m.has_target).map(m => (
-                      <option key={m.month} value={m.month}>
-                        {m.month}{!m.has_sales ? ' (targets only)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                  {isMonthSwitching && (
-                    <Loader2 className="absolute right-2 h-3 w-3 animate-spin pointer-events-none"
-                      style={{ color: C.blue }} />
-                  )}
-                </div>
-              )}
-
               {statesList.length > 0 && (
                 <select value={selectedState} onChange={e => setSelectedState(e.target.value)}
                   className="h-8 pl-2.5 pr-7 rounded-lg text-xs outline-none cursor-pointer"
@@ -948,6 +1121,16 @@ export default function TargetTrackerPage() {
                   {statesList.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               )}
+              <button onClick={() => setManagerOpen(true)}
+                className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-medium transition-colors"
+                style={{ color:C.muted, border:`1px solid ${C.border}`, backgroundColor:'transparent' }}>
+                <Settings className="h-3.5 w-3.5" /> Targets
+              </button>
+              <button onClick={() => { setInitStatus('needs_upload'); setSalesPhase({ kind:'idle' }) }}
+                className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-medium transition-colors"
+                style={{ color:C.muted, border:`1px solid ${C.border}`, backgroundColor:'transparent' }}>
+                <RefreshCw className="h-3.5 w-3.5" /> New Sales
+              </button>
               <Link to="/"
                 className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-medium transition-colors"
                 style={{ color:C.blue, border:`1px solid ${C.blue}30`, backgroundColor:`${C.blue}08` }}>
@@ -967,7 +1150,7 @@ export default function TargetTrackerPage() {
                 sub={`${filteredRows.length} stores${selectedState ? ` · ${selectedState}` : ''}`}
                 glowColor={C.blue} icon={<Target className="h-4 w-4" />} />
               <KPICard label="Current Sales" value={fmtInr(kpis!.totSales)}
-                sub={`Day ${sliderDay || elapsed} of ${totalDays}`} icon={<BarChart2 className="h-4 w-4" />} />
+                sub={`Day ${sliderDay || elapsed} of 30`} icon={<BarChart2 className="h-4 w-4" />} />
               <KPICard label="Overall Achievement" value={fmtPct(kpis!.overallAch)}
                 sub="vs monthly target" glowColor={maAchColor}
                 icon={kpis!.overallAch >= 100 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />} />
@@ -996,7 +1179,7 @@ export default function TargetTrackerPage() {
           {/* ── Date Slider ── */}
           {maxElapsed > 0 && rawSalesRows.some(r => r.day > 0) && (
             <section>
-              <SectionHeader title="Time Travel" sub={`Replay month progress · Viewing Day ${sliderDay} of ${totalDays} · Data available through Day ${maxElapsed}`} accent={C.violet} />
+              <SectionHeader title="Time Travel" sub={`Replay month progress · Viewing Day ${sliderDay} of ${maxElapsed}`} accent={C.violet} />
               <div className="rounded-xl border p-5" style={{ backgroundColor:C.surface, borderColor:C.border }}>
                 <div className="flex items-start justify-between gap-4 mb-4 flex-wrap">
                   <div className="flex flex-wrap items-center gap-2">
@@ -1020,7 +1203,7 @@ export default function TargetTrackerPage() {
                   </div>
                   <div className="text-right shrink-0">
                     <p className="text-3xl font-bold tabular-nums leading-none" style={{ color:C.blue }}>Day {sliderDay}</p>
-                    <p className="text-[10px] mt-1" style={{ color:C.dim }}>{Math.round((sliderDay / totalDays) * 100)}% through month</p>
+                    <p className="text-[10px] mt-1" style={{ color:C.dim }}>{Math.round((sliderDay / 30) * 100)}% through month</p>
                   </div>
                 </div>
                 <input type="range" min={1} max={maxElapsed} value={sliderDay}
@@ -1052,7 +1235,7 @@ export default function TargetTrackerPage() {
           <section className="grid grid-cols-1 gap-6 xl:grid-cols-3">
             <div className="xl:col-span-2">
               <SectionHeader title="Target Risk Matrix" sub="The primary management view — where to intervene" accent={C.violet} />
-              <RiskMatrix rows={filteredRows} elapsed={sliderDay || elapsed} totalDays={totalDays} />
+              <RiskMatrix rows={filteredRows} elapsed={sliderDay || elapsed} />
             </div>
             <div>
               <SectionHeader title="Network Distribution" sub="Achievement band breakdown" accent={C.amber} />
@@ -1222,7 +1405,7 @@ export default function TargetTrackerPage() {
         <footer className="fixed bottom-0 inset-x-0 z-20 h-9 flex items-center justify-center border-t backdrop-blur-sm"
           style={{ backgroundColor:`${C.surface}f0`, borderColor:C.border }}>
           <span className="text-[10px] font-medium tracking-[0.2em] uppercase select-none" style={{ color:C.dim }}>
-            Target Command Center · Live data from MongoDB · {currentMonth ?? ''}
+            Target Command Center · Files persisted on server · {currentMonth ?? ''}
           </span>
         </footer>
       </div>

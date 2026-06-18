@@ -8,7 +8,7 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreMetrics, StoreCategory } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
-import { fmtInr, fmtPct, fmtStore } from '@/lib/formatting'
+import { fmtInr, fmtPct, fmtStore, plotlyInrTickVals } from '@/lib/formatting'
 import { exportCsv } from '@/lib/tableExport'
 import { CATEGORY_TEXT_COLOR } from '@/lib/categoryStyles'
 import DataTable from '@/components/ui/DataTable'
@@ -359,7 +359,7 @@ export default function RisingStars({
               font:   { color: '#6b7280', family: 'Inter, sans-serif', size: 11 },
               xaxis: {
                 gridcolor: '#f3f4f6', linecolor: '#e5e7eb',
-                tickprefix: '₹', tickformat: ',.0f', automargin: true,
+                tickprefix: '₹', ...plotlyInrTickVals(displayTop15.length ? Math.max(...displayTop15.map(d => Math.max(d.earlyTotal, d.midTotal, d.recentTotal))) * 1.1 : 1), automargin: true,
                 title: { text: 'Revenue — phase total (₹)', font: { color: '#9ca3af', size: 11 } },
               },
               yaxis: {

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Link } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Database, RotateCcw } from 'lucide-react'
+import { Database, ExternalLink, RotateCcw, Target } from 'lucide-react'
 import { useDataContext } from './contexts/DataContext'
+import { useRetailerContext } from './contexts/RetailerContext'
+import SalesDataManager from './components/SalesDataManager'
 import { useFilters, type FilterState } from './hooks/useFilters'
 import {
   Select,
@@ -11,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from './components/ui/select'
+import UploadScreen from './components/UploadScreen'
 import { AppSkeleton } from './components/Skeleton'
 import StoreDeepDivePage from './pages/StoreDeepDivePage'
 import TargetTrackerPage from './pages/TargetTrackerPage'
@@ -26,9 +29,16 @@ import TargetCommandCenter from './components/tabs/TargetCommandCenter'
 import StateJourneyAnalysis from './components/tabs/StateJourneyAnalysis'
 import { cn } from './lib/utils'
 import type { StoreCategory } from './lib/classificationEngine'
+import { RETAILER_IDS, getRetailerConfig } from './retailers/retailerFactory'
 
 // ── Tab registry ──────────────────────────────────────────────────────────────
 
+// Narrative order — each section answers a business question:
+//  1-2  Business Snapshot:    "What is happening overall?"
+//  3-5  Performance Breakdown: "Where is performance coming from?"
+//  6-8  Momentum & Risk:      "What is changing, and where should we act?"
+//  9    Deep Dive:            "Why is this happening?"
+//  10   Actionable:           "What should we do next?"
 const TABS = [
   { id: 'executive',       label: 'Overview'        },
   { id: 'monthly-revenue', label: 'Revenue Trend'   },
@@ -39,14 +49,17 @@ const TABS = [
   { id: 'rising-stars',    label: 'Rising Stores'   },
   { id: 'fallen-stars',    label: 'Fallen Stores'   },
   { id: 'store-deep-dive', label: 'Store Spotlight' },
-  { id: 'target-command',  label: 'Target Pulse'    },
+  { id: 'target-command',  label: 'Target Tracker'  },
 ] as const
 
 type TabId = typeof TABS[number]['id']
 
+// Radix Select requires non-empty values; use a sentinel for "all / no filter"
 const ALL = '__all__'
 const toSel = (v: string) => v || ALL
 const fromSel = (v: string) => (v === ALL ? '' : v)
+
+import { RetailerToggle } from './components/RetailerToggle'
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -186,13 +199,45 @@ function FilterBar({
   )
 }
 
+function TabPlaceholder({ label, filters }: { label: string; filters: FilterState }) {
+  const active = Object.entries(filters).filter(([, v]) => Boolean(v))
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white min-h-[420px] flex flex-col items-center justify-center gap-4 p-8">
+      <div className="h-14 w-14 rounded-2xl bg-gradient-to-br from-blue-500/15 to-cyan-400/15 flex items-center justify-center">
+        <Database className="h-6 w-6 text-blue-500" />
+      </div>
+      <div className="text-center">
+        <h3 className="text-lg font-semibold text-gray-900">{label}</h3>
+        <p className="mt-1 text-sm text-gray-500 max-w-xs">
+          Tab content coming soon.
+        </p>
+      </div>
+      {active.length > 0 && (
+        <div className="flex flex-wrap justify-center gap-1.5 mt-1">
+          {active.map(([k, v]) => (
+            <span
+              key={k}
+              className="inline-flex items-center rounded-full px-2 py-0.5 text-xs bg-blue-50 text-blue-700 border border-blue-200"
+            >
+              {k}: {v}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main App ──────────────────────────────────────────────────────────────────
 
 export default function App() {
   const { isLoading, hasData, stores, months, states, categories, refetchData, error } =
     useDataContext()
+  const { retailer, retailerCfg, setRetailer: _sr } = useRetailerContext()
+  void _sr // consumed via RetailerToggle
 
-  const [activeTab, setActiveTab]           = useState<TabId>('executive')
+  const [activeTab, setActiveTab]         = useState<TabId>('executive')
+  const [showDataManager, setShowDataManager] = useState(false)
   const [deepDiveStoreId, setDeepDiveStoreId] = useState<string | null>(null)
   const [journeyPrefilter, setJourneyPrefilter] = useState<StoreCategory | null>(null)
 
@@ -216,7 +261,7 @@ export default function App() {
     }
   }, [isLoading])
 
-  // Always light mode
+  // Always light mode — remove dark class on mount
   useEffect(() => { document.documentElement.classList.remove('dark') }, [])
 
   const { getFilters, setFilter, resetFilters, getActiveCount } = useFilters()
@@ -247,17 +292,17 @@ export default function App() {
       case 'fallen-stars':    return <FallenStars filters={filters} onNavigateToStore={handleNavigateToStore} onNavigateToJourneyCategory={handleNavigateToJourneyCategory} />
       case 'store-deep-dive': return <StoreDeepDive filters={filters} initialStoreId={deepDiveStoreId} />
       case 'target-command':  return <TargetCommandCenter />
-      default:                return null
+      default:                return <TabPlaceholder label={currentTab.label} filters={filters} />
     }
   }
 
-  // ── Loading skeleton ─────────────────────────────────────────────────────
+  // ── Loading skeleton (initial server check + 400 ms min) ─────────────────
 
   if (isLoading || !skeletonDone) {
     return <AppSkeleton />
   }
 
-  // ── Backend / MongoDB connection error ───────────────────────────────────
+  // ── Backend connection error ───────────────────────────────────────────────
 
   if (error) {
     return (
@@ -279,29 +324,10 @@ export default function App() {
     )
   }
 
-  // ── No data in MongoDB ───────────────────────────────────────────────────
+  // ── Upload / onboarding screen ────────────────────────────────────────────
 
   if (!hasData) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-8">
-        <div className="max-w-md w-full rounded-2xl border border-gray-200 bg-white p-8 shadow-sm text-center space-y-4">
-          <div className="h-12 w-12 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center mx-auto">
-            <Database className="h-6 w-6 text-blue-400" />
-          </div>
-          <h2 className="text-lg font-bold text-gray-900">No Data in MongoDB</h2>
-          <p className="text-sm text-gray-500">
-            The dashboard is connected to MongoDB but no sales records were found for the current year.
-            Please ensure the database is populated with store sales data.
-          </p>
-          <button
-            onClick={() => refetchData()}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
-          >
-            <RotateCcw className="h-4 w-4" /> Refresh
-          </button>
-        </div>
-      </div>
-    )
+    return <UploadScreen retailer={retailer} onReady={refetchData} />
   }
 
   // ── Main dashboard ────────────────────────────────────────────────────────
@@ -317,24 +343,45 @@ export default function App() {
       <header className="sticky top-0 z-50 h-16 border-b border-gray-200 bg-white/95 backdrop-blur-sm">
         <div className="flex items-center justify-between h-full px-4 max-w-screen-2xl mx-auto gap-4">
           <div className="flex items-center gap-3 min-w-0">
-            <span className="shrink-0 inline-flex items-center justify-center px-3 h-8 rounded-full bg-gradient-to-r from-blue-600 to-cyan-400 text-white text-sm font-bold tracking-wide select-none shadow-sm">
-              CR
+            <span
+              className="shrink-0 inline-flex items-center justify-center px-3 h-8 rounded-full text-white text-sm font-bold tracking-wide select-none shadow-sm"
+              style={{ background: `linear-gradient(to right, ${retailerCfg.brandFrom}, ${retailerCfg.brandTo})` }}
+            >
+              {retailerCfg.short}
             </span>
             <div className="min-w-0">
               <p className="text-base font-bold text-gray-900 leading-none truncate">
-                Croma Analytics
+                {retailerCfg.tagline}
               </p>
               <p className="text-[10px] text-gray-400 leading-tight mt-0.5 tracking-wide">
-                DS · DSG Store Intelligence
+                {retailerCfg.sub}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
+            {/* Retailer Toggle */}
+            <RetailerToggle />
+
             <DataStatusChip
               storeCount={stores.length}
               monthCount={months.length}
             />
+            <button
+              onClick={() => setShowDataManager(true)}
+              className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-600 hover:border-blue-400 hover:text-blue-600 shadow-sm transition-colors"
+            >
+              <Database className="h-3.5 w-3.5" />
+              Manage Data
+            </button>
+            <Link
+              to="/target-tracker"
+              className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-600 hover:border-blue-400 hover:text-blue-600 shadow-sm transition-colors"
+            >
+              <Target className="h-3.5 w-3.5" />
+              Target Tracker
+              <ExternalLink className="h-3 w-3 opacity-50" />
+            </Link>
           </div>
         </div>
       </header>
@@ -349,15 +396,17 @@ export default function App() {
               className={cn(
                 'relative px-3 py-1.5 text-sm font-medium rounded-md whitespace-nowrap transition-colors',
                 activeTab === tab.id
-                  ? 'text-blue-600 bg-blue-50'
+                  ? 'bg-blue-50'
                   : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100',
               )}
+              style={activeTab === tab.id ? { color: retailerCfg.brandFrom } : {}}
             >
               {tab.label}
               {activeTab === tab.id && (
                 <motion.span
                   layoutId="tab-underline"
-                  className="absolute inset-x-0 -bottom-[1px] h-0.5 bg-blue-500 rounded-t"
+                  className="absolute inset-x-0 -bottom-[1px] h-0.5 rounded-t"
+                  style={{ background: `linear-gradient(to right, ${retailerCfg.brandFrom}, ${retailerCfg.brandTo})` }}
                   transition={{ type: 'spring', stiffness: 400, damping: 30 }}
                 />
               )}
@@ -366,7 +415,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── Filter Bar — hidden for Target Command Center ── */}
+      {/* ── Filter Bar — hidden for Target Command Center which manages its own filters ── */}
       {activeTab !== 'target-command' && (
         <div className="sticky top-28 z-30 border-b border-gray-200 bg-white/90 backdrop-blur-sm">
           <div className="px-4 py-2 max-w-screen-2xl mx-auto">
@@ -401,9 +450,22 @@ export default function App() {
       {/* ── Footer ── */}
       <footer className="fixed bottom-0 inset-x-0 z-20 h-10 flex items-center justify-center border-t border-gray-200 bg-white/95 backdrop-blur-sm">
         <span className="text-[11px] font-medium tracking-[0.18em] uppercase text-gray-400 select-none">
-          Croma Analytics · DS &amp; DSG Store Intelligence Platform
+          {retailerCfg.footer}
         </span>
       </footer>
+
+      {/* ── Sales Data Manager Drawer ── */}
+      <AnimatePresence>
+        {showDataManager && (
+          <SalesDataManager
+            onClose={() => setShowDataManager(false)}
+            onDataChanged={() => {
+              setShowDataManager(false)
+              refetchData()
+            }}
+          />
+        )}
+      </AnimatePresence>
 
     </div>
       } />

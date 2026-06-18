@@ -2,23 +2,18 @@
 """
 generate_sample.py
 
-Generates realistic sample XLSX files for StoreWise development and testing.
-
-Output files (written to backend/data/):
-  sample_sales.xlsx    — 80 stores × 6 months (Apr-2025 to Sep-2025)
-  sample_targets.xlsx  — 80 stores × monthly target
+Generates realistic sample XLSX files for StoreWise:
+  backend/data/sample_sales.xlsx    — 80 stores × 6 months (Apr-2025 to Sep-2025)
+  backend/data/sample_targets.xlsx  — 80 stores × monthly target
 
 Revenue characteristics:
   - Rs.2L–Rs.80L per store per month
   - Four trend profiles: rising (~20%), falling (~15%), stable (~45%), volatile (~20%)
   - Layered seasonal multipliers (summer dip → festival-season pickup)
 
-Requirements:
-  pip install pandas openpyxl
-
 Usage:
   cd backend
-  python scripts/generate_sample.py
+  python generate_sample.py
 """
 
 import os
@@ -146,22 +141,24 @@ STORES = [
     ("CR080", "Croma Kannur",                "Kerala"),
 ]
 
-# Revenue base ranges by store tier (based on city size and market maturity)
+# Revenue base ranges by store tier (based on city size / market maturity)
+# Tier 1 metro flagship stores
 _TIER1_IDS = {
-    "CR001", "CR002", "CR011", "CR016",
-    "CR019", "CR027", "CR035", "CR055",
+    "CR001", "CR002", "CR011", "CR016",  # Mumbai, Delhi flagships
+    "CR019", "CR027", "CR035", "CR055",  # Bengaluru, Chennai, Ahmedabad, Hyderabad
 }
+# Tier 2 major city stores
 _TIER2_IDS = {
-    "CR003", "CR004", "CR005", "CR006", "CR007",
-    "CR012", "CR013", "CR014", "CR015",
-    "CR020", "CR021", "CR022", "CR023",
-    "CR028", "CR029", "CR030",
-    "CR036", "CR037", "CR038",
-    "CR049", "CR050", "CR051",
-    "CR056", "CR057", "CR058",
-    "CR061", "CR062",
-    "CR067", "CR068",
-    "CR075", "CR076",
+    "CR003", "CR004", "CR005", "CR006", "CR007",   # Mumbai suburbs, Pune
+    "CR012", "CR013", "CR014", "CR015",             # Delhi
+    "CR020", "CR021", "CR022", "CR023",             # Bengaluru
+    "CR028", "CR029", "CR030",                      # Chennai
+    "CR036", "CR037", "CR038",                      # Ahmedabad, Surat
+    "CR049", "CR050", "CR051",                      # Kolkata
+    "CR056", "CR057", "CR058",                      # Hyderabad
+    "CR061", "CR062",                               # Lucknow
+    "CR067", "CR068",                               # Bhopal, Indore
+    "CR075", "CR076",                               # Kochi
 }
 
 
@@ -192,19 +189,24 @@ def _monthly_revenues(
         seasonal = SEASONAL[month]
 
         if trend == "rising":
+            # Compounds ~4–9% growth per month
             current *= rng.uniform(1.04, 1.09)
             noise = rng.uniform(0.95, 1.05)
         elif trend == "falling":
+            # Compounds ~2–5% decline per month
             current *= rng.uniform(0.95, 0.98)
             noise = rng.uniform(0.95, 1.05)
         elif trend == "stable":
+            # Stays near base with ±8% noise
             current = base
             noise = rng.uniform(0.92, 1.08)
         else:  # volatile
+            # Any given month can be ×0.5 – ×2 of base
             current = base
             noise = rng.uniform(0.50, 2.00)
 
         raw = current * seasonal * noise
+        # Clamp to Rs.2L – Rs.80L and round to nearest Rs.5,000
         clamped = max(200_000, min(8_000_000, raw))
         revenues[month] = round(clamped / 5_000) * 5_000
 
@@ -218,6 +220,7 @@ def generate() -> None:
 
     sales_rows = []
     target_rows = []
+
     trend_counts: dict[str, int] = {"rising": 0, "falling": 0, "stable": 0, "volatile": 0}
 
     for idx, (store_id, store_name, state) in enumerate(STORES):
@@ -238,11 +241,12 @@ def generate() -> None:
         sales_rows.append(row)
 
         avg_monthly = sum(monthly.values()) / len(monthly)
-        target = round(avg_monthly * 1.12 / 10_000) * 10_000
+        target = round(avg_monthly * 1.12 / 10_000) * 10_000  # 12% above average, rounded
         target_rows.append({"Store_ID": store_id, "Monthly_Target": target})
 
-    # Write output to backend/data/ (one level up from scripts/)
-    out_dir = os.path.join(os.path.dirname(__file__), "..", "data")
+    # ── Write files ──────────────────────────────────────────────────────────
+
+    out_dir = os.path.join(os.path.dirname(__file__), "data")
     os.makedirs(out_dir, exist_ok=True)
 
     sales_path  = os.path.join(out_dir, "sample_sales.xlsx")
@@ -254,10 +258,13 @@ def generate() -> None:
     sales_df.to_excel(sales_path, index=False)
     target_df.to_excel(target_path, index=False)
 
+    # ── Summary ──────────────────────────────────────────────────────────────
+
     total_revenue = sales_df[MONTHS].values.sum()
     avg_store_monthly = total_revenue / (len(STORES) * len(MONTHS))
     min_rev = sales_df[MONTHS].min().min()
     max_rev = sales_df[MONTHS].max().max()
+
     states_in_data = sales_df["State"].nunique()
 
     print("=" * 60)
@@ -282,8 +289,7 @@ def generate() -> None:
     print("  Store tier breakdown:")
     print(f"    Tier 1 (metro flagships) : {len(_TIER1_IDS)} stores  Rs.30L - Rs.80L base")
     print(f"    Tier 2 (major cities)    : {len(_TIER2_IDS)} stores  Rs.12L - Rs.40L base")
-    remaining = len(STORES) - len(_TIER1_IDS) - len(_TIER2_IDS)
-    print(f"    Tier 3 (smaller cities)  : {remaining} stores  Rs.2L - Rs.15L base")
+    print(f"    Tier 3 (smaller cities)  : {len(STORES) - len(_TIER1_IDS) - len(_TIER2_IDS)} stores  Rs.2L - Rs.15L base")
     print()
     print(f"  Saved: {sales_path}")
     print(f"  Saved: {target_path}")

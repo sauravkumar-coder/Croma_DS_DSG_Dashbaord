@@ -3,19 +3,18 @@ import { AnimatePresence, motion, useMotionValue, useTransform, animate } from '
 import {
   Activity, AlertCircle, BarChart2,
   Calendar, ChevronDown, ChevronUp,
-  Database, Download, Info, Loader2, RefreshCw, Search, Target,
-  TrendingDown, TrendingUp, X, Zap,
+  Download, FileSpreadsheet, Loader2, Minus, RefreshCw, Search, Settings, Target,
+  TrendingDown, TrendingUp, UploadCloud, X, XCircle, Zap,
 } from 'lucide-react'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import createPlotlyComponent from 'react-plotly.js/factory'
 // @ts-ignore — plotly.js-dist-min does not ship its own .d.ts
 import Plotly from 'plotly.js-dist-min'
 import {
-  getTrackerStatus, getTrackerData,
+  getTrackerStatus, getTrackerData, uploadTrackerSales,
   type TrackerStatus,
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { useDataContext } from '@/contexts/DataContext'
 import {
   Select,
   SelectContent,
@@ -23,7 +22,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { fmtInr, fmtPct } from '@/lib/formatting'
+import TargetManagementDrawer from './TargetManagementDrawer'
+import { fmtInr, fmtPct, plotlyInrTickVals, plotlyInrLogTickVals } from '@/lib/formatting'
 import { exportExcel } from '@/lib/tableExport'
 import { kpiContainer, kpiItem, panelSpring } from '@/lib/animations'
 
@@ -34,14 +34,6 @@ const Plot = createPlotlyComponent(Plotly)
 const TABLE_PAGE_SIZE = 20
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function formatSalesDate(dateStr: string): string {
-  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-  const parts = dateStr.split('-').map(Number)
-  if (parts.length < 3) return dateStr
-  const [year, month, day] = parts
-  return `${day} ${MONTHS[month - 1]} ${year}`
-}
 
 function getDaysInMonth(monthStr: string): number {
   const DAYS: Record<string, number> = {
@@ -70,12 +62,15 @@ const PF = { font: '#6b7280', legend: '#6b7280' }
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type RiskStatus = 'Champion' | 'On Track' | 'Watchlist' | 'At Risk'
-type RemainingStatus = 'Hit' | 'At Risk' | 'Miss'
 type TableSortKey =
   | 'name' | 'state' | 'target' | 'sales'
   | 'achPct' | 'gapPct' | 'reqDRR' | 'projected' | 'projAchPct' | 'status'
-  | 'dailyTarget' | 'expectedTillDate' | 'runRateAch' | 'remainingStatus'
 type TrackerInitStatus = 'loading' | 'needs_upload' | 'ready'
+type SalesPhase =
+  | { kind: 'idle' }
+  | { kind: 'uploading'; progress: number }
+  | { kind: 'done'; month: string; storeCount: number }
+  | { kind: 'error'; message: string }
 
 // Minimal store reference built from tracker data
 type LocalStore = { store_id: string; store_name: string; state: string }
@@ -89,20 +84,6 @@ const RISK_CFG: Record<RiskStatus, { color: string; badge: string; zone: string 
   'At Risk':   { color: '#ef4444', badge: 'bg-red-100 text-red-700',         zone: 'rgba(239,68,68,0.05)'  },
 }
 
-const ACH_BUCKETS = [
-  { label: '0–25%',   min: 0,   max: 25,       color: '#ef4444', textClass: 'text-red-600',     borderClass: 'border-red-200',     bgClass: 'bg-red-50'     },
-  { label: '25–50%',  min: 25,  max: 50,        color: '#f97316', textClass: 'text-orange-600',  borderClass: 'border-orange-200',  bgClass: 'bg-orange-50'  },
-  { label: '50–75%',  min: 50,  max: 75,        color: '#f59e0b', textClass: 'text-amber-600',   borderClass: 'border-amber-200',   bgClass: 'bg-amber-50'   },
-  { label: '75–100%', min: 75,  max: 100,       color: '#3b82f6', textClass: 'text-blue-600',    borderClass: 'border-blue-200',    bgClass: 'bg-blue-50'    },
-  { label: '100%+',   min: 100, max: Infinity,  color: '#10b981', textClass: 'text-emerald-600', borderClass: 'border-emerald-200', bgClass: 'bg-emerald-50' },
-]
-
-const REMAINING_CFG: Record<string, { badge: string }> = {
-  'Hit':     { badge: 'bg-emerald-100 text-emerald-700' },
-  'At Risk': { badge: 'bg-amber-100 text-amber-700'     },
-  'Miss':    { badge: 'bg-red-100 text-red-700'         },
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function getRisk(projAchPct: number): RiskStatus {
@@ -110,20 +91,6 @@ function getRisk(projAchPct: number): RiskStatus {
   if (projAchPct >= 95)  return 'On Track'
   if (projAchPct >= 80)  return 'Watchlist'
   return 'At Risk'
-}
-
-function getRemainingStatus(projAchPct: number): RemainingStatus {
-  if (projAchPct >= 100) return 'Hit'
-  if (projAchPct >= 75)  return 'At Risk'
-  return 'Miss'
-}
-
-function getBucketIdx(achPct: number): number {
-  if (achPct >= 100) return 4
-  if (achPct >= 75)  return 3
-  if (achPct >= 50)  return 2
-  if (achPct >= 25)  return 1
-  return 0
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -177,14 +144,42 @@ function RiskBadge({ status }: { status: RiskStatus }) {
   )
 }
 
+function NoTargetsPrompt({ onManage }: { onManage: () => void }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 28 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ type: 'spring', stiffness: 260, damping: 24 }}
+      className="rounded-xl border border-dashed border-gray-200 bg-gray-50 min-h-[420px] flex flex-col items-center justify-center gap-5 p-10"
+    >
+      <div className="h-16 w-16 rounded-2xl bg-gradient-to-br from-amber-50 to-orange-50 flex items-center justify-center shadow-sm">
+        <Target className="h-7 w-7 text-amber-500" />
+      </div>
+      <div className="text-center max-w-sm">
+        <h3 className="text-lg font-semibold text-gray-900">No Targets Loaded</h3>
+        <p className="mt-2 text-sm text-gray-500 leading-relaxed">
+          Upload an <span className="font-mono text-amber-600 text-xs px-1.5 py-0.5 rounded bg-amber-50 border border-amber-100">OW Budget</span> file
+          to unlock the Target Command Center. The file should contain{' '}
+          <span className="text-gray-700">Store Key</span> and <span className="text-gray-700">OOW</span> columns.
+          Include the month and year in the filename (e.g. <span className="text-gray-700">OW Budget June 2026.xlsx</span>).
+        </p>
+      </div>
+      <button
+        onClick={onManage}
+        className="flex items-center gap-2 h-10 px-5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors"
+      >
+        <Settings className="h-4 w-4" />
+        Open Target Manager
+      </button>
+    </motion.div>
+  )
+}
 
-function DaySlider({ value, onChange, maxDay, targetMonth, hasDailyData, latestSalesDate }: {
-  value: number; onChange: (v: number) => void; maxDay: number; targetMonth: string
-  hasDailyData: boolean; latestSalesDate?: string | null
+function DaySlider({ value, onChange, targetMonth }: {
+  value: number; onChange: (v: number) => void; targetMonth: string
 }) {
   const totalDays = getDaysInMonth(targetMonth)
-  const effectiveMax = Math.min(Math.max(1, maxDay), totalDays)
-  const pct = effectiveMax > 1 ? ((value - 1) / (effectiveMax - 1)) * 100 : 100
+  const pct = ((value - 1) / (totalDays - 1)) * 100
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -198,14 +193,7 @@ function DaySlider({ value, onChange, maxDay, targetMonth, hasDailyData, latestS
           <div>
             <p className="text-sm font-semibold text-gray-900">Day of Month Simulator</p>
             <p className="text-[11px] text-gray-500">
-              Tracking: <span className="text-gray-700 font-medium">{targetMonth}</span>
-              {hasDailyData
-                ? <> · Sales data available through Day {effectiveMax} of {totalDays}</>
-                : <> · Monthly aggregate · {totalDays} days</>
-              }
-              {latestSalesDate && (
-                <> · <span className="text-emerald-600 font-medium">Latest: {formatSalesDate(latestSalesDate)}</span></>
-              )}
+              Tracking: <span className="text-gray-700 font-medium">{targetMonth}</span> · All rows update live
             </p>
           </div>
         </div>
@@ -213,13 +201,13 @@ function DaySlider({ value, onChange, maxDay, targetMonth, hasDailyData, latestS
           <span className="text-xs text-gray-400 shrink-0 w-10">Day 1</span>
           <div className="relative flex-1">
             <input
-              type="range" min={1} max={effectiveMax} value={value}
+              type="range" min={1} max={totalDays} value={value}
               onChange={e => onChange(Number(e.target.value))}
               className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
               style={{ background: `linear-gradient(to right,#3b82f6 ${pct}%,#e5e7eb ${pct}%)` }}
             />
           </div>
-          <span className="text-xs text-gray-400 shrink-0 w-14 text-right">Day {effectiveMax}</span>
+          <span className="text-xs text-gray-400 shrink-0 w-14 text-right">Day {totalDays}</span>
           <div className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-100">
             <span className="text-xs text-gray-500">Day</span>
             <span className="text-lg font-bold text-blue-600 tabular-nums w-6 text-center">{value}</span>
@@ -231,9 +219,9 @@ function DaySlider({ value, onChange, maxDay, targetMonth, hasDailyData, latestS
   )
 }
 
-function SortBtn({ col, sortKey, sortDir, onSort, label, info }: {
+function SortBtn({ col, sortKey, sortDir, onSort, label }: {
   col: TableSortKey; sortKey: TableSortKey; sortDir: 'asc' | 'desc'
-  onSort: (c: TableSortKey) => void; label: string; info?: boolean
+  onSort: (c: TableSortKey) => void; label: string
 }) {
   return (
     <button
@@ -241,7 +229,6 @@ function SortBtn({ col, sortKey, sortDir, onSort, label, info }: {
       className="flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-gray-500 hover:text-gray-900 transition-colors whitespace-nowrap"
     >
       {label}
-      {info && <Info className="h-3 w-3 text-blue-400 opacity-70 shrink-0" />}
       {sortKey === col
         ? sortDir === 'asc'
           ? <ChevronUp className="h-3 w-3 text-blue-400" />
@@ -251,46 +238,141 @@ function SortBtn({ col, sortKey, sortDir, onSort, label, info }: {
   )
 }
 
+function ManageBtn({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-2 h-8 px-3.5 rounded-lg bg-white border border-gray-200 text-xs font-medium text-gray-600 hover:text-gray-900 hover:border-gray-400 shadow-sm transition-colors"
+    >
+      <Settings className="h-3.5 w-3.5" />
+      Manage Targets
+    </button>
+  )
+}
+
+// Inline upload zone — used when no tracker sales are loaded yet
+function SalesUploadZone({ phase, onFile, onReset }: {
+  phase: SalesPhase; onFile: (f: File) => void; onReset: () => void
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const dragRef  = useRef(0)
+  const [drag, setDrag] = useState(false)
+  const canInteract = phase.kind === 'idle' || phase.kind === 'error'
+
+  return (
+    <div
+      onClick={() => canInteract && inputRef.current?.click()}
+      onDragEnter={e => { e.preventDefault(); dragRef.current++; setDrag(true) }}
+      onDragLeave={e => { e.preventDefault(); dragRef.current--; if (dragRef.current <= 0) { dragRef.current = 0; setDrag(false) } }}
+      onDragOver={e => e.preventDefault()}
+      onDrop={e => { e.preventDefault(); dragRef.current = 0; setDrag(false); const f = e.dataTransfer.files[0]; if (f) onFile(f) }}
+      className={cn(
+        'relative rounded-xl border-2 border-dashed transition-all duration-200 p-6 min-h-[180px] flex flex-col',
+        canInteract && 'cursor-pointer',
+        phase.kind === 'idle' && !drag && 'border-slate-200 bg-slate-50 hover:border-blue-400 hover:bg-blue-50/50',
+        drag              && 'border-blue-500 bg-blue-50 ring-2 ring-blue-400/20',
+        phase.kind === 'uploading' && 'border-blue-300 bg-blue-50/50',
+        phase.kind === 'done'    && 'border-emerald-400 bg-emerald-50/60',
+        phase.kind === 'error'   && 'border-red-300 bg-red-50/50',
+      )}
+    >
+      <input ref={inputRef} type="file" accept=".xlsx,.xls,.XLSX,.XLS" className="hidden"
+        onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = '' }} />
+
+      <div className="flex items-center gap-2.5 mb-3">
+        <FileSpreadsheet className="h-5 w-5 text-slate-400" />
+        <div>
+          <p className="text-sm font-semibold text-slate-800">Upload Monthly Sales File</p>
+          <p className="text-xs text-slate-500">Required to view tracker analytics · .xlsx</p>
+        </div>
+      </div>
+
+      <div className="flex-1 flex flex-col items-center justify-center gap-3">
+        <AnimatePresence mode="wait">
+          {phase.kind === 'idle' && (
+            <motion.div key="idle" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="flex flex-col items-center gap-2.5 text-center">
+              <div className={cn('h-12 w-12 rounded-xl flex items-center justify-center', drag ? 'bg-blue-100' : 'bg-slate-100')}>
+                <UploadCloud className={cn('h-6 w-6', drag ? 'text-blue-500' : 'text-slate-400')} />
+              </div>
+              <p className="text-sm text-slate-500">{drag ? 'Drop to upload' : 'Drag & drop or click to browse'}</p>
+              <div className="flex flex-wrap justify-center gap-1 mt-1">
+                {['Store Name', 'Sales / Amount', 'Date'].map(h => (
+                  <span key={h} className="text-[10px] px-2 py-0.5 rounded-full bg-slate-200 text-slate-500 font-mono">{h}</span>
+                ))}
+              </div>
+            </motion.div>
+          )}
+          {phase.kind === 'uploading' && (
+            <motion.div key="uploading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="flex flex-col items-center gap-2 w-full">
+              <Loader2 className="h-8 w-8 text-blue-500 animate-spin" />
+              <p className="text-sm text-slate-500">Uploading… {phase.progress}%</p>
+              <div className="w-full max-w-[180px] h-1.5 rounded-full bg-slate-200 overflow-hidden">
+                <div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: `${phase.progress}%` }} />
+              </div>
+            </motion.div>
+          )}
+          {phase.kind === 'done' && (
+            <motion.div key="done" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}
+              className="flex flex-col items-center gap-2 text-center">
+              <div className="h-12 w-12 rounded-xl bg-emerald-100 flex items-center justify-center">
+                <FileSpreadsheet className="h-6 w-6 text-emerald-600" />
+              </div>
+              <p className="text-sm font-semibold text-emerald-700">Saved to server</p>
+              <p className="text-xs text-slate-500">{phase.storeCount} stores · {phase.month}</p>
+              <button onClick={e => { e.stopPropagation(); onReset() }}
+                className="mt-1 text-xs text-slate-400 hover:text-red-500 flex items-center gap-1 transition-colors">
+                <X className="h-3 w-3" /> Upload new file
+              </button>
+            </motion.div>
+          )}
+          {phase.kind === 'error' && (
+            <motion.div key="error" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="flex flex-col items-center gap-2 text-center">
+              <XCircle className="h-10 w-10 text-red-400" />
+              <p className="text-sm font-semibold text-red-600">Upload failed</p>
+              <p className="text-xs text-slate-500 max-w-[220px] leading-relaxed">{phase.message}</p>
+              <button onClick={e => { e.stopPropagation(); onReset() }} className="text-xs text-blue-500 underline">Try again</button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </div>
+  )
+}
 
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function TargetCommandCenter() {
-  // ── Dashboard store master (for reconciliation against OW Budget) ─────────
-  const { stores: dashboardStores } = useDataContext()
-
   // ── Tracker init / lifecycle ──────────────────────────────────────────────
   const [initStatus,     setInitStatus]     = useState<TrackerInitStatus>('loading')
   const [trackerStatus,  setTrackerStatus]  = useState<TrackerStatus | null>(null)
   const [currentMonth,   setCurrentMonth]   = useState<string | null>(null)
+  const [salesPhase,     setSalesPhase]     = useState<SalesPhase>({ kind: 'idle' })
+  const [showNewSales,   setShowNewSales]   = useState(false)
 
-  // ── Tracker data (own store — never touches global filter bar) ────────────
-  const [targetMap,        setTargetMap]        = useState<Map<string, number>>(new Map())
-  const [targetKeyToName,  setTargetKeyToName]  = useState<Map<string, string>>(new Map())
-  const [rawTargetRowCount,setRawTargetRowCount] = useState(0)  // rows before dedup in OW Budget
+  // ── Tracker data (own store — never touches DataContext) ──────────────────
+  const [targetMap,       setTargetMap]       = useState<Map<string, number>>(new Map())
+  const [targetKeyToName, setTargetKeyToName] = useState<Map<string, string>>(new Map())
   const [rawSalesRows,    setRawSalesRows]    = useState<{ storeName: string; sales: number; day: number }[]>([])
   const [salesMap,        setSalesMap]        = useState<Map<string, number>>(new Map())
   const [storeStateMap,   setStoreStateMap]   = useState<Map<string, string>>(new Map())
   const [statesList,      setStatesList]      = useState<string[]>([])
   const [maxElapsed,      setMaxElapsed]      = useState(1)
   const [dayOfMonth,      setDayOfMonth]      = useState(15)
-  const [latestSalesDate, setLatestSalesDate] = useState<string | null>(null)
 
   // ── Own filter state (never reads from global filter bar) ─────────────────
   const [filterState,   setFilterState]   = useState('')
 
-  // ── Month-switching loading flag ──────────────────────────────────────────
-  const [isMonthSwitching, setIsMonthSwitching] = useState(false)
-
   // ── UI state ──────────────────────────────────────────────────────────────
-  const [showAudit,     setShowAudit]     = useState(false)
+  const [showDrawer,    setShowDrawer]    = useState(false)
   const [tableSearch,   setTableSearch]   = useState('')
-  const [tableSortKey,      setTableSortKey]      = useState<TableSortKey>('achPct')
-  const [tableSortDir,      setTableSortDir]      = useState<'asc' | 'desc'>('asc')
-  const [tablePage,         setTablePage]         = useState(1)
-  const [selectedBucketIdx, setSelectedBucketIdx] = useState<number | null>(null)
+  const [tableSortKey,  setTableSortKey]  = useState<TableSortKey>('achPct')
+  const [tableSortDir,  setTableSortDir]  = useState<'asc' | 'desc'>('asc')
+  const [tablePage,     setTablePage]     = useState(1)
 
-  useEffect(() => { setTablePage(1) }, [tableSearch, tableSortKey, tableSortDir, selectedBucketIdx])
-  useEffect(() => { setSelectedBucketIdx(null) }, [filterState])
+  useEffect(() => { setTablePage(1) }, [tableSearch, tableSortKey, tableSortDir])
 
   // ── Apply tracker API data to local state ─────────────────────────────────
 
@@ -304,7 +386,6 @@ export default function TargetCommandCenter() {
     }
     setTargetMap(tm)
     setTargetKeyToName(knm)
-    setRawTargetRowCount(data.raw_target_row_count ?? data.targets.length)
 
     const rawRows: { storeName: string; sales: number; day: number }[] = []
     const stateMapNew = new Map<string, string>()
@@ -323,7 +404,6 @@ export default function TargetCommandCenter() {
     setDayOfMonth(data.max_elapsed || 1)
     setStoreStateMap(stateMapNew)
     setStatesList([...new Set(stateMapNew.values())].sort())
-    setLatestSalesDate(data.latest_sales_date ?? null)
   }, [])
 
   // ── Data fetch helpers ────────────────────────────────────────────────────
@@ -339,7 +419,7 @@ export default function TargetCommandCenter() {
   const loadMonth = useCallback(async (month: string) => {
     try {
       const { data } = await getTrackerData(month)
-      if (data.has_target) {
+      if (data.has_target && data.has_sales) {
         applyTrackerData(data)
         setCurrentMonth(month)
         setInitStatus('ready')
@@ -349,24 +429,11 @@ export default function TargetCommandCenter() {
     return false
   }, [applyTrackerData])
 
-  const handleMonthChange = useCallback(async (month: string) => {
-    if (month === currentMonth || isMonthSwitching) return
-    setIsMonthSwitching(true)
-    setFilterState('')
-    setTableSearch('')
-    setSelectedBucketIdx(null)
-    setTablePage(1)
-    await loadMonth(month)
-    setIsMonthSwitching(false)
-  }, [currentMonth, isMonthSwitching, loadMonth])
-
   const initTracker = useCallback(async () => {
     setInitStatus('loading')
     const status = await refreshStatus()
     if (!status) { setInitStatus('needs_upload'); return }
-    // Prefer a month with both targets and sales; fall back to targets-only
     const ready = status.months.find(m => m.has_target && m.has_sales)
-      ?? status.months.find(m => m.has_target)
     if (ready) {
       const ok = await loadMonth(ready.month)
       if (ok) return
@@ -376,36 +443,42 @@ export default function TargetCommandCenter() {
 
   useEffect(() => { initTracker() }, [initTracker])
 
-  // ── Fallback: use DataContext monthly_sales when tracker has no sales rows ──
-  // This fires when a month is loaded with targets but empty sales_rows (e.g.
-  // sales haven't been ingested into the tracker collection yet).  We populate
-  // salesMap from the dashboard store records so KPIs and charts show real data.
-  useEffect(() => {
-    if (!currentMonth || salesMap.size > 0 || !dashboardStores.length) return
-    const fb = new Map<string, number>()
-    for (const store of dashboardStores) {
-      const s = store.monthly_sales[currentMonth]
-      if (s && s > 0) fb.set(store.store_id, s)
+  // ── Sales upload handler ──────────────────────────────────────────────────
+
+  const handleSalesUpload = useCallback(async (file: File) => {
+    setSalesPhase({ kind: 'uploading', progress: 0 })
+    try {
+      const { data: result } = await uploadTrackerSales(file, pct =>
+        setSalesPhase({ kind: 'uploading', progress: pct })
+      )
+      setSalesPhase({ kind: 'done', month: result.month, storeCount: result.store_count })
+      const status = await refreshStatus()
+      if (status) {
+        const ready = status.months.find(m => m.month === result.month && m.has_target && m.has_sales)
+          ?? status.months.find(m => m.has_target && m.has_sales)
+        if (ready) await loadMonth(ready.month)
+      }
+      setShowNewSales(false)
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        ?? 'Upload failed. Check file format.'
+      setSalesPhase({ kind: 'error', message: msg })
     }
-    if (fb.size > 0) setSalesMap(fb)
-  }, [currentMonth, salesMap, dashboardStores])
+  }, [refreshStatus, loadMonth])
 
   // ── Sales active map: respects day slider ─────────────────────────────────
 
-  // filtered_sales = sales_data[sales_date <= selected_date]
-  // effectiveDay caps the selected day at maxElapsed so future-date data can never leak in.
   const activeSalesMap = useMemo(() => {
     const hasDateInfo = rawSalesRows.some(r => r.day > 0)
     if (!hasDateInfo) return salesMap
-    const effectiveDay = Math.min(dayOfMonth, maxElapsed)
     const map = new Map<string, number>()
     for (const r of rawSalesRows) {
-      if (r.day === 0 || r.day <= effectiveDay) {
+      if (r.day === 0 || r.day <= dayOfMonth) {
         map.set(r.storeName, (map.get(r.storeName) ?? 0) + r.sales)
       }
     }
     return map
-  }, [rawSalesRows, dayOfMonth, maxElapsed, salesMap])
+  }, [rawSalesRows, dayOfMonth, salesMap])
 
   const targetMonth = currentMonth ?? ''
   const totalDays   = useMemo(() => getDaysInMonth(targetMonth), [targetMonth])
@@ -421,7 +494,7 @@ export default function TargetCommandCenter() {
   // ── Per-store calculations ────────────────────────────────────────────────
 
   const storeCalcs = useMemo(() => {
-    const elapsed   = Math.max(1, Math.min(dayOfMonth, maxElapsed))
+    const elapsed   = Math.max(1, dayOfMonth)
     const remaining = Math.max(0, totalDays - elapsed)
     return filteredEntries.map(([storeName, target]) => {
       const store: LocalStore = {
@@ -438,18 +511,15 @@ export default function TargetCommandCenter() {
       const projAchPct   = target > 0 ? (projected / target) * 100 : 0
       const reqDRR       = remaining > 0 && gap > 0 ? gap / remaining : 0
       const expectedSales = target * (elapsed / totalDays)
-      const status          = getRisk(projAchPct)
-      const dailyTarget     = totalDays > 0 ? target / totalDays : 0
-      const runRateAchPct   = expectedSales > 0 ? (currentSales / expectedSales) * 100 : 0
-      const remainingStatus = getRemainingStatus(projAchPct)
-      return { store, target, currentSales, achPct, expectedPct, gap, gapPct, projected, projAchPct, reqDRR, expectedSales, status, dailyTarget, runRateAchPct, remainingStatus }
+      const status        = getRisk(projAchPct)
+      return { store, target, currentSales, achPct, expectedPct, gap, gapPct, projected, projAchPct, reqDRR, expectedSales, status }
     })
-  }, [filteredEntries, dayOfMonth, maxElapsed, totalDays, activeSalesMap, storeStateMap, targetKeyToName])
+  }, [filteredEntries, dayOfMonth, totalDays, activeSalesMap, storeStateMap, targetKeyToName])
 
   // ── National roll-up ──────────────────────────────────────────────────────
 
   const national = useMemo(() => {
-    const elapsed     = Math.max(1, Math.min(dayOfMonth, maxElapsed))
+    const elapsed     = Math.max(1, dayOfMonth)
     const remaining   = Math.max(0, totalDays - elapsed)
     const totalTarget = storeCalcs.reduce((s, d) => s + d.target, 0)
     const totalSales  = storeCalcs.reduce((s, d) => s + d.currentSales, 0)
@@ -464,7 +534,7 @@ export default function TargetCommandCenter() {
       remaining_target: Math.max(0, gap),
       elapsed, remaining,
     }
-  }, [storeCalcs, dayOfMonth, maxElapsed, totalDays])
+  }, [storeCalcs, dayOfMonth, totalDays])
 
   // ── Gauge ─────────────────────────────────────────────────────────────────
 
@@ -632,97 +702,30 @@ export default function TargetCommandCenter() {
     ]
   }, [stateData])
 
-  // ── Store Population Reconciliation ──────────────────────────────────────
-  // Compares the dashboard store master (from sales file) against the OW Budget
-  // target population to surface missing stores, unknown keys, and duplicates.
-
-  const reconciliation = useMemo(() => {
-    const dashboardIds  = new Set(dashboardStores.map(s => s.store_id))
-    const trackerKeys   = new Set([...targetMap.keys()])
-    const matched       = [...trackerKeys].filter(k => dashboardIds.has(k))
-    const extraInTracker    = [...trackerKeys].filter(k => !dashboardIds.has(k))
-    const missingFromTracker = dashboardStores
-      .filter(s => !trackerKeys.has(s.store_id))
-      .map(s => ({ id: s.store_id, name: s.store_name || s.store_id }))
-    const duplicateCount = Math.max(0, rawTargetRowCount - trackerKeys.size)
-    return {
-      dashboardCount:       dashboardIds.size,
-      trackerCount:         trackerKeys.size,
-      rawOWBudgetRows:      rawTargetRowCount,
-      duplicateCount,
-      matchedCount:         matched.length,
-      storesWithTargets:    matched.length,
-      storesWithoutTargets: missingFromTracker.length,
-      extraInTracker,
-      missingFromTracker,
-      reconciliationDiff:   dashboardIds.size - trackerKeys.size,
-      isClean:
-        extraInTracker.length === 0 &&
-        missingFromTracker.length === 0 &&
-        duplicateCount === 0,
-    }
-  }, [dashboardStores, targetMap, rawTargetRowCount])
-
-  // ── Achievement buckets + donut chart ────────────────────────────────────
-
-  const achBuckets = useMemo(() =>
-    ACH_BUCKETS.map(b => {
-      const stores = storeCalcs.filter(d => d.achPct >= b.min && (b.max === Infinity ? true : d.achPct < b.max))
-      return {
-        ...b,
-        count: stores.length,
-        pct: storeCalcs.length > 0 ? (stores.length / storeCalcs.length) * 100 : 0,
-      }
-    }),
-  [storeCalcs])
-
-  const donutTrace = useMemo(() => ({
-    type:      'pie' as const,
-    hole:      0.64,
-    values:    achBuckets.map(b => b.count),
-    labels:    achBuckets.map(b => b.label),
-    marker:    { colors: ACH_BUCKETS.map(b => b.color), line: { color: '#ffffff', width: 2.5 } },
-    textinfo:  'none' as const,
-    hovertemplate: '<b>%{label}</b><br>%{value} stores (%{percent:.0%})<extra></extra>',
-    pull:      ACH_BUCKETS.map((_, i) => selectedBucketIdx === i ? 0.07 : 0),
-    sort:      false,
-  }), [achBuckets, selectedBucketIdx])
-
   // ── Store table ───────────────────────────────────────────────────────────
 
   const storeTableData = useMemo(() => {
     let rows = [...storeCalcs]
     const q = tableSearch.trim().toLowerCase()
     if (q) rows = rows.filter(r => r.store.store_name.toLowerCase().includes(q) || r.store.state.toLowerCase().includes(q))
-
-    if (selectedBucketIdx !== null) {
-      const b = ACH_BUCKETS[selectedBucketIdx]
-      rows = rows.filter(r => r.achPct >= b.min && (b.max === Infinity ? true : r.achPct < b.max))
-    }
-
     rows.sort((a, b) => {
       let diff = 0
-      const REMAINING_ORDER: Record<RemainingStatus, number> = { 'Hit': 2, 'At Risk': 1, 'Miss': 0 }
       switch (tableSortKey) {
-        case 'name':             diff = a.store.store_name.localeCompare(b.store.store_name); break
-        case 'state':            diff = a.store.state.localeCompare(b.store.state); break
-        case 'target':           diff = a.target - b.target; break
-        case 'sales':            diff = a.currentSales - b.currentSales; break
-        case 'achPct':           diff = a.achPct - b.achPct; break
-        case 'gapPct':           diff = a.gapPct - b.gapPct; break
-        case 'reqDRR':           diff = a.reqDRR - b.reqDRR; break
-        case 'projected':        diff = a.projected - b.projected; break
-        case 'projAchPct':       diff = a.projAchPct - b.projAchPct; break
-        case 'status':           diff = a.projAchPct - b.projAchPct; break
-        case 'dailyTarget':      diff = a.dailyTarget - b.dailyTarget; break
-        case 'expectedTillDate': diff = a.expectedSales - b.expectedSales; break
-        case 'runRateAch':       diff = a.runRateAchPct - b.runRateAchPct; break
-        case 'remainingStatus':  diff = REMAINING_ORDER[a.remainingStatus] - REMAINING_ORDER[b.remainingStatus]; break
+        case 'name':       diff = a.store.store_name.localeCompare(b.store.store_name); break
+        case 'state':      diff = a.store.state.localeCompare(b.store.state); break
+        case 'target':     diff = a.target - b.target; break
+        case 'sales':      diff = a.currentSales - b.currentSales; break
+        case 'achPct':     diff = a.achPct - b.achPct; break
+        case 'gapPct':     diff = a.gapPct - b.gapPct; break
+        case 'reqDRR':     diff = a.reqDRR - b.reqDRR; break
+        case 'projected':  diff = a.projected - b.projected; break
+        case 'projAchPct': diff = a.projAchPct - b.projAchPct; break
+        case 'status':     diff = a.projAchPct - b.projAchPct; break
       }
       return tableSortDir === 'asc' ? diff : -diff
     })
     return rows
-  }, [storeCalcs, tableSearch, tableSortKey, tableSortDir, selectedBucketIdx])
+  }, [storeCalcs, tableSearch, tableSortKey, tableSortDir])
 
   const totalPages = Math.max(1, Math.ceil(storeTableData.length / TABLE_PAGE_SIZE))
   const pagedRows  = storeTableData.slice((tablePage - 1) * TABLE_PAGE_SIZE, tablePage * TABLE_PAGE_SIZE)
@@ -733,16 +736,12 @@ export default function TargetCommandCenter() {
   }, [tableSortKey])
 
   const exportCsv = useCallback(() => {
-    const headers = ['Rank', 'Store Name', 'State', 'Current Sales (₹)', 'Monthly Target (₹)', 'Daily Target (₹)', 'Expected Till Date (₹)', 'Run Rate Ach %', 'Monthly Ach %', 'Remaining Status', 'Projected Ach %']
-    const rows = storeTableData.map((r, i) => [
-      String(i + 1),
+    const headers = ['Store Name', 'State', 'Target (₹)', 'Current Sales (₹)', 'Achievement %', 'Gap (₹)', 'Gap %', 'Req Daily Sales (₹)', 'Projected Month-End (₹)', 'Projected %', 'Risk Status']
+    const rows = storeTableData.map(r => [
       r.store.store_name, r.store.state,
-      r.currentSales.toFixed(0), r.target.toFixed(0),
-      r.dailyTarget.toFixed(0), r.expectedSales.toFixed(0),
-      r.runRateAchPct.toFixed(1) + '%',
-      r.achPct.toFixed(1) + '%',
-      r.remainingStatus,
-      r.projAchPct.toFixed(1) + '%',
+      r.target.toFixed(0), r.currentSales.toFixed(0),
+      r.achPct.toFixed(1) + '%', r.gap.toFixed(0), r.gapPct.toFixed(1) + '%',
+      r.reqDRR.toFixed(0), r.projected.toFixed(0), r.projAchPct.toFixed(1) + '%', r.status,
     ])
     const csv = [headers, ...rows].map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
     const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
@@ -754,25 +753,15 @@ export default function TargetCommandCenter() {
   }, [storeTableData, dayOfMonth, targetMonth])
 
   const exportXlsx = useCallback(() => {
-    const headers = ['Rank', 'Store Name', 'State', 'Current Sales (₹)', 'Monthly Target (₹)', 'Daily Target (₹)', 'Expected Till Date (₹)', 'Run Rate Ach %', 'Monthly Ach %', 'Remaining Status', 'Projected Ach %']
-    const rows = storeTableData.map((r, i) => [
-      i + 1,
+    const headers = ['Store Name', 'State', 'Target (₹)', 'Current Sales (₹)', 'Achievement %', 'Gap (₹)', 'Gap %', 'Req Daily Sales (₹)', 'Projected Month-End (₹)', 'Projected %', 'Risk Status']
+    const rows = storeTableData.map(r => [
       r.store.store_name, r.store.state,
-      r.currentSales, r.target,
-      r.dailyTarget, r.expectedSales,
-      r.runRateAchPct.toFixed(1) + '%',
-      r.achPct.toFixed(1) + '%',
-      r.remainingStatus,
-      r.projAchPct.toFixed(1) + '%',
+      r.target, r.currentSales,
+      r.achPct.toFixed(1) + '%', r.gap, r.gapPct.toFixed(1) + '%',
+      r.reqDRR.toFixed(0), r.projected.toFixed(0), r.projAchPct.toFixed(1) + '%', r.status,
     ])
     exportExcel(`target-tracker-day${dayOfMonth}-${targetMonth}`, headers, rows)
   }, [storeTableData, dayOfMonth, targetMonth])
-
-  // ── Available months for the month selector ──────────────────────────────
-  const availableMonths = useMemo(
-    () => (trackerStatus?.months ?? []).filter(m => m.has_target),
-    [trackerStatus],
-  )
 
   // ── Guards ────────────────────────────────────────────────────────────────
 
@@ -788,25 +777,93 @@ export default function TargetCommandCenter() {
   }
 
   if (initStatus === 'needs_upload') {
+    const activeMonth = trackerStatus?.active_target_month
     return (
-      <div className="min-h-[420px] flex items-center justify-center p-8">
-        <div className="max-w-sm w-full rounded-2xl border border-gray-200 bg-white p-8 shadow-sm text-center space-y-4">
-          <div className="h-12 w-12 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center mx-auto">
-            <Database className="h-6 w-6 text-blue-400" />
+      <>
+        <TargetManagementDrawer
+          open={showDrawer}
+          onClose={() => setShowDrawer(false)}
+          onTargetChanged={initTracker}
+        />
+        <div className="max-w-xl mx-auto py-8 space-y-5">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <h2 className="text-base font-bold text-gray-900">Target Command Center</h2>
+              <p className="text-[11px] text-gray-500 mt-0.5">Upload sales data to begin tracking</p>
+            </div>
+            <ManageBtn onClick={() => setShowDrawer(true)} />
           </div>
-          <h3 className="text-base font-bold text-gray-900">No Tracker Data in MongoDB</h3>
-          <p className="text-sm text-gray-500 leading-relaxed">
-            No target or sales data was found for the current month in MongoDB.
-            Please ensure the database is populated with target and sales records.
-          </p>
-          <button
-            onClick={initTracker}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
-          >
-            <RefreshCw className="h-4 w-4" /> Retry
-          </button>
+
+          {/* Target status */}
+          <div className={cn('rounded-xl border p-4', activeMonth ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50')}>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className={cn('h-9 w-9 rounded-lg flex items-center justify-center shrink-0', activeMonth ? 'bg-emerald-100' : 'bg-amber-100')}>
+                  <Target className={cn('h-5 w-5', activeMonth ? 'text-emerald-600' : 'text-amber-600')} />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-gray-800">Monthly Target File</p>
+                  {activeMonth
+                    ? <p className="text-xs text-emerald-700 mt-0.5">Active: <span className="font-semibold">{activeMonth}</span></p>
+                    : <p className="text-xs text-amber-700 mt-0.5">No active target — click "Manage Targets" first</p>
+                  }
+                </div>
+              </div>
+              <button onClick={() => setShowDrawer(true)}
+                className="text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors"
+                style={activeMonth
+                  ? { borderColor: '#6ee7b7', color: '#047857', backgroundColor: '#d1fae5' }
+                  : { borderColor: '#fcd34d', color: '#92400e', backgroundColor: '#fef3c7' }}>
+                {activeMonth ? 'Change' : 'Upload Target'}
+              </button>
+            </div>
+          </div>
+
+          {/* Sales upload zone */}
+          <SalesUploadZone
+            phase={salesPhase}
+            onFile={handleSalesUpload}
+            onReset={() => setSalesPhase({ kind: 'idle' })}
+          />
+
+          {!activeMonth && (
+            <p className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2.5">
+              <span className="font-semibold">Tip:</span> Upload the OW Budget target file first, then upload the sales file.
+            </p>
+          )}
+
+          {/* Stored months */}
+          {trackerStatus && trackerStatus.months.length > 0 && (
+            <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
+                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Stored Months</p>
+              </div>
+              <div className="divide-y divide-gray-100">
+                {trackerStatus.months.slice(0, 6).map(m => (
+                  <div key={m.month} className="flex items-center justify-between px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs font-semibold text-gray-700">{m.month}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full font-medium', m.has_target ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-400')}>
+                          {m.has_target ? '✓ Target' : '– Target'}
+                        </span>
+                        <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full font-medium', m.has_sales ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-400')}>
+                          {m.has_sales ? '✓ Sales' : '– Sales'}
+                        </span>
+                      </div>
+                    </div>
+                    {m.has_target && m.has_sales && (
+                      <button onClick={() => loadMonth(m.month)} className="text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors">
+                        Load →
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
-      </div>
+      </>
     )
   }
 
@@ -814,9 +871,19 @@ export default function TargetCommandCenter() {
 
   if (storeCalcs.length === 0) {
     return (
-      <div className="rounded-xl border border-gray-200 bg-gray-50 min-h-72 flex items-center justify-center">
-        <p className="text-sm text-gray-500">No stores with targets match the current filter.</p>
-      </div>
+      <>
+        <div className="flex justify-end mb-3 gap-2">
+          <button onClick={() => { setInitStatus('needs_upload'); setSalesPhase({ kind: 'idle' }) }}
+            className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-white border border-gray-200 text-xs font-medium text-gray-600 hover:text-gray-900 hover:border-gray-400 shadow-sm transition-colors">
+            <RefreshCw className="h-3.5 w-3.5" /> New Sales
+          </button>
+          <ManageBtn onClick={() => setShowDrawer(true)} />
+        </div>
+        <div className="rounded-xl border border-gray-200 bg-gray-50 min-h-72 flex items-center justify-center">
+          <p className="text-sm text-gray-500">No stores with targets match the current filter.</p>
+        </div>
+        <TargetManagementDrawer open={showDrawer} onClose={() => setShowDrawer(false)} onTargetChanged={initTracker} />
+      </>
     )
   }
 
@@ -830,6 +897,34 @@ export default function TargetCommandCenter() {
   return (
     <div className="space-y-6">
 
+      {/* ── Inline "Upload New Sales" panel (collapsible) ── */}
+      <AnimatePresence>
+        {showNewSales && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.25, ease: 'easeInOut' }}
+            className="overflow-hidden"
+          >
+            <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-blue-900">Upload New Sales Data</p>
+                <button onClick={() => { setShowNewSales(false); setSalesPhase({ kind: 'idle' }) }}
+                  className="text-blue-400 hover:text-blue-600 transition-colors">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <SalesUploadZone
+                phase={salesPhase}
+                onFile={handleSalesUpload}
+                onReset={() => setSalesPhase({ kind: 'idle' })}
+              />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* ── Page Header ── */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}
@@ -841,49 +936,10 @@ export default function TargetCommandCenter() {
           <h2 className="text-base font-bold text-gray-900">Target Command Center</h2>
           <p className="text-[11px] text-gray-500 mt-0.5">
             Target month: <span className="text-blue-600 font-semibold">{targetMonth || '—'}</span>
-            {' · '}{storeCalcs.length} stores (OW Budget){' · '}
-            {reconciliation.dashboardCount} stores (Dashboard){' · '}
-            Day {dayOfMonth} of {totalDays}
+            {' · '}{storeCalcs.length} stores · OOW Budget · Day {dayOfMonth} of {totalDays}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Latest sales date indicator */}
-          {latestSalesDate && (
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-              <span className="text-[11px] text-gray-500">
-                Sales data till:{' '}
-                <span className="font-semibold text-emerald-700">{formatSalesDate(latestSalesDate)}</span>
-              </span>
-            </div>
-          )}
-
-          {/* Month filter */}
-          {availableMonths.length > 0 && (
-            <div className="flex items-center gap-1.5">
-              <Calendar className="h-3.5 w-3.5 text-blue-500 shrink-0" />
-              <Select
-                value={currentMonth ?? ''}
-                onValueChange={handleMonthChange}
-                disabled={isMonthSwitching}
-              >
-                <SelectTrigger className="h-8 w-32 text-xs">
-                  <SelectValue placeholder="Select month" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableMonths.map(m => (
-                    <SelectItem key={m.month} value={m.month}>
-                      {m.month}{!m.has_sales ? ' · targets only' : ''}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {isMonthSwitching && (
-                <Loader2 className="h-3.5 w-3.5 text-blue-400 animate-spin shrink-0" />
-              )}
-            </div>
-          )}
-
           {/* State filter — own isolated state, never reads global filter bar */}
           <Select value={filterState || '__all__'} onValueChange={v => setFilterState(v === '__all__' ? '' : v)}>
             <SelectTrigger className="h-8 w-36 text-xs">
@@ -895,137 +951,26 @@ export default function TargetCommandCenter() {
             </SelectContent>
           </Select>
 
-          {/* Store Audit toggle */}
+          {/* Upload Sales toggle */}
           <button
-            onClick={() => setShowAudit(v => !v)}
+            onClick={() => { setShowNewSales(v => !v); setSalesPhase({ kind: 'idle' }) }}
             className={cn(
               'flex items-center gap-1.5 h-8 px-3 rounded-lg border text-xs font-medium transition-colors shadow-sm',
-              showAudit
-                ? 'bg-amber-600 text-white border-amber-600'
-                : reconciliation.isClean
-                  ? 'bg-white border-gray-200 text-gray-600 hover:text-gray-900 hover:border-gray-400'
-                  : 'bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100',
+              showNewSales
+                ? 'bg-blue-600 text-white border-blue-600'
+                : 'bg-white border-gray-200 text-gray-600 hover:text-gray-900 hover:border-gray-400',
             )}
           >
-            <Activity className="h-3.5 w-3.5" />
-            Store Audit
-            {!reconciliation.isClean && !showAudit && (
-              <span className="ml-0.5 inline-flex items-center justify-center h-4 w-4 rounded-full bg-amber-500 text-white text-[10px] font-bold leading-none">
-                {reconciliation.extraInTracker.length + (reconciliation.duplicateCount > 0 ? 1 : 0)}
-              </span>
-            )}
+            <UploadCloud className="h-3.5 w-3.5" />
+            Upload Sales
           </button>
+
+          <ManageBtn onClick={() => setShowDrawer(true)} />
         </div>
       </motion.div>
 
-      {/* ── Store Population Audit Panel ── */}
-      <AnimatePresence>
-        {showAudit && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.25, ease: 'easeInOut' }}
-            className="overflow-hidden"
-          >
-            <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4 space-y-4">
-
-              {/* Header */}
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <Activity className="h-4 w-4 text-amber-600 shrink-0" />
-                  <p className="text-sm font-semibold text-gray-800">Store Population Audit</p>
-                  <span className="text-[10px] text-gray-500">Reconciliation between Dashboard store master and OW Budget target file</span>
-                </div>
-                <button onClick={() => setShowAudit(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-
-              {/* Summary grid */}
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
-                {[
-                  { label: 'Dashboard Stores',     value: reconciliation.dashboardCount,       sub: 'from sales file',        color: 'text-gray-800'    },
-                  { label: 'OW Budget Stores',      value: reconciliation.trackerCount,         sub: 'unique store keys',      color: 'text-blue-700'    },
-                  { label: 'OW Budget Raw Rows',    value: reconciliation.rawOWBudgetRows,      sub: 'before deduplication',   color: 'text-gray-600'    },
-                  { label: 'Duplicate Keys Merged', value: reconciliation.duplicateCount,       sub: 'targets summed',         color: reconciliation.duplicateCount > 0 ? 'text-amber-700' : 'text-emerald-700' },
-                  { label: 'Matched',               value: reconciliation.matchedCount,         sub: 'in both files',          color: 'text-emerald-700' },
-                  { label: 'Missing from OW Budget',value: reconciliation.storesWithoutTargets, sub: 'dashboard stores w/o target', color: reconciliation.storesWithoutTargets > 0 ? 'text-amber-700' : 'text-emerald-700' },
-                  { label: 'Unknown OW Keys',       value: reconciliation.extraInTracker.length,sub: 'not in dashboard',        color: reconciliation.extraInTracker.length > 0 ? 'text-red-700' : 'text-emerald-700' },
-                ].map(({ label, value, sub, color }) => (
-                  <div key={label} className="rounded-lg border border-amber-100 bg-white px-3 py-2 space-y-0.5">
-                    <p className="text-[10px] font-medium uppercase tracking-wider text-gray-500">{label}</p>
-                    <p className={cn('text-xl font-bold tabular-nums', color)}>{value}</p>
-                    <p className="text-[10px] text-gray-400">{sub}</p>
-                  </div>
-                ))}
-              </div>
-
-              {/* Reconciliation Difference */}
-              <div className={cn(
-                'rounded-lg border px-3 py-2 text-xs font-medium',
-                reconciliation.reconciliationDiff === 0
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                  : 'border-amber-200 bg-amber-50 text-amber-800',
-              )}>
-                Reconciliation Difference: {reconciliation.reconciliationDiff > 0 ? '+' : ''}{reconciliation.reconciliationDiff} stores
-                {' '}(Dashboard {reconciliation.dashboardCount} vs OW Budget {reconciliation.trackerCount})
-                {reconciliation.reconciliationDiff === 0 && ' — store counts reconcile ✓'}
-              </div>
-
-              {/* Dashboard stores missing from OW Budget */}
-              {reconciliation.missingFromTracker.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-xs font-semibold text-amber-800">
-                    Dashboard stores without OW Budget targets ({reconciliation.missingFromTracker.length}):
-                  </p>
-                  <div className="max-h-40 overflow-y-auto rounded-lg border border-amber-100 bg-white divide-y divide-gray-50">
-                    {reconciliation.missingFromTracker.map(s => (
-                      <div key={s.id} className="flex items-center gap-3 px-3 py-1.5">
-                        <span className="text-[10px] font-mono text-gray-400 w-20 shrink-0">{s.id}</span>
-                        <span className="text-xs text-gray-700 truncate">{s.name}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* OW Budget keys not in dashboard */}
-              {reconciliation.extraInTracker.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-xs font-semibold text-red-700">
-                    OW Budget store keys not found in Dashboard ({reconciliation.extraInTracker.length}) — possible key mismatch:
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {reconciliation.extraInTracker.map(k => (
-                      <span key={k} className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-mono bg-red-50 text-red-700 border border-red-200">
-                        {k}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {reconciliation.isClean && (
-                <p className="text-xs text-emerald-700 font-medium">
-                  ✓ All OW Budget store keys match the Dashboard store master. No duplicates detected.
-                </p>
-              )}
-
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {/* ── Day Slider ── */}
-      <DaySlider
-        value={dayOfMonth}
-        onChange={setDayOfMonth}
-        maxDay={maxElapsed}
-        targetMonth={targetMonth}
-        hasDailyData={rawSalesRows.some(r => r.day > 0)}
-        latestSalesDate={latestSalesDate}
-      />
+      <DaySlider value={dayOfMonth} onChange={setDayOfMonth} targetMonth={targetMonth} />
 
       {/* ── ROW 1: KPI Cards ── */}
       <motion.div
@@ -1034,8 +979,8 @@ export default function TargetCommandCenter() {
         initial="hidden"
         animate="show"
       >
-        <KPICard label="Sales Target" value={fmtInr(national.totalTarget)}
-          sub={`${storeCalcs.length} / ${reconciliation.dashboardCount} stores`}
+        <KPICard label="OOW Target" value={fmtInr(national.totalTarget)}
+          sub={`${storeCalcs.length} stores`}
           icon={<Target className="h-4 w-4" />} />
         <KPICard label="Sales" value={fmtInr(national.totalSales)}
           sub={`Day ${dayOfMonth} of ${totalDays}`}
@@ -1051,19 +996,17 @@ export default function TargetCommandCenter() {
             : <TrendingDown className="h-4 w-4 text-red-500" />} />
         <KPICard label="Gap to Target"
           value={gapPositive ? fmtInr(national.gap) : '✓ Exceeded'}
-          sub={gapPositive
-            ? (national.remaining > 0 ? `${national.remaining} days remaining` : 'Month ended')
-            : `by ${fmtInr(-national.gap)}`}
+          sub={gapPositive ? 'still to be sold' : `by ${fmtInr(-national.gap)}`}
           valueClass={gapPositive ? 'text-red-600' : 'text-emerald-600'}
           icon={gapPositive ? <AlertCircle className="h-4 w-4 text-red-500" /> : <TrendingUp className="h-4 w-4 text-emerald-500" />} />
-        <KPICard label="Current Pace"
-          value={national.elapsed > 0 ? `${fmtInr(national.totalSales / national.elapsed)}/day` : '—'}
-          sub="Current sales velocity"
-          valueClass="text-blue-600"
-          icon={<Activity className="h-4 w-4 text-blue-500" />} />
+        <KPICard label="Remaining Target"
+          value={national.remaining_target > 0 ? fmtInr(national.remaining_target) : '—'}
+          sub={`${national.remaining} days left`}
+          valueClass={national.remaining_target > 0 ? 'text-amber-600' : 'text-gray-400'}
+          icon={<Minus className="h-4 w-4 text-amber-500" />} />
         <KPICard label="Req. Daily Run Rate"
           value={national.reqDRR > 0 ? fmtInr(national.reqDRR) : '—'}
-          sub={totalDays > 0 ? `Target pace: ${fmtInr(national.totalTarget / totalDays)}/day` : '—'}
+          sub="per day to close gap"
           valueClass={national.reqDRR > 0 ? 'text-amber-600' : 'text-gray-400'}
           icon={<Zap className="h-4 w-4 text-amber-500" />} />
         <KPICard label="Projected Month-End" value={fmtInr(national.projected)}
@@ -1107,7 +1050,7 @@ export default function TargetCommandCenter() {
               font: { color: PF.font, family: 'Inter,sans-serif', size: 11 },
               legend: { bgcolor: 'rgba(0,0,0,0)', font: { color: PF.legend, size: 10 }, orientation: 'h' as const, y: -0.26 },
               xaxis: { ...PLOTLY_AXES, title: { text: 'Day of Month' }, dtick: 5, range: [0, totalDays + 0.5] },
-              yaxis: { ...PLOTLY_AXES, tickformat: ',.0s', title: { text: `Cumulative Sales (₹) — ${targetMonth}` } },
+              yaxis: { ...PLOTLY_AXES, title: { text: `Cumulative Sales (₹) — ${targetMonth}` }, ...plotlyInrTickVals(Math.max(national.totalSales, national.totalTarget) * 1.1) },
               hovermode: 'closest' as const,
               margin: { l: 70, r: 16, t: 8, b: 100 }, height: 310,
               shapes: [{ type: 'line' as const, x0: dayOfMonth, x1: dayOfMonth, y0: 0, y1: 1, xref: 'x' as const, yref: 'paper' as const, line: { color: '#3b82f650', width: 1.5, dash: 'dot' as const } }],
@@ -1133,8 +1076,8 @@ export default function TargetCommandCenter() {
             paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
             font: { color: PF.font, family: 'Inter,sans-serif', size: 11 },
             legend: { bgcolor: 'rgba(0,0,0,0)', font: { color: PF.legend, size: 10 }, orientation: 'h' as const, y: -0.18 },
-            xaxis: { ...PLOTLY_AXES, title: { text: `Expected Sales at Day ${dayOfMonth} (₹)` }, tickformat: ',.0s' },
-            yaxis: { ...PLOTLY_AXES, title: { text: 'Actual Sales (₹)' }, tickformat: ',.0s' },
+            xaxis: { ...PLOTLY_AXES, title: { text: `Expected Sales at Day ${dayOfMonth} (₹)` }, ...plotlyInrTickVals(Math.max(...storeCalcs.map(d => Math.max(d.expectedSales, d.currentSales)), 1) * 1.12) },
+            yaxis: { ...PLOTLY_AXES, title: { text: 'Actual Sales (₹)' }, ...plotlyInrTickVals(Math.max(...storeCalcs.map(d => Math.max(d.expectedSales, d.currentSales)), 1) * 1.12) },
             hovermode: 'closest' as const,
             margin: { l: 70, r: 20, t: 16, b: 90 }, height: 380,
           }}
@@ -1168,7 +1111,7 @@ export default function TargetCommandCenter() {
             paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
             font: { color: PF.font, family: 'Inter,sans-serif', size: 11 },
             legend: { bgcolor: 'rgba(0,0,0,0)', font: { color: PF.legend, size: 10 }, orientation: 'h' as const, y: -0.18 },
-            xaxis: { ...PLOTLY_AXES, type: 'log' as const, title: { text: 'Monthly Target (₹, log scale)' }, tickformat: ',.0s' },
+            xaxis: { ...PLOTLY_AXES, type: 'log' as const, title: { text: 'Monthly Target (₹, log scale)' }, ...plotlyInrLogTickVals(Math.max(...storeCalcs.map(d => d.target), 1)) },
             yaxis: { ...PLOTLY_AXES, title: { text: 'Projected Achievement %' }, range: [0, projYMax] },
             hovermode: 'closest' as const,
             margin: { l: 64, r: 20, t: 16, b: 90 }, height: 420,
@@ -1268,164 +1211,14 @@ export default function TargetCommandCenter() {
         </div>
       </motion.div>
 
-      {/* ── ROW 6: Achievement Distribution ── */}
-      <motion.div {...panelSpring(0.32)}
-        className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
-        <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <h3 className="text-sm font-semibold text-gray-800">Achievement Distribution</h3>
-            <p className="text-[11px] text-gray-500 mt-0.5">
-              Store count by Monthly Achievement % · Click a segment or card to filter the performance table
-            </p>
-          </div>
-          {selectedBucketIdx !== null && (
-            <button
-              onClick={() => setSelectedBucketIdx(null)}
-              className="flex items-center gap-1.5 h-7 px-3 rounded-lg bg-blue-50 border border-blue-200 text-xs font-medium text-blue-600 hover:bg-blue-100 transition-colors"
-            >
-              <X className="h-3 w-3" /> Clear filter: {ACH_BUCKETS[selectedBucketIdx].label}
-            </button>
-          )}
-        </div>
-
-        {/* Bucket KPI Cards */}
-        <div className="px-4 pt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
-          {achBuckets.map((b, i) => (
-            <button
-              key={b.label}
-              onClick={() => setSelectedBucketIdx(selectedBucketIdx === i ? null : i)}
-              className={cn(
-                'rounded-xl border p-3 text-left transition-all cursor-pointer',
-                selectedBucketIdx === i
-                  ? `${b.borderClass} ${b.bgClass} shadow-sm ring-2 ring-offset-1`
-                  : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm',
-              )}
-            >
-              <p className="text-[10px] font-medium uppercase tracking-wider text-gray-500">{b.label}</p>
-              <p className={cn('text-2xl font-bold tabular-nums mt-0.5', b.textClass)}>{b.count}</p>
-              <p className="text-[10px] text-gray-400 mt-0.5">{b.pct.toFixed(1)}% of stores</p>
-            </button>
-          ))}
-        </div>
-
-        {/* Donut chart + legend */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-2 p-4 items-center">
-          <div className="relative">
-            <Plot
-              data={[donutTrace]}
-              layout={{
-                paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
-                font: { color: PF.font, family: 'Inter,sans-serif', size: 11 },
-                showlegend: false,
-                margin: { l: 20, r: 20, t: 12, b: 12 },
-                height: 240,
-                annotations: [{
-                  text: `<b>${storeCalcs.length}</b><br><span style="font-size:10px;color:#6b7280">stores</span>`,
-                  x: 0.5, y: 0.5, xref: 'paper' as const, yref: 'paper' as const,
-                  showarrow: false,
-                  font: { size: 20, color: '#111827', family: 'Inter,sans-serif' },
-                  align: 'center',
-                }],
-              }}
-              config={{ displayModeBar: false, responsive: true }}
-              style={{ width: '100%' }}
-              onClick={(data: { points?: Array<{ pointIndex: number }> }) => {
-                const idx = data.points?.[0]?.pointIndex
-                if (idx !== undefined) setSelectedBucketIdx(v => v === idx ? null : idx)
-              }}
-            />
-          </div>
-          <div className="space-y-1.5 px-2">
-            {ACH_BUCKETS.map((b, i) => {
-              const bucket = achBuckets[i]
-              const isActive = selectedBucketIdx === i
-              return (
-                <button
-                  key={b.label}
-                  onClick={() => setSelectedBucketIdx(isActive ? null : i)}
-                  className={cn(
-                    'w-full flex items-center justify-between rounded-lg px-3 py-2 transition-colors text-left',
-                    isActive ? `${b.bgClass} border ${b.borderClass}` : 'bg-gray-50 hover:bg-gray-100 border border-transparent',
-                  )}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: b.color }} />
-                    <span className="text-xs font-medium text-gray-700">{b.label} Achievement</span>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <span className={cn('text-sm font-bold tabular-nums', b.textClass)}>{bucket.count}</span>
-                    <div className="w-20 h-1.5 rounded-full bg-gray-200 overflow-hidden">
-                      <div className="h-full rounded-full transition-all" style={{ width: `${bucket.pct}%`, backgroundColor: b.color }} />
-                    </div>
-                    <span className="text-[10px] text-gray-400 w-8 text-right">{bucket.pct.toFixed(0)}%</span>
-                  </div>
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      </motion.div>
-
-      {/* ── Metric Definitions ── */}
-      <motion.div {...panelSpring(0.34)}
-        className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-        <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2">
-          <Info className="h-4 w-4 text-blue-500 shrink-0" />
-          <div>
-            <h3 className="text-sm font-semibold text-gray-800">Metric Definitions</h3>
-            <p className="text-[11px] text-gray-500 mt-0.5">How the key performance columns in the table below are calculated</p>
-          </div>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 p-4">
-          {[
-            {
-              label:   'Run Rate Ach %',
-              formula: 'Current Sales ÷ Expected Till Date × 100',
-              sub:     `Expected Till Date = Monthly Target × (Day ${dayOfMonth} ÷ ${totalDays} days)`,
-              meaning: 'Whether the store is ahead of or behind the daily pace needed to hit its target by today. Above 100% means running ahead of schedule.',
-            },
-            {
-              label:   'Monthly Ach %',
-              formula: 'Current Sales ÷ Monthly Target × 100',
-              sub:     'Raw progress toward the full-month OOW budget',
-              meaning: 'Percentage of the monthly target already achieved. Does not factor in how much of the month has passed.',
-            },
-            {
-              label:   'Status',
-              formula: 'Driven by Projected Ach %',
-              sub:     'Hit ≥ 100%  ·  At Risk 75 – 99%  ·  Miss < 75%',
-              meaning: 'Performance classification based on whether the store is projected to meet its target at month-end.',
-            },
-            {
-              label:   'Projected Ach %',
-              formula: `(Current Sales ÷ Day ${dayOfMonth}) × ${totalDays} ÷ Target × 100`,
-              sub:     'Estimated month-end achievement at the current daily run rate',
-              meaning: 'If today\'s daily pace holds for the rest of the month, this is the achievement % the store will reach at month-end.',
-            },
-          ].map(({ label, formula, sub, meaning }) => (
-            <div key={label} className="rounded-lg border border-gray-100 bg-gray-50/60 px-3 py-2.5 space-y-1.5">
-              <div className="flex items-center gap-1.5">
-                <Info className="h-3 w-3 text-blue-400 shrink-0" />
-                <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600">{label}</p>
-              </div>
-              <p className="text-[11px] font-mono text-gray-700 bg-white rounded border border-gray-200 px-2 py-1 leading-snug">{formula}</p>
-              <p className="text-[10px] text-gray-400 leading-snug">{sub}</p>
-              <p className="text-[11px] text-gray-500 leading-relaxed">{meaning}</p>
-            </div>
-          ))}
-        </div>
-      </motion.div>
-
-      {/* ── ROW 7: Store Performance Table ── */}
+      {/* ── ROW 6: Store Command Center Table ── */}
       <motion.div {...panelSpring(0.35)}
         className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
         <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
           <div>
-            <h3 className="text-sm font-semibold text-gray-800">Store Performance</h3>
+            <h3 className="text-sm font-semibold text-gray-800">Store Command Center</h3>
             <p className="text-[11px] text-gray-500 mt-0.5">
-              {storeTableData.length} store{storeTableData.length !== 1 ? 's' : ''}
-              {selectedBucketIdx !== null ? ` · Filtered: ${ACH_BUCKETS[selectedBucketIdx].label} Achievement` : ''}
-              {' · '}Page {tablePage} of {totalPages}
+              {storeTableData.length} store{storeTableData.length !== 1 ? 's' : ''} · sortable · searchable · Page {tablePage} of {totalPages}
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -1453,24 +1246,24 @@ export default function TargetCommandCenter() {
           </div>
         </div>
 
-        <div className="max-h-[640px] overflow-auto">
+        <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="sticky top-0 z-10">
+            <thead>
               <tr className="border-b border-gray-200 bg-gray-50">
-                <th className="px-3 py-2.5 text-left text-xs text-gray-400 w-8 sticky top-0 bg-gray-50">#</th>
+                <th className="px-3 py-2.5 text-left text-xs text-gray-400 w-8">#</th>
                 {([
-                  { col: 'name'            as TableSortKey, label: 'Store Name',        tip: 'Store name'                                                                               },
-                  { col: 'sales'           as TableSortKey, label: 'Current Sales',     tip: `Actual cumulative sales recorded through Day ${dayOfMonth}`                              },
-                  { col: 'target'          as TableSortKey, label: 'Monthly Target',    tip: 'Full-month OOW budget target'                                                             },
-                  { col: 'dailyTarget'     as TableSortKey, label: 'Daily Target',      tip: `Monthly Target ÷ ${totalDays} days — average daily sales required`                       },
-                  { col: 'expectedTillDate'as TableSortKey, label: 'Expected Till Date',tip: `Pro-rated target by Day ${dayOfMonth} = Monthly Target × (${dayOfMonth} / ${totalDays})` },
-                  { col: 'runRateAch'      as TableSortKey, label: 'Run Rate Ach %',    tip: 'Current Sales ÷ Expected Till Date × 100 — see Metric Definitions above',    info: true  },
-                  { col: 'achPct'          as TableSortKey, label: 'Monthly Ach %',     tip: 'Current Sales ÷ Monthly Target × 100 — see Metric Definitions above',        info: true  },
-                  { col: 'remainingStatus' as TableSortKey, label: 'Status',            tip: 'Hit ≥ 100% projected · At Risk 75–99% · Miss < 75% — see Metric Definitions above', info: true },
-                  { col: 'projAchPct'      as TableSortKey, label: 'Projected Ach %',   tip: `(Current Sales ÷ Day ${dayOfMonth}) × ${totalDays} ÷ Target × 100 — see Metric Definitions above`, info: true },
-                ]).map(({ col, label, tip, info }) => (
-                  <th key={col} className="px-3 py-2.5 text-left sticky top-0 bg-gray-50" title={tip}>
-                    <SortBtn col={col} sortKey={tableSortKey} sortDir={tableSortDir} onSort={toggleSort} label={label} info={info} />
+                  { col: 'name'       as TableSortKey, label: 'Store'       },
+                  { col: 'state'      as TableSortKey, label: 'State'       },
+                  { col: 'target'     as TableSortKey, label: 'OOW Target'  },
+                  { col: 'sales'      as TableSortKey, label: 'Sales'       },
+                  { col: 'achPct'     as TableSortKey, label: 'Ach %'       },
+                  { col: 'gapPct'     as TableSortKey, label: 'Gap %'       },
+                  { col: 'reqDRR'     as TableSortKey, label: 'Req Daily'   },
+                  { col: 'projected'  as TableSortKey, label: 'Projection'  },
+                  { col: 'status'     as TableSortKey, label: 'Risk Status' },
+                ] as const).map(({ col, label }) => (
+                  <th key={col} className="px-3 py-2.5 text-left">
+                    <SortBtn col={col} sortKey={tableSortKey} sortDir={tableSortDir} onSort={toggleSort} label={label} />
                   </th>
                 ))}
               </tr>
@@ -1479,67 +1272,38 @@ export default function TargetCommandCenter() {
               {pagedRows.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="px-3 py-10 text-center text-gray-400 text-sm">
-                    {tableSearch ? `No stores match "${tableSearch}"` : 'No stores in this filter.'}
+                    No stores match "{tableSearch}"
                   </td>
                 </tr>
               ) : pagedRows.map((row, i) => {
                 const globalIdx = (tablePage - 1) * TABLE_PAGE_SIZE + i + 1
-                const rowBg =
-                  row.achPct >= 100 ? 'bg-emerald-50/50 hover:bg-emerald-50' :
-                  row.achPct >= 75  ? 'bg-amber-50/50 hover:bg-amber-50'     :
-                                      'bg-red-50/40 hover:bg-red-50/70'
-                const runColor =
-                  row.runRateAchPct >= 100 ? 'text-emerald-600' :
-                  row.runRateAchPct >= 75  ? 'text-amber-600'   : 'text-red-600'
-                const monthColor =
-                  row.achPct >= 100 ? 'text-emerald-600' :
-                  row.achPct >= 75  ? 'text-amber-600'   : 'text-red-600'
-                const projColor =
-                  row.projAchPct >= 100 ? 'text-emerald-600' :
-                  row.projAchPct >= 75  ? 'text-amber-600'   : 'text-red-600'
-                const bucketDot = ACH_BUCKETS[getBucketIdx(row.achPct)].color
                 return (
-                  <tr key={row.store.store_id} className={cn('border-b border-gray-100 transition-colors', rowBg)}>
-                    <td className="px-3 py-2 text-gray-400 tabular-nums text-xs">{globalIdx}</td>
-                    <td className="px-3 py-2">
-                      <div className="flex items-center gap-1.5">
-                        <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: bucketDot }} />
-                        <p className="text-gray-900 font-medium text-xs truncate max-w-[160px]" title={row.store.store_name}>
-                          {row.store.store_name}
-                        </p>
-                      </div>
-                      {row.store.state && <p className="text-[10px] text-gray-400 pl-3.5">{row.store.state}</p>}
+                  <tr key={row.store.store_id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                    <td className="px-3 py-2.5 text-gray-400 tabular-nums text-xs">{globalIdx}</td>
+                    <td className="px-3 py-2.5">
+                      <p className="text-gray-900 font-medium text-xs truncate max-w-[180px]" title={row.store.store_name}>
+                        {row.store.store_name}
+                      </p>
                     </td>
-                    <td className="px-3 py-2 text-gray-800 tabular-nums text-xs font-medium whitespace-nowrap">{fmtInr(row.currentSales)}</td>
-                    <td className="px-3 py-2 text-gray-600 tabular-nums text-xs whitespace-nowrap">{fmtInr(row.target)}</td>
-                    <td className="px-3 py-2 text-gray-500 tabular-nums text-xs whitespace-nowrap">{fmtInr(row.dailyTarget)}</td>
-                    <td className="px-3 py-2 text-gray-500 tabular-nums text-xs whitespace-nowrap">{fmtInr(row.expectedSales)}</td>
-                    <td className={cn('px-3 py-2 tabular-nums text-xs font-semibold whitespace-nowrap', runColor)}>
-                      {row.runRateAchPct.toFixed(1)}%
-                      <div className="w-16 h-1 rounded-full bg-gray-200 mt-0.5 overflow-hidden">
-                        <div className="h-full rounded-full" style={{
-                          width: `${Math.min(row.runRateAchPct, 150) / 150 * 100}%`,
-                          backgroundColor: row.runRateAchPct >= 100 ? '#10b981' : row.runRateAchPct >= 75 ? '#f59e0b' : '#ef4444',
-                        }} />
-                      </div>
+                    <td className="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">{row.store.state || '—'}</td>
+                    <td className="px-3 py-2.5 text-gray-700 tabular-nums text-xs whitespace-nowrap">{fmtInr(row.target)}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap">
+                      <p className="text-gray-900 tabular-nums text-xs font-medium">{fmtInr(row.currentSales)}</p>
                     </td>
-                    <td className={cn('px-3 py-2 tabular-nums text-xs font-semibold whitespace-nowrap', monthColor)}>
+                    <td className={cn('px-3 py-2.5 tabular-nums text-xs font-semibold whitespace-nowrap', row.achPct >= 95 ? 'text-emerald-600' : row.achPct >= 80 ? 'text-amber-600' : 'text-red-600')}>
                       {row.achPct.toFixed(1)}%
-                      <div className="w-16 h-1 rounded-full bg-gray-200 mt-0.5 overflow-hidden">
-                        <div className="h-full rounded-full" style={{
-                          width: `${Math.min(row.achPct, 150) / 150 * 100}%`,
-                          backgroundColor: ACH_BUCKETS[getBucketIdx(row.achPct)].color,
-                        }} />
-                      </div>
                     </td>
-                    <td className="px-3 py-2">
-                      <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap', REMAINING_CFG[row.remainingStatus]?.badge ?? '')}>
-                        {row.remainingStatus}
-                      </span>
+                    <td className={cn('px-3 py-2.5 tabular-nums text-xs whitespace-nowrap', row.gapPct <= 0 ? 'text-emerald-600' : row.gapPct <= 20 ? 'text-amber-600' : 'text-red-600')}>
+                      {row.gap <= 0 ? `+${fmtPct(-row.gapPct)}` : fmtPct(row.gapPct)}
                     </td>
-                    <td className={cn('px-3 py-2 tabular-nums text-xs font-bold whitespace-nowrap', projColor)}>
-                      {row.projAchPct.toFixed(1)}%
+                    <td className="px-3 py-2.5 text-amber-600 tabular-nums text-xs whitespace-nowrap">
+                      {row.reqDRR > 0 ? fmtInr(row.reqDRR) : '—'}
                     </td>
+                    <td className={cn('px-3 py-2.5 tabular-nums text-xs font-medium whitespace-nowrap', row.projected >= row.target ? 'text-emerald-600' : 'text-red-600')}>
+                      {fmtInr(row.projected)}
+                      <span className="text-[10px] text-gray-400 ml-1">({row.projAchPct.toFixed(0)}%)</span>
+                    </td>
+                    <td className="px-3 py-2.5"><RiskBadge status={row.status} /></td>
                   </tr>
                 )
               })}
@@ -1578,6 +1342,13 @@ export default function TargetCommandCenter() {
           </div>
         )}
       </motion.div>
+
+      {/* ── Target Management Drawer ── */}
+      <TargetManagementDrawer
+        open={showDrawer}
+        onClose={() => setShowDrawer(false)}
+        onTargetChanged={initTracker}
+      />
 
     </div>
   )

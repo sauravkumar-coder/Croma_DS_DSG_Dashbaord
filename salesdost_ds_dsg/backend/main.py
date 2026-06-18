@@ -1,113 +1,151 @@
 """
-StoreWise FastAPI backend — MongoDB-backed (v4).
+StoreWise FastAPI backend.
 
-All data (sales + targets) comes from MongoDB.
-No file uploads are accepted or required.
+Sales data policy
+─────────────────
+Main-dashboard sales are held IN MEMORY ONLY.  They are never written to
+disk, and are cleared on every server restart.  The user must re-upload
+a sales file after every browser refresh / server restart.
 
-Routes:
+Target files are persistent (data/targets/).  Users upload them once per
+month; they survive restarts.
+
+Domain endpoints (StoreWise-specific):
+  POST /api/upload/sales         — parse sales XLSX → hold in memory
+  POST /api/upload/targets       — upload targets XLSX → month-keyed storage
+  GET  /api/data                 — merged dashboard payload (in-memory sales)
+  GET  /api/stores/{id}          — single-store detail
+
+Storage management:
+  GET  /api/storage/status       — snapshot of in-memory + persisted state
+  DELETE /api/storage/sales      — clear in-memory sales data
+
+Target management:
+  GET  /api/targets/list         — list all managed target files
+  POST /api/targets/upload       — upload target for a specific month
+  POST /api/targets/set-active   — activate a month's target
+  POST /api/targets/archive      — archive a month's target
+  DELETE /api/targets/{month}    — permanently delete a month's target
+
+Target Tracker:
+  POST /api/tracker/sales/upload — upload tracker sales (month auto-detected)
+  GET  /api/tracker/status       — list stored tracker data
+  GET  /api/tracker/data         — parsed target + sales rows for a month
+  DELETE /api/tracker/sales/{month} — delete tracker sales for a month
+
+Generic (file-explorer, kept for compatibility):
   GET  /api/health
-  GET  /api/data                 — dashboard payload in StoreRecord format (for DataContext)
-  GET  /api/dashboard/overview   — aggregated KPIs for current year
-  GET  /api/stores               — all stores with YTD revenue + achievement
-  GET  /api/stores/rising-stars  — stores with upward revenue trend
-  GET  /api/stores/fallen-stars  — stores with downward revenue trend
-  GET  /api/stores/journey       — month-over-month revenue per store
-  GET  /api/stores/new-bloomers  — new stores showing strong ramp-up growth
-  GET  /api/stores/{store_id}    — single-store detail
-  GET  /api/analytics/brands     — revenue breakdown by brand
-  GET  /api/targets              — target achievement summary (all stores)
-  GET  /api/tracker/status       — which months have target+sales data in MongoDB
-  GET  /api/tracker/data         — tracker target+sales rows for a specific month
+  POST /api/demo/load
+  POST /api/upload
+  GET  /api/sheets
+  GET  /api/data/{sheet_name}
+  GET  /api/analysis/{sheet_name}
 """
 
+import io
 import logging
-from calendar import monthrange
-from contextlib import asynccontextmanager
+import os
+import tempfile
 from datetime import datetime
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from database import connect_to_mongo, close_mongo_connection, get_db
+import pandas as pd
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
-from app.core.database import connect_to_mongo, close_mongo as close_client, ensure_indexes
-import services.dashboard_service as dashboard_service
-import services.store_service as store_service
-import services.target_service as target_service
-import services.analytics_service as analytics_service
-import repositories.sales_repository as sales_repository
-import repositories.store_repository as store_repository
-import repositories.target_repository as target_repository
-from shared.date_utils import MONTH_LABELS
+from parser import (
+    analyze_sheet,
+    detect_month_from_filename,
+    get_sheet_data,
+    get_sheets,
+    parse_sales,
+    parse_croma_sales,
+    parse_vs_sales,
+    parse_reliance_sales,
+    parse_hotspot_sales,
+    parse_targets,
+    validate_store_match,
+)
+import storage as st
+import tracker as trk
 
 logger = logging.getLogger(__name__)
 
-_effective_year_cache: int | None = None
-
-
-async def _get_effective_year(requested: int = 0) -> int:
-    """
-    Return the year to use for queries.
-
-    If a non-zero year is explicitly requested, honour it.
-    Otherwise, prefer the current calendar year; fall back to the
-    most recent year that actually has SalesRecord data in MongoDB.
-    This prevents the "No Data" screen when the database holds data
-    from a prior year (e.g. 2025) while the server clock says 2026.
-    """
-    global _effective_year_cache
-    if requested:
-        return requested
-
-    current = datetime.now().year
-    available = await sales_repository.get_available_years()
-    if not available:
-        return current
-    if current in available:
-        return current
-    _effective_year_cache = available[-1]   # most recent year with data
-    return _effective_year_cache
-
-_MONTH_ORDER = {m.lower(): i for i, m in enumerate(MONTH_LABELS)}
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from app.core.config import settings as _cfg
-
-    # Production guard: refuse to start if MongoDB is required but not configured.
-    # This prevents silent data-less deployments that are hard to diagnose.
-    if (
-        _cfg.ENVIRONMENT == "production"
-        and not _cfg.USE_MOCK_DATA
-        and not _cfg.MONGO_URI
-    ):
-        raise RuntimeError(
-            "FATAL: ENVIRONMENT=production + USE_MOCK_DATA=false requires MONGO_URI. "
-            "Set MONGO_URI in your environment variables or backend/.env file."
-        )
-
-    await connect_to_mongo()   # gracefully skipped when MONGO_URI is empty
-    await ensure_indexes()     # idempotent; skipped when not connected
+    # Startup
+    await connect_to_mongo()
     yield
-    await close_client()
+    # Shutdown
+    await close_mongo_connection()
 
-
-app = FastAPI(title="StoreWise API", version="4.0.0", lifespan=lifespan)
-
-from app.core.config import settings as _settings
-
-_cors_origins = [o.strip() for o in _settings.ALLOWED_ORIGINS.split(",") if o.strip()]
+app = FastAPI(title="StoreWise API", version="3.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ── In-memory sales state ─────────────────────────────────────────────────────
+# Main-dashboard sales data lives here only.  None → no data loaded this session.
+
+# DS/DSG (legacy / demo)
+_in_memory_sales: list[dict] | None = None
+_sales_session_meta: dict[str, Any] | None = None
+_in_memory_sales_raw: bytes | None = None
+_in_memory_sales_is_demo: bool = False
+
+# Croma
+_in_memory_croma: list[dict] | None = None
+_croma_session_meta: dict[str, Any] | None = None
+_in_memory_croma_raw: bytes | None = None
+
+# Vijay Sales
+_in_memory_vs: list[dict] | None = None
+_vs_session_meta: dict[str, Any] | None = None
+_in_memory_vs_raw: bytes | None = None
+
+# Reliance
+_in_memory_reliance: list[dict] | None = None
+_reliance_session_meta: dict[str, Any] | None = None
+_in_memory_reliance_raw: bytes | None = None
+
+# Hotspot
+_in_memory_hotspot: list[dict] | None = None
+_hotspot_session_meta: dict[str, Any] | None = None
+_in_memory_hotspot_raw: bytes | None = None
+
+# Used only by the generic /api/upload → /api/data/{sheet} flow
+_uploaded_file: str | None = None
+
+_MONTH_ORDER = {
+    m: i
+    for i, m in enumerate(
+        ["jan", "feb", "mar", "apr", "may", "jun",
+         "jul", "aug", "sep", "oct", "nov", "dec"]
+    )
+}
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
+
+def _validate_excel(file: UploadFile) -> None:
+    if not file.filename or not (
+        file.filename.lower().endswith(".xlsx") or file.filename.lower().endswith(".xls")
+    ):
+        raise HTTPException(
+            status_code=400, detail="Only .xlsx / .xls files are accepted."
+        )
 
 
 def _sort_months(months: list[str]) -> list[str]:
@@ -121,387 +159,870 @@ def _sort_months(months: list[str]) -> list[str]:
     return sorted(months, key=key)
 
 
-def _parse_month_label(month: str) -> tuple[int, int]:
-    """Parse 'Jun-2026' → (2026, 6). Returns (0, 0) on failure."""
-    parts = month.strip().split("-")
-    if len(parts) != 2:
-        return (0, 0)
-    name, year_str = parts
-    year = int(year_str) if year_str.isdigit() else 0
-    month_int = _MONTH_ORDER.get(name.lower(), -1) + 1
-    if month_int == 0:
-        return (0, 0)
-    return (year, month_int)
+def _extract_months(stores: list[dict]) -> list[str]:
+    if not stores:
+        return []
+    return _sort_months(list(stores[0].get("monthly_sales", {}).keys()))
 
 
-# ── Health ─────────────────────────────────────────────────────────────────────
+def _parse_bytes_as_sales(content: bytes) -> list[dict]:
+    """Write bytes to a temp file, parse with parse_sales(), clean up."""
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        return parse_sales(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+
+def _parse_bytes_as_croma(content: bytes) -> list[dict]:
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        return parse_croma_sales(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+
+def _parse_bytes_as_vs(content: bytes) -> list[dict]:
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        return parse_vs_sales(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+
+def _parse_bytes_as_reliance(content: bytes) -> list[dict]:
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        return parse_reliance_sales(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+
+def _parse_bytes_as_hotspot(content: bytes) -> list[dict]:
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        return parse_hotspot_sales(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+
+def _read_active_targets() -> tuple[bool, dict[str, dict], str | None]:
+    """Return (has_targets, targets_dict, active_month) from the active target file on disk."""
+    active_month = st.get_active_target_month()
+    if not active_month:
+        return False, {}, None
+    target_path = st.get_month_target(active_month)
+    if not target_path:
+        return False, {}, active_month
+    try:
+        targets = parse_targets(target_path)
+        return True, targets, active_month
+    except Exception as exc:
+        logger.warning("Could not parse active target file: %s", exc)
+        return False, {}, active_month
+
+
+# ── Health ────────────────────────────────────────────────────────────────────
 
 
 @app.get("/api/health")
 def health():
-    from app.core.config import settings
+    return {"status": "ok"}
+
+@app.get("/api/db-status")
+def db_status():
+    from database import get_db
+    db = get_db()
+    if db is not None:
+        return {"status": "ok", "message": "Successfully connected to MongoDB 'zoppertrack' database."}
+    else:
+        return {"status": "error", "message": "MongoDB connection is not active."}
+
+
+# ── Demo data ─────────────────────────────────────────────────────────────────
+
+
+@app.post("/api/demo/load")
+def load_demo_data(retailer: str = ""):
+    return {"ok": True, "message": "Disabled. Strict read-only mode active."}
+
+@app.post("/api/upload/sales")
+async def upload_sales(
+    file: UploadFile = File(...),
+    force: bool = False,
+):
+    """Parse sales XLSX and hold it in memory.
+
+    Sales data is NEVER written to disk.  It is cleared on server restart.
+
+    If data is already loaded and force=False, returns
+    {'needs_confirm': True, 'existing': <meta>} without replacing.
+    Pass force=True to replace immediately.
+    """
+    global _in_memory_sales, _sales_session_meta
+
+    _validate_excel(file)
+
+    if not force and _in_memory_sales is not None:
+        return {"needs_confirm": True, "existing": _sales_session_meta}
+
+    content = await file.read()
+    try:
+        stores = _parse_bytes_as_sales(content)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Parse error: {exc}") from exc
+
+    _in_memory_sales = stores
+    _in_memory_sales_raw = content
+    _in_memory_sales_is_demo = False
+    _sales_session_meta = {
+        "filename":     file.filename or "upload.xlsx",
+        "uploaded_at":  datetime.now().isoformat(timespec="seconds"),
+        "file_size_kb": round(len(content) / 1024, 1),
+        "record_count": len(stores),
+    }
+
+    months = _extract_months(stores)
+    return {"ok": True, "stores": len(stores), "months": months, "needs_confirm": False}
+
+
+# ── Croma upload ───────────────────────────────────────────────────────────────────
+
+
+@app.post("/api/upload/sales/croma")
+async def upload_croma_sales(file: UploadFile = File(...), force: bool = False):
+    """Parse Croma XLSX and hold it in memory."""
+    global _in_memory_croma, _croma_session_meta, _in_memory_croma_raw
+    _validate_excel(file)
+    if not force and _in_memory_croma is not None:
+        return {"needs_confirm": True, "existing": _croma_session_meta}
+    content = await file.read()
+    try:
+        stores = _parse_bytes_as_croma(content)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Croma parse error: {exc}") from exc
+    _in_memory_croma = stores
+    _in_memory_croma_raw = content
+    _croma_session_meta = {
+        "filename":     file.filename or "croma_upload.xlsx",
+        "uploaded_at":  datetime.now().isoformat(timespec="seconds"),
+        "file_size_kb": round(len(content) / 1024, 1),
+        "record_count": len(stores),
+    }
+    months = _extract_months(stores)
+    return {"ok": True, "stores": len(stores), "months": months, "needs_confirm": False}
+
+
+@app.delete("/api/storage/sales/croma")
+def delete_croma_sales():
+    return {"ok": True, "message": "Disabled. Strict read-only mode active."}
+
+@app.get("/api/sales/meta/croma")
+def get_croma_meta():
+    if _in_memory_croma is None or _croma_session_meta is None:
+        return {"loaded": False}
+    months = _extract_months(_in_memory_croma)
+    total_revenue = sum(sum(s.get("monthly_sales", {}).values()) for s in _in_memory_croma)
     return {
-        "status": "ok",
-        "use_mock_data": settings.USE_MOCK_DATA,
-        "mongo_configured": bool(settings.MONGO_URI),
-        "environment": settings.ENVIRONMENT,
+        "loaded": True,
+        "filename":      _croma_session_meta.get("filename", "unknown"),
+        "uploaded_at":   _croma_session_meta.get("uploaded_at", ""),
+        "file_size_kb":  _croma_session_meta.get("file_size_kb", 0),
+        "store_count":   len(_in_memory_croma),
+        "record_count":  len(_in_memory_croma),
+        "date_from":     months[0] if months else None,
+        "date_to":       months[-1] if months else None,
+        "month_count":   len(months),
+        "total_revenue": total_revenue,
+        "is_demo":       False,
     }
 
 
-# ── Dashboard data (compatible StoreRecord format for DataContext) ─────────────
+# ── Vijay Sales upload ───────────────────────────────────────────────────────────
+
+
+@app.post("/api/upload/sales/vijaysales")
+async def upload_vs_sales(file: UploadFile = File(...), force: bool = False):
+    """Parse Vijay Sales XLSX and hold it in memory."""
+    global _in_memory_vs, _vs_session_meta, _in_memory_vs_raw
+    _validate_excel(file)
+    if not force and _in_memory_vs is not None:
+        return {"needs_confirm": True, "existing": _vs_session_meta}
+    content = await file.read()
+    try:
+        stores = _parse_bytes_as_vs(content)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Vijay Sales parse error: {exc}") from exc
+    _in_memory_vs = stores
+    _in_memory_vs_raw = content
+    _vs_session_meta = {
+        "filename":     file.filename or "vijaysales_upload.xlsx",
+        "uploaded_at":  datetime.now().isoformat(timespec="seconds"),
+        "file_size_kb": round(len(content) / 1024, 1),
+        "record_count": len(stores),
+    }
+    months = _extract_months(stores)
+    return {"ok": True, "stores": len(stores), "months": months, "needs_confirm": False}
+
+
+@app.delete("/api/storage/sales/vijaysales")
+def delete_vs_sales():
+    return {"ok": True, "message": "Disabled. Strict read-only mode active."}
+
+@app.get("/api/sales/meta/vijaysales")
+def get_vs_meta():
+    if _in_memory_vs is None or _vs_session_meta is None:
+        return {"loaded": False}
+    months = _extract_months(_in_memory_vs)
+    total_revenue = sum(sum(s.get("monthly_sales", {}).values()) for s in _in_memory_vs)
+    return {
+        "loaded": True,
+        "filename":      _vs_session_meta.get("filename", "unknown"),
+        "uploaded_at":   _vs_session_meta.get("uploaded_at", ""),
+        "file_size_kb":  _vs_session_meta.get("file_size_kb", 0),
+        "store_count":   len(_in_memory_vs),
+        "record_count":  len(_in_memory_vs),
+        "date_from":     months[0] if months else None,
+        "date_to":       months[-1] if months else None,
+        "month_count":   len(months),
+        "total_revenue": total_revenue,
+        "is_demo":       False,
+    }
+
+
+# ── Reliance upload ───────────────────────────────────────────────────────────
+
+
+@app.post("/api/upload/sales/reliance")
+async def upload_reliance_sales(file: UploadFile = File(...), force: bool = False):
+    """Parse Reliance XLSX and hold it in memory."""
+    global _in_memory_reliance, _reliance_session_meta, _in_memory_reliance_raw
+    _validate_excel(file)
+    if not force and _in_memory_reliance is not None:
+        return {"needs_confirm": True, "existing": _reliance_session_meta}
+    content = await file.read()
+    try:
+        stores = _parse_bytes_as_reliance(content)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Reliance parse error: {exc}") from exc
+    _in_memory_reliance = stores
+    _in_memory_reliance_raw = content
+    _reliance_session_meta = {
+        "filename":     file.filename or "reliance_upload.xlsx",
+        "uploaded_at":  datetime.now().isoformat(timespec="seconds"),
+        "file_size_kb": round(len(content) / 1024, 1),
+        "record_count": len(stores),
+    }
+    months = _extract_months(stores)
+    return {"ok": True, "stores": len(stores), "months": months, "needs_confirm": False}
+
+
+@app.delete("/api/storage/sales/reliance")
+def delete_reliance_sales():
+    return {"ok": True, "message": "Disabled. Strict read-only mode active."}
+
+@app.get("/api/sales/meta/reliance")
+def get_reliance_meta():
+    if _in_memory_reliance is None or _reliance_session_meta is None:
+        return {"loaded": False}
+    months = _extract_months(_in_memory_reliance)
+    total_revenue = sum(sum(s.get("monthly_sales", {}).values()) for s in _in_memory_reliance)
+    return {
+        "loaded": True,
+        "filename":      _reliance_session_meta.get("filename", "unknown"),
+        "uploaded_at":   _reliance_session_meta.get("uploaded_at", ""),
+        "file_size_kb":  _reliance_session_meta.get("file_size_kb", 0),
+        "store_count":   len(_in_memory_reliance),
+        "record_count":  len(_in_memory_reliance),
+        "date_from":     months[0] if months else None,
+        "date_to":       months[-1] if months else None,
+        "month_count":   len(months),
+        "total_revenue": total_revenue,
+        "is_demo":       False,
+    }
+
+
+# ── Hotspot upload ────────────────────────────────────────────────────────────
+
+
+@app.post("/api/upload/sales/hotspot")
+async def upload_hotspot_sales(file: UploadFile = File(...), force: bool = False):
+    """Parse Hotspot XLSX and hold it in memory."""
+    global _in_memory_hotspot, _hotspot_session_meta, _in_memory_hotspot_raw
+    _validate_excel(file)
+    if not force and _in_memory_hotspot is not None:
+        return {"needs_confirm": True, "existing": _hotspot_session_meta}
+    content = await file.read()
+    try:
+        stores = _parse_bytes_as_hotspot(content)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Hotspot parse error: {exc}") from exc
+    _in_memory_hotspot = stores
+    _in_memory_hotspot_raw = content
+    _hotspot_session_meta = {
+        "filename":     file.filename or "hotspot_upload.xlsx",
+        "uploaded_at":  datetime.now().isoformat(timespec="seconds"),
+        "file_size_kb": round(len(content) / 1024, 1),
+        "record_count": len(stores),
+    }
+    months = _extract_months(stores)
+    return {"ok": True, "stores": len(stores), "months": months, "needs_confirm": False}
+
+
+@app.delete("/api/storage/sales/hotspot")
+def delete_hotspot_sales():
+    return {"ok": True, "message": "Disabled. Strict read-only mode active."}
+
+@app.get("/api/sales/meta/hotspot")
+def get_hotspot_meta():
+    if _in_memory_hotspot is None or _hotspot_session_meta is None:
+        return {"loaded": False}
+    months = _extract_months(_in_memory_hotspot)
+    total_revenue = sum(sum(s.get("monthly_sales", {}).values()) for s in _in_memory_hotspot)
+    return {
+        "loaded": True,
+        "filename":      _hotspot_session_meta.get("filename", "unknown"),
+        "uploaded_at":   _hotspot_session_meta.get("uploaded_at", ""),
+        "file_size_kb":  _hotspot_session_meta.get("file_size_kb", 0),
+        "store_count":   len(_in_memory_hotspot),
+        "record_count":  len(_in_memory_hotspot),
+        "date_from":     months[0] if months else None,
+        "date_to":       months[-1] if months else None,
+        "month_count":   len(months),
+        "total_revenue": total_revenue,
+        "is_demo":       False,
+    }
+
+
+@app.post("/api/upload/targets")
+async def upload_targets(file: UploadFile = File(...)):
+    """Save targets XLSX (legacy endpoint; month inferred from filename)."""
+    _validate_excel(file)
+    original_name = file.filename or ""
+    content = await file.read()
+
+    target_month = detect_month_from_filename(original_name)
+    if not target_month:
+        target_month = datetime.now().strftime("%b-%Y")
+
+    st.save_target_file(content, target_month)
+
+    target_path = st.get_month_target(target_month)
+    try:
+        targets = parse_targets(target_path)  # type: ignore[arg-type]
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Parse error: {exc}") from exc
+
+    return {"ok": True, "stores": len(targets), "target_month": target_month}
+
+
+# ── Dashboard data ────────────────────────────────────────────────────────────
 
 
 @app.get("/api/data")
-async def get_dashboard_data():
+async def get_dashboard_data(retailer: str = ""):
+    """Return merged dashboard payload from MongoDB.
+
+    ?retailer=croma     → Croma dataset (matches storeCategory or storeChannel)
+    ?retailer=vijaysales → Vijay Sales dataset
+    (no param)          → All stores
     """
-    Serve the main dashboard payload from MongoDB.
+    db = get_db()
+    
+    _NO_DATA = {
+        "no_data": True, "stores": [], "months": [],
+        "states": [], "categories": [], "has_targets": False, "warnings": [],
+    }
+    if db is None:
+        _NO_DATA["warnings"].append("MongoDB not connected.")
+        return _NO_DATA
 
-    Returns data in the StoreRecord / DashboardData shape expected by
-    the React DataContext so all existing dashboard tabs work unchanged.
+    match_stage = {}
+    if retailer:
+        r_lower = retailer.lower()
+        if r_lower == "croma":
+            match_stage = {"storeName": {"$regex": "croma", "$options": "i"}}
+        elif r_lower == "vijaysales":
+            match_stage = {"storeName": {"$regex": "^vs\\b|\\bvijay\\b", "$options": "i"}}
+        elif r_lower == "reliance":
+            match_stage = {"storeName": {"$regex": "reliance", "$options": "i"}}
+        elif r_lower == "hotspot":
+            match_stage = {"storeName": {"$regex": "hotspot", "$options": "i"}}
+        else:
+            match_stage = {"storeName": {"$regex": retailer, "$options": "i"}}
+    
+    pipeline = []
+    if match_stage:
+        pipeline.append({"$match": match_stage})
 
-    Data is filtered to the configured BRAND_ID (brand_007 = DSDSG).
-    Store identifiers are the storeBrandId codes (e.g. 'A024') from the
-    StoreBrand collection, not internal storeId strings.
-    """
-    from app.core.config import settings as _cfg
+    pipeline.extend([
+        {"$lookup": {
+            "from": "SalesRecord",
+            "localField": "_id",
+            "foreignField": "storeId",
+            "as": "sales"
+        }},
+        {"$lookup": {
+            "from": "StoreTarget",
+            "localField": "_id",
+            "foreignField": "storeId",
+            "as": "targets"
+        }}
+    ])
 
-    year = await _get_effective_year()
-    brand_id = _cfg.BRAND_ID
-    from_daily = _cfg.BRAND_USES_DAILY_SALES
+    cursor = db["Store"].aggregate(pipeline)
+    stores_docs = await cursor.to_list(None)
 
-    stores_master = await store_repository.get_all_stores()
-    revenue_map = await sales_repository.get_monthly_revenue_by_store(year, brand_id, from_daily)
-    target_map = await target_repository.get_monthly_targets_by_store(year, brand_id)
-    # {internal storeId → storeBrandId business code}
-    store_code_map = await store_repository.get_store_code_map(brand_id)
-
-    store_meta: dict[str, dict[str, Any]] = {
-        (s.get("_id") or s.get("id", "")): s
-        for s in stores_master
+    _MONTH_MAP = {
+        1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+        7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
     }
 
-    stores: list[dict[str, Any]] = []
-    all_months_set: set[str] = set()
+    stores = []
+    months_set = set()
+    states_set = set()
+    categories_set = set()
+    
+    for doc in stores_docs:
+        store_id = str(doc.get("_id", ""))
+        store_name = doc.get("storeName", "")
+        state = doc.get("state", "")
+        category = doc.get("storeCategory", "")
+        
+        if state: states_set.add(state)
+        if category: categories_set.add(category)
+        
+        monthly_sales = {}
+        monthly_plans = {}
+        monthly_main = {}
+        monthly_attach = {}
 
-    for sid, monthly_rev in revenue_map.items():
-        meta = store_meta.get(sid, {})
-        monthly_targets = target_map.get(sid, {})
-        store_code = store_code_map.get(sid, sid)   # use storeBrandId; fall back to storeId
+        for sale in doc.get("sales", []):
+            year = sale.get("year")
+            monthly = sale.get("monthlySales", [])
+            if isinstance(monthly, list):
+                for m_data in monthly:
+                    month_num = m_data.get("month")
+                    if not month_num or not year: continue
+                    m_abbr = _MONTH_MAP.get(int(month_num))
+                    if not m_abbr: continue
+                    m = f"{m_abbr}-{year}"
+                    months_set.add(m)
+                    monthly_sales[m] = monthly_sales.get(m, 0) + float(m_data.get("revenue", 0) or 0)
+                    monthly_plans[m] = monthly_plans.get(m, 0) + int(m_data.get("planSales", 0) or 0)
+                    monthly_main[m] = monthly_main.get(m, 0) + int(m_data.get("deviceSales", 0) or 0)
+        
+        for m in monthly_sales.keys():
+            plans = monthly_plans.get(m, 0)
+            devices = monthly_main.get(m, 0)
+            if devices > 0:
+                monthly_attach[m] = round(plans / devices, 4)
+            else:
+                monthly_attach[m] = 0.0
 
-        monthly_sales: dict[str, float] = {}
-        for m_int, rev in monthly_rev.items():
-            label = f"{MONTH_LABELS[m_int - 1]}-{year}"
-            monthly_sales[label] = round(rev, 2)
-            all_months_set.add(label)
+        target_val = 0
+        for t in doc.get("targets", []):
+            target_val += t.get("targetRevenue", 0) or 0
 
-        total_target = sum(monthly_targets.values()) if monthly_targets else None
+        store_obj = {
+            "store_id": store_id,
+            "store_name": store_name,
+            "state": state,
+            "category": category,
+            "monthly_sales": monthly_sales,
+            "monthly_plans_count": monthly_plans,
+            "monthly_main_qty": monthly_main,
+            "monthly_attach_pct": monthly_attach,
+            "target": target_val if target_val > 0 else None,
+            "zonal_manager": "",
+            "cluster_manager": ""
+        }
+        stores.append(store_obj)
+        
+    return {
+        "no_data": len(stores) == 0,
+        "stores": stores,
+        "months": _sort_months(list(months_set)),
+        "states": sorted(list(states_set)),
+        "categories": sorted(list(categories_set)),
+        "has_targets": True,
+        "target_month": None,
+        "warnings": []
+    }
 
-        stores.append({
-            "store_id":        store_code,
-            "store_name":      meta.get("storeName", ""),
-            "state":           meta.get("state", ""),
-            "category":        meta.get("storeCategory", ""),
-            "monthly_sales":   monthly_sales,
-            "target":          round(total_target, 2) if total_target is not None else None,
-            "zonal_manager":   "",
-            "cluster_manager": "",
-        })
 
-    months = _sort_months(list(all_months_set))
-    states = sorted({s["state"] for s in stores if s["state"]})
-    categories = sorted({s["category"] for s in stores if s["category"]})
-    has_targets = any(s["target"] is not None for s in stores)
-    no_data = len(stores) == 0
+@app.get("/api/stores/{store_id}")
+async def get_store_detail(store_id: str, retailer: str = ""):
+    db = get_db()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database not connected.")
+    
+    pipeline = [
+        {"$match": {"_id": store_id}},
+        {"$lookup": {
+            "from": "SalesRecord",
+            "localField": "_id",
+            "foreignField": "storeId",
+            "as": "sales"
+        }},
+        {"$lookup": {
+            "from": "StoreTarget",
+            "localField": "_id",
+            "foreignField": "storeId",
+            "as": "targets"
+        }}
+    ]
+    cursor = db["Store"].aggregate(pipeline)
+    docs = await cursor.to_list(1)
+    if not docs:
+        raise HTTPException(status_code=404, detail=f"Store '{store_id}' not found.")
+        
+    doc = docs[0]
+
+    store_id = str(doc.get("_id", ""))
+    store_name = doc.get("storeName", "")
+    state = doc.get("state", "")
+    category = doc.get("storeCategory", "")
+    
+    _MONTH_MAP = {
+        1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+        7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
+    }
+
+    monthly_sales = {}
+    monthly_plans = {}
+    monthly_main = {}
+    monthly_attach = {}
+
+    for sale in doc.get("sales", []):
+        year = sale.get("year")
+        monthly = sale.get("monthlySales", [])
+        if isinstance(monthly, list):
+            for m_data in monthly:
+                month_num = m_data.get("month")
+                if not month_num or not year: continue
+                m_abbr = _MONTH_MAP.get(int(month_num))
+                if not m_abbr: continue
+                m = f"{m_abbr}-{year}"
+                monthly_sales[m] = monthly_sales.get(m, 0) + float(m_data.get("revenue", 0) or 0)
+                monthly_plans[m] = monthly_plans.get(m, 0) + int(m_data.get("planSales", 0) or 0)
+                monthly_main[m] = monthly_main.get(m, 0) + int(m_data.get("deviceSales", 0) or 0)
+    
+    for m in monthly_sales.keys():
+        plans = monthly_plans.get(m, 0)
+        devices = monthly_main.get(m, 0)
+        if devices > 0:
+            monthly_attach[m] = round(plans / devices, 4)
+        else:
+            monthly_attach[m] = 0.0
+
+    target_val = 0
+    for t in doc.get("targets", []):
+        target_val += t.get("targetRevenue", 0) or 0
 
     return {
-        "no_data":      no_data,
-        "stores":       stores,
-        "months":       months,
-        "states":       states,
-        "categories":   categories,
-        "has_targets":  has_targets,
-        "target_month": None,
-        "warnings":     [],
+        "store_id": store_id,
+        "store_name": store_name,
+        "state": state,
+        "category": category,
+        "monthly_sales": monthly_sales,
+        "monthly_plans_count": monthly_plans,
+        "monthly_main_qty": monthly_main,
+        "monthly_attach_pct": monthly_attach,
+        "target": target_val if target_val > 0 else None,
+        "zonal_manager": "",
+        "cluster_manager": ""
     }
 
 
-# ── MongoDB-backed analytics routes ───────────────────────────────────────────
-# Static paths MUST be registered before /stores/{store_id}
+# ── Storage management endpoints ──────────────────────────────────────────────
 
 
-@app.get("/api/dashboard/overview")
-async def get_dashboard_overview(year: int = Query(default=0)):
-    """Aggregated KPIs from MongoDB for the given year."""
-    year = await _get_effective_year(year)
-    return await dashboard_service.get_overview(year)
+@app.get("/api/storage/status")
+def get_storage_status():
+    """Return a mocked snapshot for MongoDB read-only mode."""
+    base = st.storage_status()
+    # Force frontend to bypass the "Upload Data" screen and go straight to the dashboard
+    base["has_combined_sales"] = True
+    base["active_sales_file"]  = "mongodb_zoppertrack"
+    base["active_sales_meta"]  = {"filename": "mongodb_zoppertrack"}
+    base["croma"]      = {"loaded": True, "meta": {"filename": "mongodb_zoppertrack"}}
+    base["vijaysales"] = {"loaded": True, "meta": {"filename": "mongodb_zoppertrack"}}
+    base["reliance"]   = {"loaded": True, "meta": {"filename": "mongodb_zoppertrack"}}
+    base["hotspot"]    = {"loaded": True, "meta": {"filename": "mongodb_zoppertrack"}}
+    return base
 
 
-@app.get("/api/stores")
-async def list_stores(year: int = Query(default=0)):
-    """All stores with YTD revenue, target achievement, and trend."""
-    year = await _get_effective_year(year)
-    return await store_service.get_all_stores(year)
+@app.delete("/api/storage/sales")
+def delete_combined_sales():
+    """Clear the in-memory sales data (now a no-op)."""
+    return {"ok": True}
 
 
-@app.get("/api/stores/rising-stars")
-async def get_rising_stars(
-    year: int = Query(default=0),
-    min_months: int = Query(default=3),
+@app.post("/api/sales/reload")
+def reload_sales():
+    """Re-parse the currently stored raw bytes (now a no-op)."""
+    return {"ok": True, "stores": 0, "months": []}
+
+
+@app.get("/api/sales/meta")
+def get_sales_meta():
+    """Return summary metadata for the currently loaded sales dataset (now stubbed)."""
+    return {
+        "loaded":       True,
+        "filename":     "mongodb_zoppertrack",
+        "uploaded_at":  "",
+        "file_size_kb": 0,
+        "store_count":  0,
+        "record_count": 0,
+        "date_from":    None,
+        "date_to":      None,
+        "month_count":  12,
+        "total_revenue": 0,
+        "is_demo":      False,
+    }
+
+
+# ── Target management endpoints ───────────────────────────────────────────────
+
+
+class MonthBody(BaseModel):
+    month: str
+
+
+@app.get("/api/targets/list")
+def list_managed_targets():
+    return {"targets": st.list_target_files()}
+
+
+@app.post("/api/targets/upload")
+async def upload_managed_target(
+    file: UploadFile = File(...),
+    month_label: str = Form(...),
 ):
-    """Stores with a consistent upward revenue trend."""
-    year = await _get_effective_year(year)
-    return await store_service.get_rising_stars(year, min_months)
+    """Upload a targets XLSX for a specific month (MMM-YYYY format)."""
+    _validate_excel(file)
+    month_label = month_label.strip()
+    if not st.validate_month_label(month_label):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid month format '{month_label}'. Expected MMM-YYYY, e.g. Jul-2025.",
+        )
+    content = await file.read()
+
+    # Validate target file columns
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        errors = trk.validate_target_file(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+    if errors:
+        raise HTTPException(status_code=422, detail="; ".join(errors))
+
+    try:
+        meta = st.save_target_file(content, month_label)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return meta
 
 
-@app.get("/api/stores/fallen-stars")
-async def get_fallen_stars(
-    year: int = Query(default=0),
-    min_months: int = Query(default=3),
-):
-    """Stores with a consistent downward revenue trend."""
-    year = await _get_effective_year(year)
-    return await store_service.get_fallen_stars(year, min_months)
+@app.post("/api/targets/set-active")
+def set_active_target(body: MonthBody):
+    return {"ok": True, "message": "Disabled. Strict read-only mode active."}
 
+@app.post("/api/targets/archive")
+def archive_managed_target(body: MonthBody):
+    return {"ok": True, "message": "Disabled. Strict read-only mode active."}
 
-@app.get("/api/stores/journey")
-async def get_store_journey(year: int = Query(default=0)):
-    """Month-over-month revenue trajectory for every store."""
-    year = await _get_effective_year(year)
-    return await store_service.get_store_journey(year)
+@app.delete("/api/targets/{month}")
+def delete_managed_target(month: str):
+    return {"ok": True, "message": "Disabled. Strict read-only mode active."}
 
+@app.post("/api/tracker/sales/upload")
+async def upload_tracker_sales(file: UploadFile = File(...)):
+    """Upload tracker monthly sales. Month is auto-detected from the Date column."""
+    _validate_excel(file)
+    content = await file.read()
 
-@app.get("/api/stores/new-bloomers")
-async def get_new_bloomers(
-    year: int = Query(default=0),
-    min_months: int = Query(default=3),
-):
-    """New stores showing strong ramp-up growth."""
-    year = await _get_effective_year(year)
-    return await analytics_service.get_new_bloomers(year, min_months)
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        errors = trk.validate_sales_file(tmp_path)
+        if errors:
+            raise HTTPException(status_code=422, detail="; ".join(errors))
 
+        detected_month = trk.detect_sales_month(tmp_path)
+        if not detected_month:
+            now = datetime.now()
+            MONTH_ABBR = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",
+                          7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
+            detected_month = f"{MONTH_ABBR[now.month]}-{now.year}"
 
-@app.get("/api/analytics/brands")
-async def get_brand_analysis(year: int = Query(default=0)):
-    """Revenue breakdown by brand across all stores."""
-    year = await _get_effective_year(year)
-    return await analytics_service.get_brand_analysis(year)
+        already_exists = st.tracker_sales_exists(detected_month)
+        parsed = trk.parse_tracker_sales(tmp_path)
+    finally:
+        os.unlink(tmp_path)
 
-
-@app.get("/api/targets")
-async def get_targets_summary(
-    year: int = Query(default=0),
-    month: Optional[int] = Query(default=None),
-):
-    """Target achievement summary for all stores (YTD or single month)."""
-    year = await _get_effective_year(year)
-    return await target_service.get_targets_summary(year, month)
-
-
-# ── Tracker routes (MongoDB-backed) ──────────────────────────────────────────
+    meta = st.save_tracker_sales(content, detected_month)
+    meta["already_existed"] = already_exists
+    meta["store_count"]     = parsed["store_count"]
+    meta["max_elapsed"]     = parsed["max_elapsed"]
+    return meta
 
 
 @app.get("/api/tracker/status")
-async def get_tracker_status():
-    """Return which months have target + sales data in MongoDB."""
-    from app.core.config import settings as _cfg
+def get_tracker_status():
+    """Return what tracker data is currently stored."""
+    target_files  = st.list_target_files()
+    tracker_sales = st.list_tracker_sales()
+    active_target = st.get_active_target_month()
 
-    # Tracker always uses the current calendar year — targets are set for the
-    # live year even when SalesRecord data hasn't been uploaded yet.
-    year = datetime.now().year
-    brand_id = _cfg.BRAND_ID
-    from_daily = _cfg.BRAND_USES_DAILY_SALES
+    months_with_target = {t["month"] for t in target_files}
+    months_with_sales  = {s["month"] for s in tracker_sales}
+    all_months = sorted(
+        months_with_target | months_with_sales,
+        key=lambda m: st._label_sort_key(m),
+        reverse=True,
+    )
 
-    revenue_map = await sales_repository.get_monthly_revenue_by_store(year, brand_id, from_daily)
-    target_map = await target_repository.get_monthly_targets_by_store(year, brand_id)
-
-    months_with_sales: set[int] = set()
-    for monthly in revenue_map.values():
-        months_with_sales.update(monthly.keys())
-
-    months_with_targets: set[int] = set()
-    for monthly in target_map.values():
-        months_with_targets.update(monthly.keys())
-
-    all_month_ints = sorted(months_with_sales | months_with_targets, reverse=True)
-
-    current_month = datetime.now().month
-    active_label: str | None = None
-    months_data: list[dict[str, Any]] = []
-
-    for m_int in all_month_ints:
-        label = f"{MONTH_LABELS[m_int - 1]}-{year}"
-        has_t = m_int in months_with_targets
-        has_s = m_int in months_with_sales
-        is_active = (m_int == current_month) and has_t and has_s
-        if is_active:
-            active_label = label
+    months_data = []
+    for month in all_months:
+        has_t = month in months_with_target
+        has_s = month in months_with_sales
+        t_meta = next((t for t in target_files  if t["month"] == month), None)
+        s_meta = next((s for s in tracker_sales if s["month"] == month), None)
         months_data.append({
-            "month":            label,
+            "month":            month,
             "has_target":       has_t,
             "has_sales":        has_s,
-            "is_active_target": is_active,
-            "target_meta":      None,
-            "sales_meta":       None,
+            "is_active_target": month == active_target,
+            "target_meta":      t_meta,
+            "sales_meta":       s_meta,
         })
 
-    # If no month matches the current calendar month, auto-select the first
-    # month that has both target and sales data.
-    if not active_label:
-        for m in months_data:
-            if m["has_target"] and m["has_sales"]:
-                active_label = m["month"]
-                m["is_active_target"] = True
-                break
-
     return {
-        "active_target_month": active_label,
+        "active_target_month": active_target,
         "months":              months_data,
     }
 
 
 @app.get("/api/tracker/data")
-async def get_tracker_data(month: str):
-    """
-    Return tracker data (targets + actual monthly sales) for a month from MongoDB.
+def get_tracker_data(month: str):
+    """Return parsed target + sales data for a month."""
+    if not st.validate_month_label(month):
+        raise HTTPException(status_code=400, detail=f"Invalid month '{month}'")
 
-    Sales rows have day=0 because MongoDB stores monthly aggregates, not
-    daily transactions.  The frontend day-slider still works: when all rows
-    have day=0 it displays the month total without day-filtering.
-    """
-    from app.core.config import settings as _cfg
+    target_path = st.get_month_target(month)
+    sales_path  = st.get_month_sales(month)
 
-    year, month_int = _parse_month_label(month)
-    if year == 0 or month_int == 0:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid month format '{month}'. Expected MMM-YYYY (e.g. Jun-2026).",
-        )
+    if target_path is None:
+        active = st.get_active_target_month()
+        if active:
+            target_path = st.get_month_target(active)
 
-    brand_id = _cfg.BRAND_ID
-    from_daily = _cfg.BRAND_USES_DAILY_SALES
-    target_map = await target_repository.get_monthly_targets_by_store(year, brand_id)
-    revenue_map = await sales_repository.get_monthly_revenue_by_store(year, brand_id, from_daily)
-    stores_master = await store_repository.get_all_stores()
-    store_code_map = await store_repository.get_store_code_map(brand_id)
+    has_target = target_path is not None
+    has_sales  = sales_path is not None
 
-    store_meta: dict[str, dict[str, Any]] = {
-        (s.get("_id") or s.get("id", "")): s
-        for s in stores_master
+    targets: list[dict] = []
+    sales_result: dict = {
+        "sales_rows":     [],
+        "detected_month": month,
+        "max_elapsed":    15,
+        "store_count":    0,
     }
 
-    targets: list[dict[str, Any]] = []
-    for sid, monthly_tgt in target_map.items():
-        if month_int not in monthly_tgt:
-            continue
-        meta = store_meta.get(sid, {})
-        store_code = store_code_map.get(sid, sid)
-        targets.append({
-            "store_key":       store_code,
-            "store_name":      meta.get("storeName", sid),
-            "head_operations": "",
-            "zonal_manager":   "",
-            "cluster_manager": "",
-            "target":          round(monthly_tgt[month_int], 2),
-        })
+    if has_target:
+        try:
+            targets = trk.parse_tracker_target(target_path)  # type: ignore[arg-type]
+        except Exception as exc:
+            logger.warning("Could not parse target file: %s", exc)
+            has_target = False
 
-    # Fetch per-day sales breakdown from dailySales when available.
-    # For brands with BRAND_USES_DAILY_SALES=true each store has one row per
-    # calendar day; for monthly-only brands the dict is empty and we fall back
-    # to the single monthly-aggregate row (day=0).
-    daily_rev_map = await sales_repository.get_daily_revenue_by_store_for_month(
-        year, month_int, brand_id, from_daily
-    )
-
-    # Determine the ceiling for day filtering.  For the current month, we must
-    # never expose entries dated beyond today — the database may contain
-    # erroneously future-dated rows that would otherwise inflate max_elapsed
-    # and show data that doesn't yet exist.
-    now = datetime.now()
-    current_month_day_cap = now.day if (year == now.year and month_int == now.month) else None
-
-    sales_rows: list[dict[str, Any]] = []
-    for sid, monthly_rev in revenue_map.items():
-        if month_int not in monthly_rev:
-            continue
-        meta = store_meta.get(sid, {})
-        store_code = store_code_map.get(sid, sid)
-        state_val = meta.get("state", "")
-        store_name_val = meta.get("storeName", sid)
-
-        daily_entries = daily_rev_map.get(sid, [])
-        if daily_entries:
-            # One row per calendar day so the frontend can filter by slider day.
-            # Cap at current_month_day_cap to exclude any future-dated DB rows.
-            for day, revenue in daily_entries:
-                if current_month_day_cap is not None and day > current_month_day_cap:
-                    continue
-                sales_rows.append({
-                    "store_name": store_name_val,
-                    "store_key":  store_code,
-                    "sales":      round(revenue, 2),
-                    "day":        day,
-                    "state":      state_val,
-                })
-        else:
-            # No daily breakdown available — single monthly aggregate row.
-            # Slider will treat this as "always included" via the day=0 fallback
-            # in the frontend activeSalesMap logic.
-            sales_rows.append({
-                "store_name": store_name_val,
-                "store_key":  store_code,
-                "sales":      round(monthly_rev[month_int], 2),
-                "day":        0,
-                "state":      state_val,
-            })
-
-    # Compute max_elapsed as the latest day that actually has sales data.
-    # For current-month brands with daily data this reflects the last loaded
-    # day (e.g. Jun 16), not today's calendar day — so the slider never shows
-    # days beyond the available data.  Past months always use full month total.
-    if year < now.year or (year == now.year and month_int < now.month):
-        _, total_days = monthrange(year, month_int)
-        max_elapsed = total_days
-    elif year == now.year and month_int == now.month:
-        # Only count days that passed the cap above — excludes future-dated rows.
-        actual_max_day = max(
-            (day for entries in daily_rev_map.values() for day, _ in entries
-             if day <= now.day),
-            default=0,
-        )
-        max_elapsed = actual_max_day if actual_max_day > 0 else now.day
-    else:
-        max_elapsed = 0
-
-    # Determine the latest date for which sales data is available.
-    latest_sales_date: str | None = None
-    if sales_rows:
-        latest_sales_date = await sales_repository.get_latest_sales_date_for_month(
-            year, month_int, brand_id, from_daily
-        )
-        if not latest_sales_date and max_elapsed > 0:
-            latest_sales_date = f"{year}-{month_int:02d}-{max_elapsed:02d}"
+    if has_sales:
+        try:
+            sales_result = trk.parse_tracker_sales(sales_path)  # type: ignore[arg-type]
+        except Exception as exc:
+            logger.warning("Could not parse tracker sales file: %s", exc)
+            has_sales = False
 
     return {
-        "month":                month,
-        "has_target":           len(targets) > 0,
-        "has_sales":            len(sales_rows) > 0,
-        "targets":              targets,
-        "raw_target_row_count": len(targets),
-        "sales_rows":           sales_rows,
-        "max_elapsed":          max_elapsed,
-        "detected_month":       month,
-        "latest_sales_date":    latest_sales_date,
+        "month":          month,
+        "has_target":     has_target,
+        "has_sales":      has_sales,
+        "targets":        targets,
+        "sales_rows":     sales_result["sales_rows"],
+        "max_elapsed":    sales_result["max_elapsed"],
+        "detected_month": sales_result.get("detected_month", month),
     }
 
 
-# ── Single-store detail — MUST come after all static /stores/... paths ─────────
+@app.delete("/api/tracker/sales/{month}")
+def delete_tracker_sales(month: str):
+    return {"ok": True, "message": "Disabled. Strict read-only mode active."}
+
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)):
+    global _uploaded_file
+    _validate_excel(file)
+    dest = os.path.join(st.DATA_DIR, file.filename)  # type: ignore[arg-type]
+    content = await file.read()
+    st.save_file(dest, content)
+    _uploaded_file = dest
+    return {"filename": file.filename, "sheets": get_sheets(dest)}
 
 
-@app.get("/api/stores/{store_id}")
-async def get_store_detail(store_id: str, year: int = Query(default=0)):
-    """Single-store detail with monthly revenue + target breakdown."""
-    year = await _get_effective_year(year)
-    detail = await store_service.get_store_detail(store_id, year)
-    if detail is None:
-        raise HTTPException(status_code=404, detail=f"Store '{store_id}' not found.")
-    return detail
+@app.get("/api/sheets")
+def list_sheets():
+    if not _uploaded_file:
+        raise HTTPException(status_code=404, detail="No file uploaded yet.")
+    return {"sheets": get_sheets(_uploaded_file)}
+
+
+@app.get("/api/data/{sheet_name}")
+def fetch_sheet(sheet_name: str):
+    if not _uploaded_file:
+        raise HTTPException(status_code=404, detail="No file uploaded yet.")
+    return get_sheet_data(_uploaded_file, sheet_name)
+
+
+@app.get("/api/analysis/{sheet_name}")
+def fetch_analysis(sheet_name: str):
+    if not _uploaded_file:
+        raise HTTPException(status_code=404, detail="No file uploaded yet.")
+    return analyze_sheet(_uploaded_file, sheet_name)
+
+
+# ── Serve frontend dist and campaign analysis ─────────────────────────────────
+
+_DIST_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+_CAMPAIGN_DIR = Path("C:/Users/Yoganshu Sharma/Desktop/campaign_analysis/outputs")
+
+if _CAMPAIGN_DIR.is_dir():
+    app.mount("/campaign", StaticFiles(directory=str(_CAMPAIGN_DIR)), name="campaign-assets")
+
+if _DIST_DIR.is_dir():
+    # Serve static assets (JS, CSS, etc.)
+    app.mount("/assets", StaticFiles(directory=str(_DIST_DIR / "assets")), name="frontend-assets")
+
+    # Serve other static files in dist root (geojson, etc.)
+    @app.get("/{full_path:path}")
+    def serve_frontend(full_path: str):
+        """Catch-all: serve files from dist or fall back to index.html for SPA routing."""
+        file_path = _DIST_DIR / full_path
+        if full_path and file_path.is_file():
+            return FileResponse(str(file_path))
+        return FileResponse(str(_DIST_DIR / "index.html"))

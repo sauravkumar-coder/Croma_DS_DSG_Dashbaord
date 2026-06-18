@@ -8,6 +8,7 @@ import {
 } from 'react'
 import { getDashboardData, type StoreRecord } from '@/lib/api'
 import { classifyAllStores, type ClassificationResult } from '@/lib/classificationEngine'
+import { useRetailerContext } from '@/contexts/RetailerContext'
 
 // ── Context shape ─────────────────────────────────────────────────────────────
 
@@ -53,6 +54,7 @@ export function useDataContext(): DataContextValue {
 // ── Provider ──────────────────────────────────────────────────────────────────
 
 export function DataProvider({ children }: { children: React.ReactNode }) {
+  const { retailer } = useRetailerContext()
   const [stores, setStores] = useState<StoreRecord[]>([])
   const [months, setMonths] = useState<string[]>([])
   const [states, setStates] = useState<string[]>([])
@@ -67,7 +69,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(true)
     setError(null)
     try {
-      const { data } = await getDashboardData()
+      const { data } = await getDashboardData(retailer)
       if (data.no_data) {
         // Reset to empty — triggers upload screen
         setStores([])
@@ -91,9 +93,9 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [retailer])
 
-  // Fetch on mount
+  // Re-fetch on mount AND whenever the active retailer changes
   useEffect(() => { refetchData() }, [refetchData])
 
   const hasData = stores.length > 0

@@ -7,7 +7,7 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import { cn } from '@/lib/utils'
 import { allocatePhases } from '@/lib/classificationEngine'
-import { fmtInr, fmtInrFull, fmtPct } from '@/lib/formatting'
+import { fmtInr, fmtInrFull, fmtPct, plotlyInrTickVals } from '@/lib/formatting'
 import { panelSpring } from '@/lib/animations'
 import { PT, PT_AXIS } from '@/lib/plotlyTheme'
 import { exportCsv, exportExcel } from '@/lib/tableExport'
@@ -45,6 +45,8 @@ interface OutlierRow {
   storeId: string; storeName: string; state: string; month: string
   revenue: number; type: 'High Outlier' | 'Low Outlier'
   fence: number; distance: number; lowerBound: number; upperBound: number
+  /** Attach % value (0–100) when in attach mode — same slot reused for sorting */
+  attachPct?: number
 }
 
 function computeMonthStats(values: number[]): MonthStats | null {
@@ -112,6 +114,28 @@ function buildBoxHover(month: string, stats: MonthStats | null): string {
   ].join('<br>') + '<extra></extra>'
 }
 
+function buildBoxHoverAttach(month: string, stats: MonthStats | null): string {
+  if (!stats) return `<b>${month}</b><extra></extra>`
+  const dispLb      = Math.max(stats.lf, 0)
+  const f = (v: number) => `${v.toFixed(2)}%`
+  const outlierLine = stats.outliers > 0
+    ? `Outlier Stores: <b>${stats.outliers}</b>`
+    : 'No outliers detected'
+  return [
+    `<b>${month}</b>`,
+    `Active Stores: <b>${stats.n}</b>`,
+    `<b>Attach % Distribution</b>`,
+    `Lower Bound:    <b>${f(dispLb)}</b>`,
+    `Q1 (25th pct):  <b>${f(stats.q1)}</b>`,
+    `Median:         <b>${f(stats.median)}</b>`,
+    `Q3 (75th pct):  <b>${f(stats.q3)}</b>`,
+    `Upper Bound:    <b>${f(stats.uf)}</b>`,
+    `IQR: <b>${f(stats.iqr)}</b>`,
+    outlierLine,
+    `<i>Click to explore this month's distribution ↗</i>`,
+  ].join('<br>') + '<extra></extra>'
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 interface Props { filters: FilterState }
@@ -119,6 +143,8 @@ interface Props { filters: FilterState }
 export default function MonthlyRevenue({ filters }: Props) {
   const { stores, months } = useDataContext()
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null)
+  // Revenue ↔ Attach % analysis toggle
+  const [viewMode, setViewMode] = useState<'revenue' | 'attach'>('revenue')
 
   // Tracks the currently hovered month via Plotly hover events.
   // Using a ref (not state) avoids re-renders on every mouse move.
@@ -143,6 +169,24 @@ export default function MonthlyRevenue({ filters }: Props) {
     return { fs, fm }
   }, [stores, months, filters])
 
+  // ── Attach % availability flag ─────────────────────────────────────────────
+  const hasAttach = useMemo(() =>
+    fs.some(s => Object.values(s.monthly_attach_pct ?? {}).some(v => v > 0)),
+    [fs],
+  )
+
+  // ── Value accessor — switches between revenue and attach% ─────────────────
+  // Attach % is stored as 0–1; we multiply by 100 for display.
+  const getValue = (store: typeof stores[0], month: string): number => {
+    if (viewMode === 'attach') {
+      return (store.monthly_attach_pct?.[month] ?? 0) * 100
+    }
+    return store.monthly_sales[month] ?? 0
+  }
+
+  const fmtValue = (v: number) => viewMode === 'attach' ? `${v.toFixed(2)}%` : fmtInr(v)
+  const fmtValueFull = (v: number) => viewMode === 'attach' ? `${v.toFixed(2)}%` : fmtInrFull(v)
+
   // Close drill-down whenever the filtered dataset changes.
   // useMemo always produces new array references when inputs change, so this
   // fires reliably for every filter update — more robust than watching the
@@ -162,11 +206,21 @@ export default function MonthlyRevenue({ filters }: Props) {
 
   // ── Per-month aggregates ───────────────────────────────────────────────────
   const monthlyData = useMemo(() => fm.map(m => {
+    if (viewMode === 'attach') {
+      // For attach mode: show mean attach % across stores that have main_qty > 0
+      const activeStores = fs.filter(st => (st.monthly_main_qty?.[m] ?? 0) > 0)
+      const rev = activeStores.length > 0
+        ? activeStores.reduce((s, st) => s + (st.monthly_attach_pct?.[m] ?? 0) * 100, 0) / activeStores.length
+        : 0
+      const active = activeStores.length
+      const phase  = phaseOf(m)
+      return { m, rev, active, phase }
+    }
     const rev    = fs.reduce((s, st) => s + (st.monthly_sales[m] ?? 0), 0)
     const active = fs.filter(st => (st.monthly_sales[m] ?? 0) > 0).length
     const phase  = phaseOf(m)
     return { m, rev, active, phase }
-  }), [fs, fm, early, mid, recent]) // eslint-disable-line react-hooks/exhaustive-deps
+  }), [fs, fm, early, mid, recent, viewMode]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── KPI metrics ────────────────────────────────────────────────────────────
   const kpis = useMemo(() => {
@@ -200,6 +254,7 @@ export default function MonthlyRevenue({ filters }: Props) {
     const midD    = byPhase('mid')
     const recentD = byPhase('recent')
 
+    const isAttach = viewMode === 'attach'
     const bar = (data: typeof monthlyData, phase: 'early' | 'mid' | 'recent', label: string) => ({
       type: 'bar' as const,
       name: label,
@@ -207,7 +262,9 @@ export default function MonthlyRevenue({ filters }: Props) {
       y: data.map(d => d.rev),
       marker: { color: PHASE_COLOR[phase], opacity: 0.88 },
       yaxis: 'y' as const,
-      hovertemplate: `<b>%{x}</b><br>Revenue: ₹%{y:,.0f}<extra>${label}</extra>`,
+      hovertemplate: isAttach
+        ? `<b>%{x}</b><br>Avg Attach %: <b>%{y:.2f}%</b><extra>${label}</extra>`
+        : `<b>%{x}</b><br>Revenue: ₹%{y:,.0f}<extra>${label}</extra>`,
     })
 
     return [
@@ -216,13 +273,14 @@ export default function MonthlyRevenue({ filters }: Props) {
       ...(recentD.length ? [bar(recentD, 'recent', 'Recent')]    : []),
       {
         type: 'scatter' as const, mode: 'lines+markers' as const,
-        name: 'Active stores', x: monthlyData.map(d => d.m), y: monthlyData.map(d => d.active),
+        name: isAttach ? 'Active stores (w/ qty)' : 'Active stores',
+        x: monthlyData.map(d => d.m), y: monthlyData.map(d => d.active),
         yaxis: 'y2' as const,
         line: { color: '#14b8a6', width: 2, shape: 'spline' as const }, marker: { color: '#14b8a6', size: 5 },
         hovertemplate: '<b>%{x}</b><br>Active stores: %{y}<extra></extra>',
       },
     ]
-  }, [monthlyData])
+  }, [monthlyData, viewMode])
 
   const phaseAnnotations = useMemo(() => {
     const anns: object[] = []
@@ -244,6 +302,22 @@ export default function MonthlyRevenue({ filters }: Props) {
 
   // ── Box-plot y-axis ────────────────────────────────────────────────────────
   const { boxYAxis, boxScaleIsLog } = useMemo(() => {
+    if (viewMode === 'attach') {
+      // Attach % is 0–100, no log scale needed
+      const allActive = fm.flatMap(m =>
+        fs.map(s => (s.monthly_attach_pct?.[m] ?? 0) * 100).filter(v => v > 0)
+      )
+      if (!allActive.length) return { boxYAxis: { ...PT_AXIS, title: { text: 'Attach %' } }, boxScaleIsLog: false }
+      const maxVal = Math.min(Math.max(...allActive) * 1.1, 100)
+      const step = maxVal > 50 ? 10 : maxVal > 20 ? 5 : 2
+      const tickvals: number[] = []
+      for (let t = 0; t <= maxVal + step; t += step) tickvals.push(Math.round(t * 10) / 10)
+      return {
+        boxYAxis: { ...PT_AXIS, title: { text: 'Attach % per Store' }, tickmode: 'array' as const, tickvals, ticktext: tickvals.map(v => `${v}%`) },
+        boxScaleIsLog: false,
+      }
+    }
+
     const allActive = fm.flatMap(m => fs.map(s => s.monthly_sales[m] ?? 0).filter(v => v > 0))
     const fallback  = { boxYAxis: { ...PT_AXIS, title: { text: 'Store Revenue' } }, boxScaleIsLog: false }
     if (!allActive.length) return fallback
@@ -282,12 +356,46 @@ export default function MonthlyRevenue({ filters }: Props) {
       boxYAxis: { ...PT_AXIS, title: { text: 'Store Revenue' }, tickmode: 'array' as const, tickvals, ticktext: tickvals.map(fmtInrFull) },
       boxScaleIsLog: false,
     }
-  }, [fs, fm])
+  }, [fs, fm, viewMode])
 
   // ── Per-month outlier detection ───────────────────────────────────────────
   const outlierData = useMemo((): OutlierRow[] => {
     const rows: OutlierRow[] = []
     for (const month of fm) {
+      if (viewMode === 'attach') {
+        // Outlier detection on attach % (0–100 scale)
+        const vals = fs
+          .filter(s => (s.monthly_main_qty?.[month] ?? 0) > 0)
+          .map(s => (s.monthly_attach_pct?.[month] ?? 0) * 100)
+          .filter(v => v > 0)
+          .sort((a, b) => a - b)
+        if (vals.length < 4) continue
+        const q1  = pctile(vals, 25)
+        const q3  = pctile(vals, 75)
+        const iqr = q3 - q1
+        const lf  = q1 - 1.5 * iqr
+        const uf  = q3 + 1.5 * iqr
+        for (const store of fs) {
+          if ((store.monthly_main_qty?.[month] ?? 0) === 0) continue
+          const ap = (store.monthly_attach_pct?.[month] ?? 0) * 100
+          if (ap > uf) {
+            rows.push({
+              storeId: store.store_id, storeName: store.store_name ?? store.store_id,
+              state: store.state ?? '—', month, revenue: store.monthly_sales[month] ?? 0,
+              type: 'High Outlier', fence: uf, distance: ap - uf,
+              lowerBound: Math.max(lf, 0), upperBound: uf, attachPct: ap,
+            })
+          } else if (ap > 0 && lf > 0 && ap < lf) {
+            rows.push({
+              storeId: store.store_id, storeName: store.store_name ?? store.store_id,
+              state: store.state ?? '—', month, revenue: store.monthly_sales[month] ?? 0,
+              type: 'Low Outlier', fence: lf, distance: lf - ap,
+              lowerBound: Math.max(lf, 0), upperBound: uf, attachPct: ap,
+            })
+          }
+        }
+        continue
+      }
       const revs = fs.map(s => s.monthly_sales[month] ?? 0).filter(v => v > 0).sort((a, b) => a - b)
       if (revs.length < 4) continue
       const q1  = pctile(revs, 25)
@@ -315,7 +423,7 @@ export default function MonthlyRevenue({ filters }: Props) {
       }
     }
     return rows
-  }, [fs, fm])
+  }, [fs, fm, viewMode])
 
   const outliersKpi = useMemo(() => {
     const total     = outlierData.length
@@ -329,11 +437,19 @@ export default function MonthlyRevenue({ filters }: Props) {
 
   // ── Box-plot traces ────────────────────────────────────────────────────────
   const boxTraces = useMemo(() => {
+    const isAttach = viewMode === 'attach'
     const traces: object[] = fm.flatMap((month, i) => {
-      const values = fs.map(s => s.monthly_sales[month] ?? 0).filter(v => v > 0)
+      const values = isAttach
+        ? fs.filter(s => (s.monthly_main_qty?.[month] ?? 0) > 0)
+             .map(s => (s.monthly_attach_pct?.[month] ?? 0) * 100)
+             .filter(v => v > 0)
+        : fs.map(s => s.monthly_sales[month] ?? 0).filter(v => v > 0)
       if (values.length === 0) return []
       const stats = computeMonthStats(values)
       const color = STATE_PALETTE[i % STATE_PALETTE.length]
+      const hover = isAttach
+        ? buildBoxHoverAttach(month, stats)
+        : buildBoxHover(month, stats)
       return [{
         type: 'box' as const,
         y: values,
@@ -342,24 +458,29 @@ export default function MonthlyRevenue({ filters }: Props) {
         marker:    { color },
         line:      { color, width: 2 },
         fillcolor: `${color}3a`,
-        hovertemplate: buildBoxHover(month, stats),
+        hovertemplate: hover,
       }]
     })
 
-    // High outlier scatter (emerald)
+    // High outlier scatter
     const highOuts = outlierData.filter(o => o.type === 'High Outlier')
     if (highOuts.length > 0) {
       traces.push({
         type: 'scatter' as const, mode: 'markers' as const,
         name: 'High Performer',
         x: highOuts.map(o => o.month),
-        y: highOuts.map(o => o.revenue),
-        customdata: highOuts.map(o => [o.storeName, o.state, o.storeId, fmtInrFull(o.distance)]),
+        y: isAttach ? highOuts.map(o => o.attachPct ?? 0) : highOuts.map(o => o.revenue),
+        customdata: highOuts.map(o => [
+          o.storeName, o.state, o.storeId,
+          isAttach ? `${o.distance.toFixed(2)}pp` : fmtInrFull(o.distance),
+          isAttach ? `${(o.attachPct ?? 0).toFixed(2)}%` : fmtInrFull(o.revenue),
+        ]),
         marker: { symbol: 'circle', size: 9, color: '#10b981', opacity: 0.9, line: { width: 1.5, color: '#059669' } },
         hovertemplate: [
           '<b>%{customdata[0]}</b>', 'Store Code: %{customdata[2]}',
           'State: %{customdata[1]}', 'Month: %{x}',
-          'Revenue: <b>₹%{y:,.0f}</b>', 'Above upper bound by: <b>%{customdata[3]}</b>',
+          isAttach ? 'Attach %: <b>%{customdata[4]}</b>' : 'Revenue: <b>₹%{y:,.0f}</b>',
+          'Above upper bound by: <b>%{customdata[3]}</b>',
           '<i>★ High Performance Outlier</i>',
         ].join('<br>') + '<extra></extra>',
         showlegend: true,
@@ -373,13 +494,18 @@ export default function MonthlyRevenue({ filters }: Props) {
         type: 'scatter' as const, mode: 'markers' as const,
         name: 'Low Outlier',
         x: lowOuts.map(o => o.month),
-        y: lowOuts.map(o => o.revenue),
-        customdata: lowOuts.map(o => [o.storeName, o.state, o.storeId, fmtInrFull(o.distance)]),
+        y: isAttach ? lowOuts.map(o => o.attachPct ?? 0) : lowOuts.map(o => o.revenue),
+        customdata: lowOuts.map(o => [
+          o.storeName, o.state, o.storeId,
+          isAttach ? `${o.distance.toFixed(2)}pp` : fmtInrFull(o.distance),
+          isAttach ? `${(o.attachPct ?? 0).toFixed(2)}%` : fmtInrFull(o.revenue),
+        ]),
         marker: { symbol: 'triangle-down', size: 9, color: '#f97316', opacity: 0.9, line: { width: 1.5, color: '#c2410c' } },
         hovertemplate: [
           '<b>%{customdata[0]}</b>', 'Store Code: %{customdata[2]}',
           'State: %{customdata[1]}', 'Month: %{x}',
-          'Revenue: <b>₹%{y:,.0f}</b>', 'Below lower bound by: <b>%{customdata[3]}</b>',
+          isAttach ? 'Attach %: <b>%{customdata[4]}</b>' : 'Revenue: <b>₹%{y:,.0f}</b>',
+          'Below lower bound by: <b>%{customdata[3]}</b>',
           '<i>▼ Low Outlier</i>',
         ].join('<br>') + '<extra></extra>',
         showlegend: true,
@@ -387,17 +513,24 @@ export default function MonthlyRevenue({ filters }: Props) {
     }
 
     return traces
-  }, [fs, fm, outlierData])
+  }, [fs, fm, outlierData, viewMode])
 
   // ── Drill-down data for selected month ─────────────────────────────────────
   const drillDown = useMemo(() => {
     console.log(`[KDE] drillDown memo — canonicalMonth="${canonicalMonth}" fm=[${fm.slice(0,3).join(',')}…]`)
     if (!canonicalMonth) { console.log('[KDE] drillDown → null (no canonical month)'); return null }
 
-    const sortedVals = fs
-      .map(s => s.monthly_sales[canonicalMonth] ?? 0)
-      .filter(v => v > 0)
-      .sort((a, b) => a - b)
+    const isAttach = viewMode === 'attach'
+    const sortedVals = isAttach
+      ? fs
+          .filter(s => (s.monthly_main_qty?.[canonicalMonth] ?? 0) > 0)
+          .map(s => (s.monthly_attach_pct?.[canonicalMonth] ?? 0) * 100)
+          .filter(v => v > 0)
+          .sort((a, b) => a - b)
+      : fs
+          .map(s => s.monthly_sales[canonicalMonth] ?? 0)
+          .filter(v => v > 0)
+          .sort((a, b) => a - b)
 
     console.log(`[KDE] month=${canonicalMonth} totalStores=${fs.length} activeStores=${sortedVals.length} min=${sortedVals[0]?.toFixed(0)} max=${sortedVals[sortedVals.length - 1]?.toFixed(0)}`)
 
@@ -421,15 +554,19 @@ export default function MonthlyRevenue({ filters }: Props) {
     const lowOuts       = monthOutliers.filter(o => o.type === 'Low Outlier')
     const dispLb        = Math.max(stats.lf, 0)
 
+    const densityLabel = isAttach ? 'Attach % Density' : 'Revenue Density'
+    const xAxisLabel   = isAttach ? 'Store Attach %' : 'Store Revenue (₹)'
+    const hoverX       = isAttach ? '%{x:.2f}%' : '₹%{x:,.0f}'
+
     const kdeTraces: object[] = [
       {
         type: 'scatter', mode: 'lines',
-        name: 'Revenue Density',
+        name: densityLabel,
         x: kde.x, y: kde.y,
-        line: { color: '#3b82f6', width: 2 },
+        line: { color: isAttach ? '#8b5cf6' : '#3b82f6', width: 2 },
         fill: 'tozeroy',
-        fillcolor: 'rgba(59, 130, 246, 0.12)',
-        hovertemplate: 'Revenue: <b>%{x:,.0f}</b><extra>Density</extra>',
+        fillcolor: isAttach ? 'rgba(139,92,246,0.12)' : 'rgba(59,130,246,0.12)',
+        hovertemplate: `${isAttach ? 'Attach' : 'Revenue'}: <b>${hoverX}</b><extra>Density</extra>`,
       },
     ]
 
@@ -437,22 +574,22 @@ export default function MonthlyRevenue({ filters }: Props) {
       kdeTraces.push({
         type: 'scatter', mode: 'markers',
         name: 'High Performers',
-        x: highOuts.map(o => o.revenue),
+        x: isAttach ? highOuts.map(o => o.attachPct ?? 0) : highOuts.map(o => o.revenue),
         y: highOuts.map(() => -(maxDensity * 0.04)),
         customdata: highOuts.map(o => [o.storeName, o.storeId]),
         marker: { symbol: 'line-ns', size: 14, color: '#10b981', line: { width: 2, color: '#10b981' } },
-        hovertemplate: '<b>%{customdata[0]}</b><br>Code: %{customdata[1]}<br>Revenue: ₹%{x:,.0f}<extra>High Performer</extra>',
+        hovertemplate: `<b>%{customdata[0]}</b><br>Code: %{customdata[1]}<br>${isAttach ? 'Attach' : 'Revenue'}: <b>${hoverX}</b><extra>High Performer</extra>`,
       })
     }
     if (lowOuts.length > 0) {
       kdeTraces.push({
         type: 'scatter', mode: 'markers',
         name: 'Low Outliers',
-        x: lowOuts.map(o => o.revenue),
+        x: isAttach ? lowOuts.map(o => o.attachPct ?? 0) : lowOuts.map(o => o.revenue),
         y: lowOuts.map(() => -(maxDensity * 0.04)),
         customdata: lowOuts.map(o => [o.storeName, o.storeId]),
         marker: { symbol: 'line-ns', size: 14, color: '#f97316', line: { width: 2, color: '#f97316' } },
-        hovertemplate: '<b>%{customdata[0]}</b><br>Code: %{customdata[1]}<br>Revenue: ₹%{x:,.0f}<extra>Low Outlier</extra>',
+        hovertemplate: `<b>%{customdata[0]}</b><br>Code: %{customdata[1]}<br>${isAttach ? 'Attach' : 'Revenue'}: <b>${hoverX}</b><extra>Low Outlier</extra>`,
       })
     }
 
@@ -463,7 +600,7 @@ export default function MonthlyRevenue({ filters }: Props) {
     const shapes = [
       vline(dispLb,       '#f97316', 'dot'),
       vline(stats.q1,     '#94a3b8', 'dash'),
-      vline(stats.median, '#3b82f6', 'solid'),
+      vline(stats.median, isAttach ? '#8b5cf6' : '#3b82f6', 'solid'),
       vline(stats.q3,     '#94a3b8', 'dash'),
       vline(stats.uf,     '#10b981', 'dot'),
     ]
@@ -476,14 +613,14 @@ export default function MonthlyRevenue({ filters }: Props) {
     const annotations = [
       ann(dispLb,       'LB',     '#f97316', 'right'),
       ann(stats.q1,     'Q1',     '#94a3b8'),
-      ann(stats.median, 'Median', '#3b82f6'),
+      ann(stats.median, 'Median', isAttach ? '#8b5cf6' : '#3b82f6'),
       ann(stats.q3,     'Q3',     '#94a3b8'),
       ann(stats.uf,     'UB',     '#10b981', 'left'),
     ]
 
     console.log(`[KDE] drillDown → ready (kdeTraces=${kdeTraces.length} shapes=${shapes.length})`)
-    return { stats, kde, kdeTraces, shapes, annotations, monthOutliers, highOuts, lowOuts, dispLb, maxDensity }
-  }, [canonicalMonth, fs, fm, outlierData])
+    return { stats, kde, kdeTraces, shapes, annotations, monthOutliers, highOuts, lowOuts, dispLb, maxDensity, xAxisLabel }
+  }, [canonicalMonth, fs, fm, outlierData, viewMode])
 
   // ── Export handlers ───────────────────────────────────────────────────────
   const handleOutlierCsv = () => {
@@ -512,18 +649,60 @@ export default function MonthlyRevenue({ filters }: Props) {
   return (
     <div className="space-y-5">
 
-      {/* ── Monthly Revenue Trend ── */}
+      {/* ── Revenue ↔ Attach % Toggle ── */}
+      {hasAttach && (
+        <motion.div {...panelSpring(0.06)} className="flex items-center gap-2 mb-1">
+          <span className="text-[11px] text-gray-500 font-medium">Analysis Mode:</span>
+          <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5">
+            <button
+              onClick={() => setViewMode('revenue')}
+              className={cn(
+                'px-3 py-1 rounded-md text-[11px] font-semibold transition-all duration-200',
+                viewMode === 'revenue'
+                  ? 'bg-white text-blue-700 shadow-sm border border-blue-200'
+                  : 'text-gray-500 hover:text-gray-700',
+              )}
+            >
+              💰 Sales Revenue
+            </button>
+            <button
+              onClick={() => setViewMode('attach')}
+              className={cn(
+                'px-3 py-1 rounded-md text-[11px] font-semibold transition-all duration-200',
+                viewMode === 'attach'
+                  ? 'bg-white text-purple-700 shadow-sm border border-purple-200'
+                  : 'text-gray-500 hover:text-gray-700',
+              )}
+            >
+              📎 Attach Percentage
+            </button>
+          </div>
+          {viewMode === 'attach' && (
+            <span className="text-[10px] text-purple-500 font-medium ml-1">
+              Showing plan attach rate (plans ÷ Samsung units) per store
+            </span>
+          )}
+        </motion.div>
+      )}
+
+      {/* ── Monthly Revenue / Attach Trend ── */}
       <motion.div {...panelSpring(0.12)} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
         <div className="flex items-start justify-between gap-2 flex-wrap mb-1">
           <div>
-            <h3 className="text-sm font-semibold text-gray-800">Monthly Revenue Trend</h3>
+            <h3 className="text-sm font-semibold text-gray-800">
+              {viewMode === 'attach' ? 'Monthly Attach % Trend' : 'Monthly Revenue Trend'}
+            </h3>
             <p className="text-[11px] text-gray-500 mt-0.5">
-              Bars = revenue by phase
-              {mid.length > 0 ? <> · <span style={{ color: PHASE_COLOR.mid }}>■</span> <span className="text-indigo-500">{mid[0]}{mid.length > 1 ? `–${mid[mid.length - 1]}` : ''}</span> = mid phase</> : null}
-              {' '}· Line = active store count
+              {viewMode === 'attach'
+                ? <>Bars = avg attach % by phase · Line = stores with Samsung unit data</>
+                : <>Bars = revenue by phase
+                    {mid.length > 0 ? <> · <span style={{ color: PHASE_COLOR.mid }}>■</span> <span className="text-indigo-500">{mid[0]}{mid.length > 1 ? `–${mid[mid.length - 1]}` : ''}</span> = mid phase</> : null}
+                    {' '}· Line = active store count
+                  </>
+              }
             </p>
           </div>
-          {kpis?.runRatePct != null && (
+          {viewMode === 'revenue' && kpis?.runRatePct != null && (
             <motion.span
               key={Math.round(kpis.runRatePct)}
               initial={{ opacity: 0, scale: 0.8 }}
@@ -549,8 +728,10 @@ export default function MonthlyRevenue({ filters }: Props) {
             barmode: 'overlay' as const,
             legend: { bgcolor: 'rgba(0,0,0,0)', font: { color: PT.font, size: 10 }, orientation: 'h' as const, y: -0.22 },
             xaxis:  { ...PT_AXIS },
-            yaxis:  { ...PT_AXIS, title: { text: 'Revenue (₹)' }, tickformat: ',.2s' },
-            yaxis2: { ...PT_AXIS, title: { text: 'Active Stores' }, overlaying: 'y' as const, side: 'right' as const, showgrid: false },
+            yaxis:  viewMode === 'attach'
+              ? { ...PT_AXIS, title: { text: 'Avg Attach %' }, ticksuffix: '%' }
+              : { ...PT_AXIS, title: { text: 'Revenue (₹)' }, ...plotlyInrTickVals(monthlyData.length > 0 ? Math.max(...monthlyData.map(d=>d.rev)) : 0) },
+            yaxis2: { ...PT_AXIS, title: { text: viewMode === 'attach' ? 'Stores w/ Qty' : 'Active Stores' }, overlaying: 'y' as const, side: 'right' as const, showgrid: false },
             annotations: phaseAnnotations as any[],
             margin: { l: 70, r: 70, t: 36, b: 110 },
             height: 420,
@@ -559,7 +740,7 @@ export default function MonthlyRevenue({ filters }: Props) {
           style={{ width: '100%' }}
         />
 
-        {kpis && (
+        {kpis && viewMode === 'revenue' && (
           <div className="mt-4 border-t border-gray-100 pt-4">
             <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-3">Story so far</p>
             <div className={cn('grid grid-cols-1 gap-3', mid.length > 0 ? 'sm:grid-cols-4' : 'sm:grid-cols-3')}>
@@ -698,7 +879,7 @@ export default function MonthlyRevenue({ filters }: Props) {
               </div>
               {outliersKpi.topOutlier && (
                 <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-widest text-emerald-600 mb-1">Top Revenue Performer</p>
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-emerald-600 mb-1">{viewMode === 'attach' ? 'Top Attach Outlier' : 'Top Revenue Performer'}</p>
                   <p className="text-xs font-semibold text-gray-800 truncate" title={outliersKpi.topOutlier.storeName}>{outliersKpi.topOutlier.storeName}</p>
                   <p className="text-[11px] text-gray-600 mt-0.5">{fmtInr(outliersKpi.topOutlier.revenue)} · {outliersKpi.topOutlier.month}</p>
                 </div>
@@ -720,9 +901,11 @@ export default function MonthlyRevenue({ filters }: Props) {
             >
               <div className="flex items-center justify-between mb-3">
                 <div>
-                  <p className="text-sm font-semibold text-gray-800">Revenue Distribution — {canonicalMonth}</p>
+                  <p className="text-sm font-semibold text-gray-800">
+                    {viewMode === 'attach' ? 'Attach % Distribution' : 'Revenue Distribution'} — {canonicalMonth}
+                  </p>
                   <p className="text-[11px] text-gray-500 mt-0.5">
-                    Kernel density estimate of store revenues · reference lines at key percentiles and IQR bounds
+                    Kernel density estimate of {viewMode === 'attach' ? 'store attach rates' : 'store revenues'} · reference lines at key percentiles and IQR bounds
                   </p>
                 </div>
                 <button
@@ -745,11 +928,11 @@ export default function MonthlyRevenue({ filters }: Props) {
                   {/* Summary stat cards */}
                   <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-4">
                     {[
-                      { label: 'Store Count',    value: String(drillDown.stats.n),       color: 'text-gray-800' },
-                      { label: 'Median Revenue', value: fmtInr(drillDown.stats.median),  color: 'text-blue-700' },
-                      { label: 'Min Revenue',    value: fmtInr(drillDown.stats.minR),    color: 'text-gray-700' },
-                      { label: 'Max Revenue',    value: fmtInr(drillDown.stats.maxR),    color: 'text-gray-700' },
-                      { label: 'IQR',            value: fmtInr(drillDown.stats.iqr),     color: 'text-indigo-700' },
+                      { label: 'Store Count',    value: String(drillDown.stats.n),                                                color: 'text-gray-800' },
+                      { label: viewMode === 'attach' ? 'Median Attach %' : 'Median Revenue', value: viewMode === 'attach' ? `${drillDown.stats.median.toFixed(2)}%` : fmtInr(drillDown.stats.median), color: viewMode === 'attach' ? 'text-purple-700' : 'text-blue-700' },
+                      { label: viewMode === 'attach' ? 'Min Attach %' : 'Min Revenue',       value: viewMode === 'attach' ? `${drillDown.stats.minR.toFixed(2)}%` : fmtInr(drillDown.stats.minR),     color: 'text-gray-700' },
+                      { label: viewMode === 'attach' ? 'Max Attach %' : 'Max Revenue',       value: viewMode === 'attach' ? `${drillDown.stats.maxR.toFixed(2)}%` : fmtInr(drillDown.stats.maxR),     color: 'text-gray-700' },
+                      { label: 'IQR',            value: viewMode === 'attach' ? `${drillDown.stats.iqr.toFixed(2)}pp` : fmtInr(drillDown.stats.iqr),     color: 'text-indigo-700' },
                       { label: 'Outlier Count',  value: String(drillDown.stats.outliers),color: drillDown.stats.outliers > 0 ? 'text-emerald-700' : 'text-gray-500' },
                     ].map(({ label, value, color }) => (
                       <div key={label} className="rounded-lg border border-gray-100 bg-gray-50 px-2.5 py-2">
@@ -761,13 +944,19 @@ export default function MonthlyRevenue({ filters }: Props) {
 
                   {/* Legend */}
                   <div className="flex flex-wrap gap-3 mb-2 text-[10px]">
-                    {[
+                    {(viewMode === 'attach' ? [
+                      { color: '#f97316', label: `LB: ${drillDown.dispLb.toFixed(2)}%` },
+                      { color: '#94a3b8', label: `Q1: ${drillDown.stats.q1.toFixed(2)}%` },
+                      { color: '#8b5cf6', label: `Median: ${drillDown.stats.median.toFixed(2)}%` },
+                      { color: '#94a3b8', label: `Q3: ${drillDown.stats.q3.toFixed(2)}%` },
+                      { color: '#10b981', label: `UB: ${drillDown.stats.uf.toFixed(2)}%` },
+                    ] : [
                       { color: '#f97316', label: `Lower Bound: ${fmtInr(drillDown.dispLb)}` },
                       { color: '#94a3b8', label: `Q1: ${fmtInr(drillDown.stats.q1)}` },
                       { color: '#3b82f6', label: `Median: ${fmtInr(drillDown.stats.median)}` },
                       { color: '#94a3b8', label: `Q3: ${fmtInr(drillDown.stats.q3)}` },
                       { color: '#10b981', label: `Upper Bound: ${fmtInr(drillDown.stats.uf)}` },
-                    ].map(({ color, label }) => (
+                    ]).map(({ color, label }) => (
                       <span key={label} className="flex items-center gap-1 text-gray-600">
                         <span style={{ display: 'inline-block', width: 16, height: 2, backgroundColor: color, borderRadius: 1 }} />
                         {label}
@@ -784,7 +973,9 @@ export default function MonthlyRevenue({ filters }: Props) {
                       font: { color: PT.font, family: 'Inter, sans-serif', size: 11 },
                       showlegend: drillDown.monthOutliers.length > 0,
                       legend: { bgcolor: 'rgba(0,0,0,0)', font: { color: PT.font, size: 10 }, orientation: 'h' as const, y: -0.22, x: 0.5, xanchor: 'center' as const },
-                      xaxis: { ...PT_AXIS, title: { text: 'Store Revenue (₹)' }, tickformat: ',.2s' },
+                      xaxis: viewMode === 'attach'
+                        ? { ...PT_AXIS, title: { text: drillDown.xAxisLabel }, ticksuffix: '%' }
+                        : { ...PT_AXIS, title: { text: drillDown.xAxisLabel }, ...plotlyInrTickVals(drillDown.stats.maxR) },
                       yaxis: { ...PT_AXIS, title: { text: 'Density' }, showticklabels: false, zeroline: true, zerolinecolor: PT.line },
                       shapes:      drillDown.shapes as any[],
                       annotations: drillDown.annotations as any[],
@@ -811,7 +1002,7 @@ export default function MonthlyRevenue({ filters }: Props) {
                               <th className="text-left px-3 py-2 font-semibold text-gray-600">Store Name</th>
                               <th className="text-left px-3 py-2 font-semibold text-gray-600">Code</th>
                               <th className="text-left px-3 py-2 font-semibold text-gray-600">State</th>
-                              <th className="text-right px-3 py-2 font-semibold text-gray-600">Revenue</th>
+                              <th className="text-right px-3 py-2 font-semibold text-gray-600">{viewMode === 'attach' ? 'Attach %' : 'Revenue'}</th>
                               <th className="text-center px-3 py-2 font-semibold text-gray-600">Type</th>
                               <th className="text-right px-3 py-2 font-semibold text-gray-600">Distance</th>
                             </tr>
@@ -822,7 +1013,7 @@ export default function MonthlyRevenue({ filters }: Props) {
                                 <td className="px-3 py-1.5 font-medium text-gray-800 max-w-[160px] truncate" title={row.storeName}>{row.storeName}</td>
                                 <td className="px-3 py-1.5 text-gray-500 font-mono">{row.storeId}</td>
                                 <td className="px-3 py-1.5">{row.state}</td>
-                                <td className="px-3 py-1.5 text-right font-medium">{fmtInrFull(row.revenue)}</td>
+                                <td className="px-3 py-1.5 text-right font-medium">{viewMode === 'attach' ? `${(row.attachPct ?? 0).toFixed(2)}%` : fmtInrFull(row.revenue)}</td>
                                 <td className="px-3 py-1.5 text-center">
                                   <span className={cn(
                                     'px-1.5 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap',
@@ -831,7 +1022,7 @@ export default function MonthlyRevenue({ filters }: Props) {
                                     {row.type === 'High Outlier' ? '★ High Performer' : '▼ Low Outlier'}
                                   </span>
                                 </td>
-                                <td className="px-3 py-1.5 text-right text-gray-500">{fmtInrFull(row.distance)}</td>
+                                <td className="px-3 py-1.5 text-right text-gray-500">{viewMode === 'attach' ? `${row.distance.toFixed(2)}pp` : fmtInrFull(row.distance)}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -881,8 +1072,11 @@ export default function MonthlyRevenue({ filters }: Props) {
             <table className="w-full text-[11px] text-gray-700 border-collapse">
               <thead>
                 <tr className="border-b border-gray-200 bg-gray-50">
-                  {['Store Name','Store Code','State','Month','Revenue','Type','Lower Bound','Upper Bound','Distance from Bound'].map(h => (
-                    <th key={h} className={cn('px-3 py-2 font-semibold text-gray-600 whitespace-nowrap', h === 'Revenue' || h === 'Lower Bound' || h === 'Upper Bound' || h === 'Distance from Bound' ? 'text-right' : h === 'Type' ? 'text-center' : 'text-left')}>{h}</th>
+                  {(viewMode === 'attach'
+                    ? ['Store Name','Store Code','State','Month','Attach %','Type','Lower Bound','Upper Bound','Distance']
+                    : ['Store Name','Store Code','State','Month','Revenue','Type','Lower Bound','Upper Bound','Distance from Bound']
+                  ).map(h => (
+                    <th key={h} className={cn('px-3 py-2 font-semibold text-gray-600 whitespace-nowrap', h === 'Revenue' || h === 'Attach %' || h === 'Lower Bound' || h === 'Upper Bound' || h === 'Distance from Bound' || h === 'Distance' ? 'text-right' : h === 'Type' ? 'text-center' : 'text-left')}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -893,7 +1087,7 @@ export default function MonthlyRevenue({ filters }: Props) {
                     <td className="px-3 py-2 text-gray-500 font-mono">{row.storeId}</td>
                     <td className="px-3 py-2">{row.state}</td>
                     <td className="px-3 py-2 whitespace-nowrap">{row.month}</td>
-                    <td className="px-3 py-2 text-right font-medium">{fmtInrFull(row.revenue)}</td>
+                    <td className="px-3 py-2 text-right font-medium">{viewMode === 'attach' ? `${(row.attachPct ?? 0).toFixed(2)}%` : fmtInrFull(row.revenue)}</td>
                     <td className="px-3 py-2 text-center">
                       <span className={cn('px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap',
                         row.type === 'High Outlier' ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700',
@@ -901,9 +1095,9 @@ export default function MonthlyRevenue({ filters }: Props) {
                         {row.type === 'High Outlier' ? '★ High Performer' : '▼ Low Outlier'}
                       </span>
                     </td>
-                    <td className="px-3 py-2 text-right text-gray-500 whitespace-nowrap">{fmtInrFull(row.lowerBound)}</td>
-                    <td className="px-3 py-2 text-right text-gray-500 whitespace-nowrap">{fmtInrFull(row.upperBound)}</td>
-                    <td className="px-3 py-2 text-right text-gray-600 whitespace-nowrap">{fmtInrFull(row.distance)}</td>
+                    <td className="px-3 py-2 text-right text-gray-500 whitespace-nowrap">{viewMode === 'attach' ? `${row.lowerBound.toFixed(2)}%` : fmtInrFull(row.lowerBound)}</td>
+                    <td className="px-3 py-2 text-right text-gray-500 whitespace-nowrap">{viewMode === 'attach' ? `${row.upperBound.toFixed(2)}%` : fmtInrFull(row.upperBound)}</td>
+                    <td className="px-3 py-2 text-right text-gray-600 whitespace-nowrap">{viewMode === 'attach' ? `${row.distance.toFixed(2)}pp` : fmtInrFull(row.distance)}</td>
                   </tr>
                 ))}
               </tbody>

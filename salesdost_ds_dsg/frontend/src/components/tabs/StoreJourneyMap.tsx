@@ -19,7 +19,7 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import { type StoreCategory, CATEGORY_ORDER } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
-import { fmtInr, fmtPct } from '@/lib/formatting'
+import { fmtInr, fmtPct, plotlyInrTickVals, plotlyInrLogTickVals } from '@/lib/formatting'
 import { exportCsv } from '@/lib/tableExport'
 import { kpiContainer, kpiItem, panelSpring } from '@/lib/animations'
 import { PT } from '@/lib/plotlyTheme'
@@ -177,11 +177,15 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
 
   // ── Scatter traces ────────────────────────────────────────────────────────
 
+  const maxAxis = useMemo(() => {
+    if (classified.length === 0) return 0
+    return Math.max(...classified.map(c => Math.max(c.earlyTotal, c.recentTotal)), 1) * 1.15
+  }, [classified])
+
   const scatterTraces = useMemo(() => {
     if (classified.length === 0) return []
 
     const maxRev  = Math.max(...classified.map(c => c.totalRev), 1)
-    const maxAxis = Math.max(...classified.map(c => Math.max(c.earlyTotal, c.recentTotal)), 1) * 1.15
 
     // For log scale the reference line must start at a positive value
     const posVals = classified
@@ -522,15 +526,13 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
                     type:        logScale ? 'log' as const : 'linear' as const,
                     gridcolor:   PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true,
                     title:       { text: 'Early Phase Revenue (₹)' },
-                    tickprefix:  '₹',
-                    tickformat:  logScale ? '.2s' : ',.0f',
+                    ...(logScale ? plotlyInrLogTickVals(maxAxis) : plotlyInrTickVals(maxAxis)),
                   },
                   yaxis:  {
                     type:        logScale ? 'log' as const : 'linear' as const,
                     gridcolor:   PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true,
                     title:       { text: 'Recent Phase Revenue (₹)' },
-                    tickprefix:  '₹',
-                    tickformat:  logScale ? '.2s' : ',.0f',
+                    ...(logScale ? plotlyInrLogTickVals(maxAxis) : plotlyInrTickVals(maxAxis)),
                   },
                   hovermode:  'closest' as const,
                   margin:     { l: 80, r: 20, t: 8, b: 90 },
@@ -615,17 +617,13 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
                           type:       logScale ? 'log' as const : 'linear' as const,
                           gridcolor:  PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true,
                           title:      { text: 'Early (₹)', font: { size: 9 } },
-                          tickprefix: '₹',
-                          tickformat: logScale ? '.1s' : ',.0f',
-                          nticks:     4,
+                          ...(logScale ? plotlyInrLogTickVals(catEntry.traces.length ? Math.max(...(catEntry.traces[1] as any).x) : 1) : plotlyInrTickVals(catEntry.traces.length ? Math.max(...(catEntry.traces[1] as any).x) : 1)),
                         },
                         yaxis: {
                           type:       logScale ? 'log' as const : 'linear' as const,
                           gridcolor:  PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true,
                           title:      { text: 'Recent (₹)', font: { size: 9 } },
-                          tickprefix: '₹',
-                          tickformat: logScale ? '.1s' : ',.0f',
-                          nticks:     4,
+                          ...(logScale ? plotlyInrLogTickVals(catEntry.traces.length ? Math.max(...(catEntry.traces[1] as any).y) : 1) : plotlyInrTickVals(catEntry.traces.length ? Math.max(...(catEntry.traces[1] as any).y) : 1)),
                         },
                         hovermode:  'closest' as const,
                         margin:     { l: 65, r: 8, t: 8, b: 55 },

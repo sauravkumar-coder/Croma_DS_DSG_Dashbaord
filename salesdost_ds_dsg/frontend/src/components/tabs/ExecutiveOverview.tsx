@@ -15,7 +15,7 @@ import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
 import { allocatePhases, type StoreCategory } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
-import { fmtInr, fmtPct } from '@/lib/formatting'
+import { fmtInr, fmtPct, plotlyInrTickVals } from '@/lib/formatting'
 import { kpiContainer, kpiItem, panelSpring } from '@/lib/animations'
 import { PT } from '@/lib/plotlyTheme'
 
@@ -641,8 +641,9 @@ export default function ExecutiveOverview({ filters }: Props) {
               xaxis:  { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true },
               yaxis:  {
                 gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line,
-                automargin: true, tickformat: ',.0s',
+                automargin: true,
                 title: { text: 'Revenue (₹)' },
+                ...plotlyInrTickVals(Math.max(0, ...barEarly.map(d=>d.rev), ...barMid.map(d=>d.rev), ...barRecent.map(d=>d.rev))),
               },
               legend: {
                 bgcolor: 'rgba(0,0,0,0)',
