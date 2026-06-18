@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+env/
+.venv/
+.env
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+*.local
+
+# Vite build output
+frontend/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Data uploads (keep folder, ignore files)
+backend/data/*.xlsx
+backend/data/*.xls
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# TypeScript
+*.tsbuildinfo
+2026-06_tracker_sales.xlsx
+2026-07_tracker.xlsx
+Croma_DSG_Platform_Documnetation.docx

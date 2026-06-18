@@ -1,0 +1,20 @@
+{
+  "Jun-2026": {
+    "month": "Jun-2026",
+    "filename": "2026-06_target.xlsx",
+    "uploaded_at": "2026-06-12T08:04:01",
+    "file_size_kb": 39.5,
+    "status": "inactive",
+    "store_count": 542,
+    "total_target": 0.0
+  },
+  "Dec-2024": {
+    "month": "Dec-2024",
+    "filename": "2024-12_target.xlsx",
+    "uploaded_at": "2026-06-18T12:30:16",
+    "file_size_kb": 6.1,
+    "status": "active",
+    "store_count": 120,
+    "total_target": 0.0
+  }
+}
