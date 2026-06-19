@@ -12,7 +12,7 @@ import { fmtInr, fmtPct } from '@/lib/formatting'
 
 const Plot = createPlotlyComponent(Plotly)
 
-const GEO_URL = '/india-states.geojson'
+const GEO_URL = `${import.meta.env.BASE_URL}india-states.geojson`
 
 // ── State centroids for bubble placement ──────────────────────────────────────
 const STATE_CENTROIDS: Record<string, [number, number]> = {
