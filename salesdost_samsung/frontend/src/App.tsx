@@ -145,9 +145,13 @@ function FilterBar({
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={ALL}>All Product Subcategories</SelectItem>
-          {categories.map(c => (
-            <SelectItem key={c} value={c}>{c ? (c.charAt(0).toUpperCase() + c.slice(1)) : ''}</SelectItem>
-          ))}
+          <SelectItem value="low">Low</SelectItem>
+          <SelectItem value="mid">Mid</SelectItem>
+          <SelectItem value="high">High</SelectItem>
+          <SelectItem value="premium">Premium</SelectItem>
+          <SelectItem value="super premium">Super Premium</SelectItem>
+          <SelectItem value="luxury fold">Luxury Fold</SelectItem>
+          <SelectItem value="luxury flip">Luxury Flip</SelectItem>
         </SelectContent>
       </Select>
 
