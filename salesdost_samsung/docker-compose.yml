@@ -19,7 +19,7 @@ services:
     build: ./frontend
     container_name: samsung-dashboard-frontend
     ports:
-      - "80:80"
+      - "3004:80"
     depends_on:
       - backend
     restart: always
