@@ -1,28 +1,31 @@
-version: '3.8'
-
 services:
+
   backend:
-    build: ./backend
-    container_name: samsung-dashboard-backend
-    ports:
-      - "8000:8000"
+    build:
+      context: ./backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env.production
     volumes:
       - backend-data:/app/data
-    environment:
-      # Direct connection parameter is important for SSH tunnels / replica sets
-      - MONGO_URI=${MONGO_URI:-mongodb://host.docker.internal:27018/zoppertrack?directConnection=true}
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    restart: always
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   frontend:
-    build: ./frontend
-    container_name: samsung-dashboard-frontend
+    build:
+      context: ./frontend
+    restart: unless-stopped
     ports:
       - "3004:80"
     depends_on:
-      - backend
-    restart: always
+      backend:
+        condition: service_healthy
 
 volumes:
   backend-data:

@@ -4,6 +4,16 @@ const api = axios.create({
   baseURL: (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3004',
 })
 
+// In production, when using relative paths (baseURL is empty), prepend '/analytics/samsung'
+if (import.meta.env.PROD && !import.meta.env.VITE_API_URL) {
+  api.interceptors.request.use((config) => {
+    if (config.url && config.url.startsWith('/api')) {
+      config.url = `/analytics/samsung${config.url}`
+    }
+    return config
+  })
+}
+
 export interface StoreRecord {
   store_id: string
   store_name?: string
