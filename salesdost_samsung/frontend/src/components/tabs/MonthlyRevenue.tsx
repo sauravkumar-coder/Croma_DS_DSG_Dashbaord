@@ -7,6 +7,7 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import { cn } from '@/lib/utils'
 import { allocatePhases } from '@/lib/classificationEngine'
+import { transformStoresByPlanCategory } from '@/lib/filterHelpers'
 import { fmtInr, fmtInrFull, fmtPct, plotlyInrTickVals } from '@/lib/formatting'
 import { panelSpring } from '@/lib/animations'
 import { PT, PT_AXIS } from '@/lib/plotlyTheme'
@@ -154,9 +155,9 @@ export default function MonthlyRevenue({ filters }: Props) {
 
   // ── Filter ─────────────────────────────────────────────────────────────────
   const { fs, fm } = useMemo(() => {
-    let fs = stores
-    if (filters.state)    fs = fs.filter(s => s.state    === filters.state)
-    if (filters.category) fs = fs.filter(s => s.category === filters.category)
+    let fs = transformStoresByPlanCategory(stores, filters.planCategory)
+    if (filters.state)              fs = fs.filter(s => s.state === filters.state)
+    if (filters.productSubcategory) fs = fs.filter(s => s.category?.toLowerCase() === filters.productSubcategory.toLowerCase())
 
     let fm = months
     if (filters.fromMonth) {

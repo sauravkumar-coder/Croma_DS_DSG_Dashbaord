@@ -9,6 +9,7 @@ import type { StoreRecord } from '@/lib/api'
 import { allocatePhases } from '@/lib/classificationEngine'
 import type { StoreCategory } from '@/lib/classificationEngine'
 import { fmtInr, fmtPct } from '@/lib/formatting'
+import { getTabClassification, transformStoresByPlanCategory } from '@/lib/filterHelpers'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -192,7 +193,7 @@ function buildHoverText(m: StateMetric): string {
 interface Props { filters: FilterState }
 
 export default function GeoAnalytics({ filters }: Props) {
-  const { stores, months, classification } = useDataContext()
+  const { stores, months } = useDataContext()
 
   const [geojson, setGeojson]       = useState<any>(null)
   const [geoLoading, setGeoLoading] = useState(true)
@@ -221,11 +222,15 @@ export default function GeoAnalytics({ filters }: Props) {
     return geojson.features.map((f: any) => f.properties[pk] as string).filter(Boolean)
   }, [geojson, featureidkey])
 
+  const tabClassification = useMemo(() => {
+    return getTabClassification(stores, months, filters.planCategory);
+  }, [stores, months, filters.planCategory]);
+
   // ── Filtered stores + months ───────────────────────────────────────────────
   const { fs, fm, early, mid, recent } = useMemo(() => {
-    let fs = stores
-    if (filters.state)    fs = fs.filter(s => s.state    === filters.state)
-    if (filters.category) fs = fs.filter(s => s.category === filters.category)
+    let fs = transformStoresByPlanCategory(stores, filters.planCategory)
+    if (filters.state)              fs = fs.filter(s => s.state === filters.state)
+    if (filters.productSubcategory) fs = fs.filter(s => s.category?.toLowerCase() === filters.productSubcategory.toLowerCase())
     let fm = months
     if (filters.fromMonth) { const i = months.indexOf(filters.fromMonth); if (i >= 0) fm = fm.slice(i) }
     if (filters.toMonth)   { const i = months.indexOf(filters.toMonth);   if (i >= 0) fm = fm.slice(0, i + 1) }
@@ -238,16 +243,16 @@ export default function GeoAnalytics({ filters }: Props) {
   // counts in tooltips are consistent with the Rising Stars / Fallen Stars pages.
   const stateCatMix = useMemo(() => {
     const mix: Record<string, Partial<Record<StoreCategory, number>>> = {}
-    for (const m of classification.metrics) {
+    for (const m of tabClassification.metrics) {
       const store = m.store
       if (filters.state && store.state !== filters.state) continue
-      if (filters.category && store.category !== filters.category) continue
+      if (filters.productSubcategory && store.category?.toLowerCase() !== filters.productSubcategory.toLowerCase()) continue
       const s = store.state ?? 'Unknown'
       if (!mix[s]) mix[s] = {}
       mix[s][m.category] = (mix[s][m.category] ?? 0) + 1
     }
     return mix
-  }, [classification, filters.state, filters.category])
+  }, [tabClassification, filters.state, filters.productSubcategory])
 
   // ── Per-state aggregations ─────────────────────────────────────────────────
   const stateMetrics = useMemo((): StateMetric[] => {

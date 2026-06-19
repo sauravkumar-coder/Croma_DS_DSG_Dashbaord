@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils'
 import { fmtInr, fmtPct, fmtCount, monthAbbr, fmtStore } from '@/lib/formatting'
 import { exportCsv, exportExcel } from '@/lib/tableExport'
 import DataTable from '@/components/ui/DataTable'
+import { transformStoresByPlanCategory, getTabClassification, getStorePlanCategories } from '@/lib/filterHelpers'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -54,9 +55,9 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
     avgGrowthPct, avgDeclinePct,
   } = useMemo(() => {
     try {
-    let fs: StoreRecord[] = stores
-    if (filters.state)    fs = fs.filter(s => s.state    === filters.state)
-    if (filters.category) fs = fs.filter(s => s.category === filters.category)
+    let fs: StoreRecord[] = transformStoresByPlanCategory(stores, filters.planCategory)
+    if (filters.state)              fs = fs.filter(s => s.state === filters.state)
+    if (filters.productSubcategory) fs = fs.filter(s => s.category?.toLowerCase() === filters.productSubcategory.toLowerCase())
 
     let fm: string[] = months
     if (filters.fromMonth) {
@@ -85,9 +86,12 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
     const midRange    = mid.length > 0 ? `${monthAbbr(mid[0])} – ${monthAbbr(mid[mid.length - 1])}` : '—'
     const recentRange = `${monthAbbr(recent[0])} – ${monthAbbr(recent[recent.length - 1])}`
 
+    // Recalculate classification dynamically based on plan category
+    const tabClassification = getTabClassification(stores, months, filters.planCategory);
+    
     // Category from the central classification engine (full date range) — consistent with all other pages
     const categoryMap = new Map<string, StoreCategory>(
-      classification.metrics.map(m => [m.store.store_id, m.category])
+      tabClassification.metrics.map(m => [m.store.store_id, m.category])
     )
 
     const allMovers: MoverRow[] = fs
@@ -336,12 +340,15 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
 
   function buildExportData() {
     const headers = [
-      '#', 'Store ID', 'Store Name', 'State', 'Category',
+      '#', 'Store ID', 'Store Name', 'State', 'Plan Category', 'Product Subcategory', 'Category',
       `Early Avg (${earlyRange})`, `Mid Avg (${midRange})`, `Recent Avg (${recentRange})`,
       'Δ Avg (₹)', 'Δ %',
     ]
     const rows = sortedTable.map((r, i) => [
-      i + 1, r.store.store_id, r.store.store_name ?? '', r.store.state ?? '', r.category,
+      i + 1, r.store.store_id, r.store.store_name ?? '', r.store.state ?? '',
+      filters.planCategory || getStorePlanCategories(r.store),
+      r.store.category ? (r.store.category.charAt(0).toUpperCase() + r.store.category.slice(1)) : '—',
+      r.category,
       r.earlyAvg.toFixed(0), r.midAvg.toFixed(0), r.recentAvg.toFixed(0),
       r.absChange.toFixed(0), r.pctChange != null ? r.pctChange.toFixed(1) : '',
     ])
@@ -637,6 +644,12 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
                 <th className="px-3 py-3 text-left font-semibold uppercase tracking-wider text-gray-500 hidden sm:table-cell">
                   State
                 </th>
+                <th className="px-3 py-3 text-left font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap">
+                  Plan Category
+                </th>
+                <th className="px-3 py-3 text-left font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap">
+                  Product Subcategory
+                </th>
 
                 {/* Early Phase */}
                 <th className="px-3 py-3 text-right font-semibold uppercase tracking-wider text-blue-500 whitespace-nowrap">
@@ -697,6 +710,12 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
                     </td>
                     <td className="px-3 py-2 text-gray-500 hidden sm:table-cell">
                       {row.store.state ?? '—'}
+                    </td>
+                    <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
+                      {filters.planCategory || getStorePlanCategories(row.store)}
+                    </td>
+                    <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
+                      {row.store.category ? (row.store.category.charAt(0).toUpperCase() + row.store.category.slice(1)) : '—'}
                     </td>
 
                     {/* Early Phase: avg revenue + plan count */}

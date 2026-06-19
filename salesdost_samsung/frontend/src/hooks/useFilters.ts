@@ -1,15 +1,17 @@
 import { useCallback, useState } from 'react'
 
 export interface FilterState {
-  state: string     // '' = all states
-  category: string  // '' = all categories
-  fromMonth: string // '' = earliest
-  toMonth: string   // '' = latest
+  state: string              // '' = all states
+  planCategory: string       // '' = all plan categories
+  productSubcategory: string // '' = all product subcategories
+  fromMonth: string          // '' = earliest
+  toMonth: string            // '' = latest
 }
 
 const DEFAULT_FILTERS: FilterState = {
   state: '',
-  category: '',
+  planCategory: '',
+  productSubcategory: '',
   fromMonth: '',
   toMonth: '',
 }
@@ -40,7 +42,7 @@ export function useFilters() {
     (tabId: string): number => {
       const f = filtersByTab[tabId]
       if (!f) return 0
-      return [f.state, f.category, f.fromMonth, f.toMonth].filter(Boolean).length
+      return [f.state, f.planCategory, f.productSubcategory, f.fromMonth, f.toMonth].filter(Boolean).length
     },
     [filtersByTab]
   )

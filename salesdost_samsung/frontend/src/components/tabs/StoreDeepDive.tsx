@@ -12,6 +12,7 @@ import { allocatePhases, type StoreCategory } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
 import { fmtInr, fmtPct, plotlyInrTickVals } from '@/lib/formatting'
 import { PT } from '@/lib/plotlyTheme'
+import { transformStoresByPlanCategory } from '@/lib/filterHelpers'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -392,21 +393,21 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
   const filtersRef = useRef(filters)
   filtersRef.current = filters
 
-  // Stores narrowed by the global state + category filters
+  // Stores narrowed by the global state + plan/product filters
   const filteredStores = useMemo(() => {
-    let result = stores
-    if (filters.state)    result = result.filter(s => s.state    === filters.state)
-    if (filters.category) result = result.filter(s => s.category === filters.category)
+    let result = transformStoresByPlanCategory(stores, filters.planCategory)
+    if (filters.state)              result = result.filter(s => s.state === filters.state)
+    if (filters.productSubcategory) result = result.filter(s => s.category?.toLowerCase() === filters.productSubcategory.toLowerCase())
     return result
-  }, [stores, filters.state, filters.category])
+  }, [stores, filters.state, filters.planCategory, filters.productSubcategory])
 
   // Track previous initialStoreId to detect cross-tab navigation changes
   const prevInitialStoreId = useRef<string | null | undefined>(undefined)
 
   // Auto-select store; re-runs when filters change or a new store is pushed from another tab
   useEffect(() => {
-    const { state, category } = filtersRef.current
-    const filterKey = `${state}|${category}`
+    const { state, planCategory, productSubcategory } = filtersRef.current
+    const filterKey = `${state}|${planCategory}|${productSubcategory}`
     const filtersChanged = lastFilterKey.current !== filterKey
     lastFilterKey.current = filterKey
 

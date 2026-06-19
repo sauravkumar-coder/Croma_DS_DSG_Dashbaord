@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Routes, Route, Link } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Database, ExternalLink, RotateCcw, Target } from 'lucide-react'
+import { Database, ExternalLink, RotateCcw, Target, X } from 'lucide-react'
 import { useDataContext } from './contexts/DataContext'
 import { useRetailerContext } from './contexts/RetailerContext'
 import SalesDataManager from './components/SalesDataManager'
@@ -37,8 +37,6 @@ import { RETAILER_IDS, getRetailerConfig } from './retailers/retailerFactory'
 //  1-2  Business Snapshot:    "What is happening overall?"
 //  3-5  Performance Breakdown: "Where is performance coming from?"
 //  6-8  Momentum & Risk:      "What is changing, and where should we act?"
-//  9    Deep Dive:            "Why is this happening?"
-//  10   Actionable:           "What should we do next?"
 const TABS = [
   { id: 'executive',       label: 'Overview'        },
   { id: 'monthly-revenue', label: 'Revenue Trend'   },
@@ -48,8 +46,6 @@ const TABS = [
   { id: 'revenue-movers',  label: 'Top Movers'      },
   { id: 'rising-stars',    label: 'Rising Stores'   },
   { id: 'fallen-stars',    label: 'Fallen Stores'   },
-  { id: 'store-deep-dive', label: 'Store Spotlight' },
-  { id: 'target-command',  label: 'Target Tracker'  },
 ] as const
 
 type TabId = typeof TABS[number]['id']
@@ -122,18 +118,35 @@ function FilterBar({
         </SelectContent>
       </Select>
 
-      {/* Category */}
+      {/* Plan Category */}
       <Select
-        value={toSel(filters.category)}
-        onValueChange={v => onFilterChange('category', fromSel(v))}
+        value={toSel(filters.planCategory)}
+        onValueChange={v => onFilterChange('planCategory', fromSel(v))}
       >
-        <SelectTrigger className="h-8 w-40 text-xs">
-          <SelectValue />
+        <SelectTrigger className="h-8 w-44 text-xs">
+          <SelectValue placeholder="All Plan Categories" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={ALL}>All Categories</SelectItem>
+          <SelectItem value={ALL}>All Plan Categories</SelectItem>
+          <SelectItem value="SP">SP</SelectItem>
+          <SelectItem value="ADLD">ADLD</SelectItem>
+          <SelectItem value="Combo">Combo</SelectItem>
+          <SelectItem value="EW">EW</SelectItem>
+        </SelectContent>
+      </Select>
+
+      {/* Product Subcategory */}
+      <Select
+        value={toSel(filters.productSubcategory)}
+        onValueChange={v => onFilterChange('productSubcategory', fromSel(v))}
+      >
+        <SelectTrigger className="h-8 w-48 text-xs">
+          <SelectValue placeholder="All Product Subcategories" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ALL}>All Product Subcategories</SelectItem>
           {categories.map(c => (
-            <SelectItem key={c} value={c}>{c}</SelectItem>
+            <SelectItem key={c} value={c}>{c ? (c.charAt(0).toUpperCase() + c.slice(1)) : ''}</SelectItem>
           ))}
         </SelectContent>
       </Select>
@@ -238,12 +251,11 @@ export default function App() {
 
   const [activeTab, setActiveTab]         = useState<TabId>('executive')
   const [showDataManager, setShowDataManager] = useState(false)
-  const [deepDiveStoreId, setDeepDiveStoreId] = useState<string | null>(null)
+  const [selectedSpotlightStoreId, setSelectedSpotlightStoreId] = useState<string | null>(null)
   const [journeyPrefilter, setJourneyPrefilter] = useState<StoreCategory | null>(null)
 
   const handleNavigateToStore = useCallback((storeId: string) => {
-    setDeepDiveStoreId(storeId)
-    setActiveTab('store-deep-dive')
+    setSelectedSpotlightStoreId(storeId)
   }, [])
 
   const handleNavigateToJourneyCategory = useCallback((category: StoreCategory) => {
@@ -290,8 +302,6 @@ export default function App() {
       case 'revenue-movers':  return <RevenueMovers filters={filters} />
       case 'rising-stars':    return <RisingStars filters={filters} onNavigateToStore={handleNavigateToStore} onNavigateToJourneyCategory={handleNavigateToJourneyCategory} />
       case 'fallen-stars':    return <FallenStars filters={filters} onNavigateToStore={handleNavigateToStore} onNavigateToJourneyCategory={handleNavigateToJourneyCategory} />
-      case 'store-deep-dive': return <StoreDeepDive filters={filters} initialStoreId={deepDiveStoreId} />
-      case 'target-command':  return <TargetCommandCenter />
       default:                return <TabPlaceholder label={currentTab.label} filters={filters} />
     }
   }
@@ -367,21 +377,6 @@ export default function App() {
               storeCount={stores.length}
               monthCount={months.length}
             />
-            <button
-              onClick={() => setShowDataManager(true)}
-              className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-600 hover:border-blue-400 hover:text-blue-600 shadow-sm transition-colors"
-            >
-              <Database className="h-3.5 w-3.5" />
-              Manage Data
-            </button>
-            <Link
-              to="/target-tracker"
-              className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-600 hover:border-blue-400 hover:text-blue-600 shadow-sm transition-colors"
-            >
-              <Target className="h-3.5 w-3.5" />
-              Target Tracker
-              <ExternalLink className="h-3 w-3 opacity-50" />
-            </Link>
           </div>
         </div>
       </header>
@@ -415,22 +410,19 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── Filter Bar — hidden for Target Command Center which manages its own filters ── */}
-      {activeTab !== 'target-command' && (
-        <div className="sticky top-28 z-30 border-b border-gray-200 bg-white/90 backdrop-blur-sm">
-          <div className="px-4 py-2 max-w-screen-2xl mx-auto">
-            <FilterBar
-              states={states}
-              categories={categories}
-              months={months}
-              filters={filters}
-              onFilterChange={handleFilterChange}
-              onReset={handleReset}
-              activeCount={activeCount}
-            />
-          </div>
+      <div className="sticky top-28 z-30 border-b border-gray-200 bg-white/90 backdrop-blur-sm">
+        <div className="px-4 py-2 max-w-screen-2xl mx-auto">
+          <FilterBar
+            states={states}
+            categories={categories}
+            months={months}
+            filters={filters}
+            onFilterChange={handleFilterChange}
+            onReset={handleReset}
+            activeCount={activeCount}
+          />
         </div>
-      )}
+      </div>
 
       {/* ── Tab Content ── */}
       <main className="px-4 py-6 pb-14 max-w-screen-2xl mx-auto">
@@ -464,6 +456,33 @@ export default function App() {
               refetchData()
             }}
           />
+        )}
+      </AnimatePresence>
+
+      {/* ── Store Spotlight Modal ── */}
+      <AnimatePresence>
+        {selectedSpotlightStoreId && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-7xl h-[90vh] overflow-hidden flex flex-col border border-slate-200">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+                <div className="flex items-center gap-2">
+                  <span className="text-lg font-bold text-slate-800">Store Spotlight</span>
+                  <span className="text-xs bg-slate-200 text-slate-600 font-mono px-2 py-0.5 rounded-full">
+                    {selectedSpotlightStoreId}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setSelectedSpotlightStoreId(null)}
+                  className="text-slate-400 hover:text-slate-600 transition-colors p-1.5 rounded-lg hover:bg-slate-100"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <div className="overflow-y-auto flex-1 p-6">
+                <StoreDeepDive filters={filters} initialStoreId={selectedSpotlightStoreId} />
+              </div>
+            </div>
+          </div>
         )}
       </AnimatePresence>
 

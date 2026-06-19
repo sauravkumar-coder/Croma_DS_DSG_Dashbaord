@@ -13,6 +13,7 @@ import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
 import { allocatePhases, type StoreCategory } from '@/lib/classificationEngine'
 import { cn } from '@/lib/utils'
+import { getTabClassification } from '@/lib/filterHelpers'
 import { fmtInr, fmtPct } from '@/lib/formatting'
 import { exportCsv } from '@/lib/tableExport'
 import { PT, PLOTLY_BASE } from '@/lib/plotlyTheme'
@@ -257,9 +258,13 @@ function RiskBadge({ value }: { value: number }) {
 interface Props { filters: FilterState }
 
 export default function StateJourneyAnalysis({ filters }: Props) {
-  const { stores, months, classification } = useDataContext()
+  const { stores, months } = useDataContext()
   const [sortKey, setSortKey] = useState<SortKey>('revenue')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+
+  const tabClassification = useMemo(() => {
+    return getTabClassification(stores, months, filters.planCategory);
+  }, [stores, months, filters.planCategory]);
 
   // ── Month range ────────────────────────────────────────────────────────────
   const { fm, early, mid, recent } = useMemo(() => {
@@ -278,8 +283,8 @@ export default function StateJourneyAnalysis({ filters }: Props) {
 
   // ── Per-store data (category + revenue, no state filter here) ─────────────
   const classifiedStores = useMemo(() => {
-    let scope = classification.metrics
-    if (filters.category) scope = scope.filter(m => m.store.category === filters.category)
+    let scope = tabClassification.metrics
+    if (filters.productSubcategory) scope = scope.filter(m => m.store.category?.toLowerCase() === filters.productSubcategory.toLowerCase())
 
     return scope.map(m => {
       const store      = m.store
@@ -292,7 +297,7 @@ export default function StateJourneyAnalysis({ filters }: Props) {
         : fm.some(mo => (store.monthly_sales[mo] ?? 0) > 0)
       return { store, rev, earlyR, recentR, growthPct, isRecentActive, category: m.category as StoreCategory }
     })
-  }, [classification.metrics, filters.category, fm, early, recent])
+  }, [tabClassification, filters.productSubcategory, fm, early, recent])
 
   // ── State-scoped stores: apply state filter for funnel + KPI cards ─────────
   const stateScopedStores = useMemo(() => {

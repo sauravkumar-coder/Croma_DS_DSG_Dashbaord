@@ -18,6 +18,7 @@ import Plotly from 'plotly.js-dist-min'
 import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import { type StoreCategory, CATEGORY_ORDER } from '@/lib/classificationEngine'
+import { getTabClassification, getStorePlanCategories, transformStoresByPlanCategory } from '@/lib/filterHelpers'
 import { cn } from '@/lib/utils'
 import { fmtInr, fmtPct, plotlyInrTickVals, plotlyInrLogTickVals } from '@/lib/formatting'
 import { exportCsv } from '@/lib/tableExport'
@@ -127,7 +128,7 @@ interface Props {
 }
 
 export default function StoreJourneyMap({ filters, onNavigateToStore, initialCategory }: Props) {
-  const { classification } = useDataContext()
+  const { classification, stores, months } = useDataContext()
   const navigate = useNavigate()
 
   const [activeCategory, setActiveCategory] = useState<StoreCategory | null>(initialCategory ?? null)
@@ -148,15 +149,19 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
 
   useEffect(() => () => { if (hintTimerRef.current) clearTimeout(hintTimerRef.current) }, [])
 
+  const tabClassification = useMemo(() => {
+    return getTabClassification(stores, months, filters.planCategory);
+  }, [stores, months, filters.planCategory]);
+
   // ── Apply store-level filters to engine results ───────────────────────────
 
   const classified = useMemo(() => {
-    let scope = classification.metrics
+    let scope = tabClassification.metrics
 
-    if (filters.state)    scope = scope.filter(m => m.store.state    === filters.state)
-    if (filters.category) scope = scope.filter(m => m.store.category === filters.category)
+    if (filters.state)              scope = scope.filter(m => m.store.state === filters.state)
+    if (filters.productSubcategory) scope = scope.filter(m => m.store.category?.toLowerCase() === filters.productSubcategory.toLowerCase())
 
-    const { earlyMonths, midMonths, recentMonths } = classification.phases
+    const { earlyMonths, midMonths, recentMonths } = tabClassification.phases
 
     return scope.map(m => ({
       ...m,
@@ -165,7 +170,7 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
       midPlans:     midMonths.reduce((s, mo) => s + (m.store.monthly_plans_count?.[mo] ?? 0), 0),
       recentPlans:  recentMonths.reduce((s, mo) => s + (m.store.monthly_plans_count?.[mo] ?? 0), 0),
     }))
-  }, [classification, filters])
+  }, [tabClassification, filters])
 
   // ── Summary counts ────────────────────────────────────────────────────────
 
@@ -381,7 +386,7 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
     exportCsv(`store-journey${suffix}.csv`, headers, rows)
   }, [tableRows, activeCategory])
 
-  const { phases, counts: globalCounts } = classification
+  const { phases, counts: globalCounts } = tabClassification
   const cardCls  = 'rounded-xl border border-gray-200 bg-white p-4 shadow-sm'
   const emptyMsg = 'flex items-center justify-center h-64 text-gray-400 text-sm'
 
@@ -704,6 +709,8 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
                   </button>
                 </th>
                 <th className="px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wider text-gray-500">State</th>
+                <th className="px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Plan Category</th>
+                <th className="px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Product Subcategory</th>
                 <th className="px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Classification</th>
                 <th className="px-3 py-2.5 text-right">
                   <button onClick={() => toggleSort('early')}
@@ -737,7 +744,7 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
             <tbody>
               {tableRows.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-3 py-10 text-center text-gray-400 text-sm">No stores match</td>
+                  <td colSpan={13} className="px-3 py-10 text-center text-gray-400 text-sm">No stores match</td>
                 </tr>
               ) : (
                 tableRows.map(({ store, earlyTotal, midTotal, recentTotal, growthPct, category, earlyPlans, midPlans, recentPlans }, i) => (
@@ -759,6 +766,12 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
                       <span className="text-[10px] text-gray-400">{store.store_id}</span>
                     </td>
                     <td className="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">{store.state ?? '—'}</td>
+                    <td className="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">
+                      {filters.planCategory || getStorePlanCategories(store)}
+                    </td>
+                    <td className="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">
+                      {store.category ? (store.category.charAt(0).toUpperCase() + store.category.slice(1)) : '—'}
+                    </td>
                     <td className="px-3 py-2.5">
                       <span className={cn('inline-block text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap', CATEGORY_BADGE[category])}>
                         {category}

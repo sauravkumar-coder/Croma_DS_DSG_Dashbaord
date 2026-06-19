@@ -13,6 +13,7 @@ import { exportCsv } from '@/lib/tableExport'
 import { CATEGORY_TEXT_COLOR } from '@/lib/categoryStyles'
 import DataTable from '@/components/ui/DataTable'
 import StarsStateMap from './StarsStateMap'
+import { getTabClassification, getStorePlanCategories } from '@/lib/filterHelpers'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -29,6 +30,8 @@ const TABLE_COLS: { key: SortKey | null; label: string; align: 'left' | 'right' 
   { key: null,          label: '#',            align: 'center' },
   { key: null,          label: 'Store',        align: 'left'   },
   { key: 'state',       label: 'State',        align: 'left'   },
+  { key: null,          label: 'Plan Category', align: 'left'  },
+  { key: null,          label: 'Product Subcategory', align: 'left' },
   { key: null,          label: 'Category',     align: 'left'   },
   { key: 'earlyRev',   label: 'Early Rev',    align: 'right'  },
   { key: 'recentRev',  label: 'Recent Rev',   align: 'right'  },
@@ -53,10 +56,14 @@ export default function FallenStars({
   onNavigateToStore?: (storeId: string) => void
   onNavigateToJourneyCategory?: (category: StoreCategory) => void
 }) {
-  const { classification } = useDataContext()
+  const { classification, stores, months } = useDataContext()
   const [sortKey, setSortKey] = useState<SortKey>('growth')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [mapStateFilter, setMapStateFilter] = useState<string | null>(null)
+
+  const tabClassification = useMemo(() => {
+    return getTabClassification(stores, months, filters.planCategory);
+  }, [stores, months, filters.planCategory]);
 
   // Reset map selection whenever parent filters change
   useEffect(() => { setMapStateFilter(null) }, [filters])
@@ -65,11 +72,11 @@ export default function FallenStars({
 
   const { rows, kpi, top15 } = useMemo(() => {
     try {
-    let scope = classification.metrics
+    let scope = tabClassification.metrics
 
     // Apply store-level filters
-    if (filters.state)    scope = scope.filter(m => m.store.state    === filters.state)
-    if (filters.category) scope = scope.filter(m => m.store.category === filters.category)
+    if (filters.state)              scope = scope.filter(m => m.store.state === filters.state)
+    if (filters.productSubcategory) scope = scope.filter(m => m.store.category?.toLowerCase() === filters.productSubcategory.toLowerCase())
 
     // Keep only negative-trajectory categories
     const rows = scope.filter(m => NEGATIVE_CATEGORIES.includes(m.category))
@@ -81,7 +88,7 @@ export default function FallenStars({
     const byRecent = [...scope].sort((a, b) => b.recentTotal - a.recentTotal)
     const localRecentRank = new Map(byRecent.map((m, i) => [m.store.store_id, i + 1]))
 
-    const { earlyMonths, midMonths, recentMonths } = classification.phases
+    const { earlyMonths, midMonths, recentMonths } = tabClassification.phases
 
     const enriched = rows.map(m => ({
       ...m,
@@ -127,7 +134,7 @@ export default function FallenStars({
       console.error('[FallenStars] computation error:', e)
       return { rows: [], kpi: { count: 0, decliningCount: 0, worstFaller: null, medianDecline: 0, revenueAtRiskPct: 0 }, top15: [] }
     }
-  }, [classification, filters])
+  }, [tabClassification, filters])
 
   // ── Sort ─────────────────────────────────────────────────────────────────────
 
@@ -166,7 +173,7 @@ export default function FallenStars({
   const { chartTraces, chartCategories } = useMemo(() => {
     if (displayTop15.length === 0) return { chartTraces: [] as object[], chartCategories: [] as string[] }
 
-    const { earlyMonths, midMonths, recentMonths } = classification.phases
+    const { earlyMonths, midMonths, recentMonths } = tabClassification.phases
     const ec = earlyMonths.length  || 1
     const mc = midMonths.length    || 1
     const rc = recentMonths.length || 1
@@ -217,7 +224,7 @@ export default function FallenStars({
     }
 
     return { chartTraces: [...lines, earlyTrace, midTrace, recentTrace], chartCategories }
-  }, [displayTop15, classification.phases])
+  }, [displayTop15, tabClassification.phases])
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -229,13 +236,15 @@ export default function FallenStars({
 
   const handleExportCsv = useCallback(() => {
     const headers = [
-      '#', 'Store ID', 'Store Name', 'State', 'Category',
+      '#', 'Store ID', 'Store Name', 'State', 'Plan Category', 'Product Subcategory', 'Category',
       'Early Revenue', 'Recent Revenue', 'Decline %',
       'Early Plans', 'Mid Plans', 'Recent Plans',
       'Early Rank', 'Recent Rank', 'Health %',
     ]
     const exportRows = displayRows.map((r, i) => [
       i + 1, r.store.store_id, r.store.store_name ?? '', r.store.state ?? '',
+      filters.planCategory || getStorePlanCategories(r.store),
+      r.store.category ? (r.store.category.charAt(0).toUpperCase() + r.store.category.slice(1)) : '—',
       r.category,
       r.earlyTotal.toFixed(0), r.recentTotal.toFixed(0),
       r.growthPct != null ? r.growthPct.toFixed(1) : '',
@@ -243,7 +252,7 @@ export default function FallenStars({
       r.earlyRank, r.recentRank, r.localHealth.toFixed(1),
     ])
     exportCsv('fallen-stores', headers, exportRows)
-  }, [displayRows])
+  }, [displayRows, filters.planCategory])
 
   // ── Empty state ───────────────────────────────────────────────────────────────
 
@@ -253,7 +262,7 @@ export default function FallenStars({
         <TrendingDown className="h-8 w-8 text-gray-300" />
         <p className="text-base font-semibold text-gray-700">No Fallen Stars in Scope</p>
         <p className="text-sm text-gray-400 max-w-sm">
-          No stores meet the Fallen Star criteria{filters.state ? ` in ${filters.state}` : ''}{filters.category ? ` for ${filters.category}` : ''}.
+          No stores meet the Fallen Star criteria{filters.state ? ` in ${filters.state}` : ''}{filters.productSubcategory ? ` for ${filters.productSubcategory}` : ''}.
           Fallen Stars require strict phase-over-phase decline (Early → Mid → Recent) with ≥ 30% total decline from an above-median base.
         </p>
       </div>
@@ -435,6 +444,12 @@ export default function FallenStars({
                       </td>
                       <td className="px-3 py-2.5 text-gray-500 whitespace-nowrap text-xs">
                         {row.store.state ?? '—'}
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">
+                        {filters.planCategory || getStorePlanCategories(row.store)}
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">
+                        {row.store.category ? (row.store.category.charAt(0).toUpperCase() + row.store.category.slice(1)) : '—'}
                       </td>
                       <td className={cn('px-3 py-2.5 text-[11px] font-semibold whitespace-nowrap', CATEGORY_TEXT_COLOR[row.category])}>
                         {row.category}

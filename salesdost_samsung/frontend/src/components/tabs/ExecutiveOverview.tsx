@@ -14,6 +14,7 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import type { StoreRecord } from '@/lib/api'
 import { allocatePhases, type StoreCategory } from '@/lib/classificationEngine'
+import { getTabClassification, transformStoresByPlanCategory } from '@/lib/filterHelpers'
 import { cn } from '@/lib/utils'
 import { fmtInr, fmtPct, plotlyInrTickVals } from '@/lib/formatting'
 import { kpiContainer, kpiItem, panelSpring } from '@/lib/animations'
@@ -222,13 +223,17 @@ function KPICard({ label, value, sub, icon, barRatio, barColor, danger, formatte
 interface Props { filters: FilterState }
 
 export default function ExecutiveOverview({ filters }: Props) {
-  const { stores, months, classification } = useDataContext()
+  const { stores, months } = useDataContext()
+
+  const tabClassification = useMemo(() => {
+    return getTabClassification(stores, months, filters.planCategory);
+  }, [stores, months, filters.planCategory]);
 
   // ── Filter + split ─────────────────────────────────────────────────────────
   const { fs, fm, early, mid, recent } = useMemo(() => {
-    let fs = stores
-    if (filters.state)    fs = fs.filter(s => s.state    === filters.state)
-    if (filters.category) fs = fs.filter(s => s.category === filters.category)
+    let fs = transformStoresByPlanCategory(stores, filters.planCategory)
+    if (filters.state)              fs = fs.filter(s => s.state === filters.state)
+    if (filters.productSubcategory) fs = fs.filter(s => s.category?.toLowerCase() === filters.productSubcategory.toLowerCase())
     let fm = months
     if (filters.fromMonth) {
       const i = months.indexOf(filters.fromMonth); if (i >= 0) fm = fm.slice(i)
@@ -268,21 +273,21 @@ export default function ExecutiveOverview({ filters }: Props) {
     const dormant  = journeys.filter(j => j.rRev === 0).length
 
     // Use the central classification engine so counts match the detail pages
-    let engineScope = classification.metrics
-    if (filters.state)    engineScope = engineScope.filter(m => m.store.state    === filters.state)
-    if (filters.category) engineScope = engineScope.filter(m => m.store.category === filters.category)
+    let engineScope = tabClassification.metrics
+    if (filters.state)              engineScope = engineScope.filter(m => m.store.state === filters.state)
+    if (filters.productSubcategory) engineScope = engineScope.filter(m => m.store.category?.toLowerCase() === filters.productSubcategory.toLowerCase())
     const rising = engineScope.filter(m => m.category === 'Rising Star').length
     const fallen = engineScope.filter(m => m.category === 'Fallen Star').length
 
     return { scope, improved, declined, rising, fallen, dormant }
-  }, [fs, journeys, classification, filters])
+  }, [fs, journeys, tabClassification, filters])
 
   // ── Sankey (uses the same engineScope as the KPI cards) ────────────────────
   const sankeyTrace = useMemo(() => {
     // Mirror the exact filter the KPI cards apply so counts stay in sync
-    let engineScope = classification.metrics
-    if (filters.state)    engineScope = engineScope.filter(m => m.store.state    === filters.state)
-    if (filters.category) engineScope = engineScope.filter(m => m.store.category === filters.category)
+    let engineScope = tabClassification.metrics
+    if (filters.state)              engineScope = engineScope.filter(m => m.store.state === filters.state)
+    if (filters.productSubcategory) engineScope = engineScope.filter(m => m.store.category?.toLowerCase() === filters.productSubcategory.toLowerCase())
 
     if (!engineScope.length) return null
 
@@ -331,7 +336,7 @@ export default function ExecutiveOverview({ filters }: Props) {
     console.groupEnd()
 
     return { labels, colors, sources, targets, values, linkColors }
-  }, [classification, filters])
+  }, [tabClassification, filters])
 
   // ── Donut ──────────────────────────────────────────────────────────────────
   const donutCounts = useMemo(() => {
@@ -423,8 +428,7 @@ export default function ExecutiveOverview({ filters }: Props) {
         </div>
         <h2 className="text-xl font-bold text-gray-900">What is happening across the network?</h2>
         <p className="text-sm text-gray-500 mt-0.5 max-w-2xl leading-relaxed">
-          Store trajectory from early phase{earlyLabel ? ` (${earlyLabel})` : ''} to recent phase{recentLabel ? ` (${recentLabel})` : ''}.
-          Revenue trend provides financial context; the Sankey shows how stores moved in performance tier.
+          Store trajectory from early phase ({earlyLabel || 'Jun-2025 – Aug-2025'}) to recent phase ({recentLabel || 'Dec-2025 – Feb-2026'}). Revenue trend provides financial context; the Sankey shows how stores moved in performance tier.
         </p>
       </motion.div>
 
