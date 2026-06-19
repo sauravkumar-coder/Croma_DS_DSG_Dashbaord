@@ -383,9 +383,9 @@ function StoreSelector({ stores, selectedId, selectedLabel, onSelect }: {
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
-interface Props { filters: FilterState; initialStoreId?: string | null }
+interface Props { filters: FilterState; initialStoreId?: string | null; isModal?: boolean }
 
-export default function StoreDeepDive({ filters, initialStoreId }: Props) {
+export default function StoreDeepDive({ filters, initialStoreId, isModal = false }: Props) {
   const { stores, months, classification } = useDataContext()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const lastFilterKey = useRef('')
@@ -557,13 +557,17 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
           transition={{ duration: 0.3 }}
           className="flex items-start justify-between gap-4 flex-wrap"
         >
-          <div>
-            <h2 className="text-base font-bold text-gray-900">Store Spotlight — Full Profile</h2>
-            <p className="text-[11px] text-gray-500 mt-0.5">
-              Revenue trend, rank journey across three phases, health score breakdown, and month-by-month waterfall
-            </p>
+          {!isModal && (
+            <div>
+              <h2 className="text-base font-bold text-gray-900">Store Spotlight — Full Profile</h2>
+              <p className="text-[11px] text-gray-500 mt-0.5">
+                Revenue trend, rank journey across three phases, health score breakdown, and month-by-month waterfall
+              </p>
+            </div>
+          )}
+          <div className={cn(isModal && "w-full flex justify-end pr-8")}>
+            <StoreSelector stores={filteredStores} selectedId={null} onSelect={setSelectedId} />
           </div>
-          <StoreSelector stores={filteredStores} selectedId={null} onSelect={setSelectedId} />
         </motion.div>
 
         {topStores.length > 0 ? (
@@ -669,16 +673,20 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
         transition={{ duration: 0.28 }}
         className="flex items-start justify-between gap-4 flex-wrap"
       >
-        <div>
-          <h2 className="text-base font-bold text-gray-900">Store Journey — Deep Dive</h2>
-          <p className="text-[11px] text-gray-500 mt-0.5">
-            Full analytical profile, rank journey, health score and recommended actions
-          </p>
+        {!isModal && (
+          <div>
+            <h2 className="text-base font-bold text-gray-900">Store Journey — Deep Dive</h2>
+            <p className="text-[11px] text-gray-500 mt-0.5">
+              Full analytical profile, rank journey, health score and recommended actions
+            </p>
+          </div>
+        )}
+        <div className={cn(isModal && "w-full flex justify-end pr-8")}>
+          <StoreSelector
+            stores={filteredStores} selectedId={selectedId}
+            selectedLabel={selectorLabel} onSelect={setSelectedId}
+          />
         </div>
-        <StoreSelector
-          stores={filteredStores} selectedId={selectedId}
-          selectedLabel={selectorLabel} onSelect={setSelectedId}
-        />
       </motion.div>
 
       {/* ── Animate entire content when store changes ── */}
@@ -732,7 +740,12 @@ export default function StoreDeepDive({ filters, initialStoreId }: Props) {
                   <div className="flex items-center gap-2 mt-2 text-xs text-white/40 flex-wrap">
                     <span className="font-mono text-white/50">{selectedStore.store_id}</span>
                     {selectedStore.state    && <><span>·</span><span>{selectedStore.state}</span></>}
-                    {selectedStore.category && <><span>·</span><span>{selectedStore.category}</span></>}
+                    {selectedStore.category && selectedStore.category.toLowerCase() !== 'lfr' && (
+                      <>
+                        <span>·</span>
+                        <span>{selectedStore.category.charAt(0).toUpperCase() + selectedStore.category.slice(1)}</span>
+                      </>
+                    )}
                   </div>
                 </div>
 

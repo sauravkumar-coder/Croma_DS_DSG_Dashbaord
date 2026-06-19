@@ -758,13 +758,16 @@ export default function StateJourneyAnalysis({ filters }: Props) {
 
   const handleExportCsv = useCallback(() => {
     const headers = [
-      'State', 'Stores', 'Active',
+      'State', 'Plan Category', 'Product Subcategory', 'Stores', 'Active',
       'Early Rev', 'Recent Rev', 'Growth %', 'Avg/Store', 'Net %',
       'New Bloomer', 'Rising Star', 'Growing', 'Stable', 'Declining', 'Fallen', 'Inactive',
       'Health Score', 'Risk Index', 'Opportunity',
     ]
     const rows = tableRows.map(r => [
-      r.state, r.total, r.active,
+      r.state,
+      filters.planCategory || 'All',
+      filters.productSubcategory || 'All',
+      r.total, r.active,
       r.earlyRev.toFixed(0), r.recentRev.toFixed(0),
       r.growthPct != null ? r.growthPct.toFixed(1) + '%' : 'N/A',
       r.avgStore.toFixed(0),
@@ -773,7 +776,7 @@ export default function StateJourneyAnalysis({ filters }: Props) {
       r.health.toFixed(1), r.risk.toFixed(1), r.opp,
     ])
     exportCsv('state-health', headers, rows)
-  }, [tableRows])
+  }, [tableRows, filters.planCategory, filters.productSubcategory])
 
   const sortIcon = (col: SortKey) =>
     sortKey !== col
@@ -1484,6 +1487,9 @@ export default function StateJourneyAnalysis({ filters }: Props) {
                   </button>
                 </th>
 
+                <th className="px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Plan Category</th>
+                <th className="px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Product Subcategory</th>
+
                 {([
                   { col: 'Stores', key: 'stores', tip: 'Total stores in this state' },
                   { col: 'Active', key: 'active', tip: 'Stores with ≥ 1 sale in the recent period' },
@@ -1566,6 +1572,13 @@ export default function StateJourneyAnalysis({ filters }: Props) {
 
                   <td className="px-3 py-2.5 sticky left-8 bg-white z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]">
                     <span className="font-semibold text-gray-800">{row.state}</span>
+                  </td>
+
+                  <td className="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">
+                    {filters.planCategory || 'All'}
+                  </td>
+                  <td className="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">
+                    {filters.productSubcategory || 'All'}
                   </td>
 
                   <td className="px-3 py-2.5 text-center text-gray-700 tabular-nums font-medium">{row.total}</td>

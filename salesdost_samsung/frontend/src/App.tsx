@@ -467,23 +467,16 @@ export default function App() {
       <AnimatePresence>
         {selectedSpotlightStoreId && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-            <div className="bg-white rounded-2xl shadow-xl w-full max-w-7xl h-[90vh] overflow-hidden flex flex-col border border-slate-200">
-              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
-                <div className="flex items-center gap-2">
-                  <span className="text-lg font-bold text-slate-800">Store Spotlight</span>
-                  <span className="text-xs bg-slate-200 text-slate-600 font-mono px-2 py-0.5 rounded-full">
-                    {selectedSpotlightStoreId}
-                  </span>
-                </div>
-                <button
-                  onClick={() => setSelectedSpotlightStoreId(null)}
-                  className="text-slate-400 hover:text-slate-600 transition-colors p-1.5 rounded-lg hover:bg-slate-100"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-7xl h-[90vh] overflow-hidden flex flex-col border border-slate-200 relative">
+              <button
+                onClick={() => setSelectedSpotlightStoreId(null)}
+                className="absolute top-4 right-4 z-50 text-slate-400 hover:text-slate-600 transition-colors p-1.5 rounded-lg bg-white/80 hover:bg-slate-100 shadow-sm border border-slate-200/50"
+                title="Close"
+              >
+                <X className="h-5 w-5" />
+              </button>
               <div className="overflow-y-auto flex-1 p-6">
-                <StoreDeepDive filters={filters} initialStoreId={selectedSpotlightStoreId} />
+                <StoreDeepDive filters={filters} initialStoreId={selectedSpotlightStoreId} isModal={true} />
               </div>
             </div>
           </div>

@@ -244,7 +244,7 @@ export default function FallenStars({
     const exportRows = displayRows.map((r, i) => [
       i + 1, r.store.store_id, r.store.store_name ?? '', r.store.state ?? '',
       filters.planCategory || getStorePlanCategories(r.store),
-      r.store.category ? (r.store.category.charAt(0).toUpperCase() + r.store.category.slice(1)) : '—',
+      r.store.category && r.store.category.toLowerCase() !== 'lfr' ? (r.store.category.charAt(0).toUpperCase() + r.store.category.slice(1)) : '—',
       r.category,
       r.earlyTotal.toFixed(0), r.recentTotal.toFixed(0),
       r.growthPct != null ? r.growthPct.toFixed(1) : '',
@@ -449,7 +449,7 @@ export default function FallenStars({
                         {filters.planCategory || getStorePlanCategories(row.store)}
                       </td>
                       <td className="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">
-                        {row.store.category ? (row.store.category.charAt(0).toUpperCase() + row.store.category.slice(1)) : '—'}
+                        {row.store.category && row.store.category.toLowerCase() !== 'lfr' ? (row.store.category.charAt(0).toUpperCase() + row.store.category.slice(1)) : '—'}
                       </td>
                       <td className={cn('px-3 py-2.5 text-[11px] font-semibold whitespace-nowrap', CATEGORY_TEXT_COLOR[row.category])}>
                         {row.category}

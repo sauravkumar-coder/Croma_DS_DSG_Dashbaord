@@ -367,12 +367,29 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
         : <ChevronDown className="h-3 w-3 text-blue-600" />
 
   const handleExportCsv = useCallback(() => {
-    const headers = ['#','Store ID','Store Name','State','Classification','Early Rev','Mid Rev','Recent Rev','Growth %','Early Plans','Mid Plans','Recent Plans']
+    const headers = [
+      '#',
+      'Store ID',
+      'Store Name',
+      'State',
+      'Plan Category',
+      'Product Subcategory',
+      'Classification',
+      'Early Rev',
+      'Mid Rev',
+      'Recent Rev',
+      'Growth %',
+      'Early Plans',
+      'Mid Plans',
+      'Recent Plans',
+    ]
     const rows = tableRows.map(({ store, earlyTotal, midTotal, recentTotal, growthPct, category, earlyPlans, midPlans, recentPlans }, i) => [
       i + 1,
       store.store_id,
       store.store_name ?? store.store_id,
       store.state ?? '',
+      filters.planCategory || getStorePlanCategories(store),
+      store.category && store.category.toLowerCase() !== 'lfr' ? (store.category.charAt(0).toUpperCase() + store.category.slice(1)) : '—',
       category,
       earlyTotal,
       midTotal,
@@ -384,7 +401,7 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
     ])
     const suffix = activeCategory ? `-${activeCategory.replace(/\s+/g, '-').toLowerCase()}` : ''
     exportCsv(`store-journey${suffix}.csv`, headers, rows)
-  }, [tableRows, activeCategory])
+  }, [tableRows, activeCategory, filters.planCategory])
 
   const { phases, counts: globalCounts } = tabClassification
   const cardCls  = 'rounded-xl border border-gray-200 bg-white p-4 shadow-sm'
@@ -770,7 +787,7 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
                       {filters.planCategory || getStorePlanCategories(store)}
                     </td>
                     <td className="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">
-                      {store.category ? (store.category.charAt(0).toUpperCase() + store.category.slice(1)) : '—'}
+                      {store.category && store.category.toLowerCase() !== 'lfr' ? (store.category.charAt(0).toUpperCase() + store.category.slice(1)) : '—'}
                     </td>
                     <td className="px-3 py-2.5">
                       <span className={cn('inline-block text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap', CATEGORY_BADGE[category])}>

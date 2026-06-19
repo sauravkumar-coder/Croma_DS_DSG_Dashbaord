@@ -347,7 +347,7 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
     const rows = sortedTable.map((r, i) => [
       i + 1, r.store.store_id, r.store.store_name ?? '', r.store.state ?? '',
       filters.planCategory || getStorePlanCategories(r.store),
-      r.store.category ? (r.store.category.charAt(0).toUpperCase() + r.store.category.slice(1)) : '—',
+      r.store.category && r.store.category.toLowerCase() !== 'lfr' ? (r.store.category.charAt(0).toUpperCase() + r.store.category.slice(1)) : '—',
       r.category,
       r.earlyAvg.toFixed(0), r.midAvg.toFixed(0), r.recentAvg.toFixed(0),
       r.absChange.toFixed(0), r.pctChange != null ? r.pctChange.toFixed(1) : '',
@@ -715,7 +715,7 @@ export default function RevenueMovers({ filters }: { filters: FilterState }) {
                       {filters.planCategory || getStorePlanCategories(row.store)}
                     </td>
                     <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
-                      {row.store.category ? (row.store.category.charAt(0).toUpperCase() + row.store.category.slice(1)) : '—'}
+                      {row.store.category && row.store.category.toLowerCase() !== 'lfr' ? (row.store.category.charAt(0).toUpperCase() + row.store.category.slice(1)) : '—'}
                     </td>
 
                     {/* Early Phase: avg revenue + plan count */}
