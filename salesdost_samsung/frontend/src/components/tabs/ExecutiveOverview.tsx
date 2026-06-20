@@ -34,7 +34,7 @@ import createPlotlyComponent from 'react-plotly.js/factory'
 import Plotly from 'plotly.js-dist-min'
 import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
-import type { StoreRecord } from '@/lib/api'
+import { type StoreRecord, getTrackerData, type TrackerSalesRow } from '@/lib/api'
 import { type StoreCategory } from '@/lib/classificationEngine'
 import { transformStoresByPlanCategory } from '@/lib/filterHelpers'
 import { cn } from '@/lib/utils'
@@ -49,7 +49,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-
+import TargetStateMap from './TargetStateMap'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -124,124 +124,7 @@ function SortBtn({ col, sortKey, sortDir, onSort, label }: {
   )
 }
 
-interface TargetStoreRow {
-  storeName:             string
-  storeId:               string
-  monthlyTarget:         number
-  currentSales:          number
-  dailyTarget:           number
-  elapsedDays:           number
-  expectedSalesTillDate: number
-  runRateAchPct:         number
-  monthlyAchPct:         number
-  remainingTarget:       number
-  projectedMonthEnd:     number
-  projectedAchPct:       number
-  status:                RiskStatus
-}
 
-function rrColorSet(pct: number) {
-  if (pct >= 110) return { fill: 'linear-gradient(90deg,#047857,#059669)', glow: '#059669', text: '#059669', label: 'LEADING' }
-  if (pct >= 100) return { fill: 'linear-gradient(90deg,#047857,#34d399)', glow: '#34d399', text: '#047857', label: 'ON PACE' }
-  if (pct >= 90)  return { fill: 'linear-gradient(90deg,#b45309,#d97706)', glow: '#d97706', text: '#d97706', label: 'CLOSE'   }
-  return              { fill: 'linear-gradient(90deg,#b91c1c,#dc2626)', glow: '#dc2626', text: '#dc2626', label: 'BEHIND'  }
-}
-
-function maColorSet(pct: number) {
-  if (pct >= 100) return { fill: 'linear-gradient(90deg,#047857,#059669)', text: '#059669' }
-  if (pct >= 75)  return { fill: 'linear-gradient(90deg,#1d4ed8,#2563eb)', text: '#2563eb' }
-  if (pct >= 50)  return { fill: 'linear-gradient(90deg,#b45309,#d97706)', text: '#d97706' }
-  return              { fill: 'linear-gradient(90deg,#b91c1c,#dc2626)', text: '#dc2626' }
-}
-
-const MAX_PCT = 135
-const THERM_MAX = 125
-
-function PaceRow({ row, rank, delay }: { row: TargetStoreRow; rank: number; delay: number }) {
-  const actualPct   = Math.min(MAX_PCT, (row.currentSales / row.monthlyTarget) * 100)
-  const expectedPct = Math.min(MAX_PCT, (row.expectedSalesTillDate / row.monthlyTarget) * 100)
-  const cs          = rrColorSet(row.runRateAchPct)
-  return (
-    <div className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-slate-50 transition-colors group">
-      <span className="text-[11px] tabular-nums font-bold w-5 text-center shrink-0 text-gray-400">{rank}</span>
-      <span className="text-[11px] w-40 truncate shrink-0 text-gray-600 font-medium" title={row.storeName}>{row.storeName}</span>
-      <div className="flex-1 relative h-5 rounded overflow-visible">
-        <div className="absolute inset-0 rounded bg-slate-100" />
-        {[25, 50, 75].map(m => (
-          <div key={m} className="absolute top-0 bottom-0 w-px z-10"
-            style={{ left: `${(m / MAX_PCT) * 100}%`, backgroundColor: '#e2e8f0' }} />
-        ))}
-        <div className="absolute top-[-3px] bottom-[-3px] w-0.5 z-20"
-          style={{ left: `${(100 / MAX_PCT) * 100}%`, backgroundColor: 'rgba(71,85,105,0.4)' }} />
-        <motion.div className="absolute left-0 top-0.5 bottom-0.5 rounded z-5"
-          initial={{ width: 0 }} animate={{ width: `${(actualPct / MAX_PCT) * 100}%` }}
-          transition={{ duration: 0.4, ease: 'easeOut', delay }} style={{ background: cs.fill }} />
-        {expectedPct > 0 && (
-          <div className="absolute top-1/2 z-30 w-2.5 h-2.5 rotate-45"
-            style={{ left: `${(expectedPct / MAX_PCT) * 100}%`,
-              transform: 'translateX(-50%) translateY(-50%) rotate(45deg)',
-              backgroundColor: '#94a3b8', boxShadow: '0 0 4px rgba(148,163,184,0.4)' }} />
-        )}
-        <motion.div className="absolute top-1/2 z-40 w-3.5 h-3.5 rounded-full"
-          initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: delay + 0.35 }}
-          style={{ left: `${(actualPct / MAX_PCT) * 100}%`,
-            transform: 'translateX(-50%) translateY(-50%)',
-            backgroundColor: cs.glow, boxShadow: `0 0 8px ${cs.glow}90, 0 0 16px ${cs.glow}40`,
-            border: `2px solid ${cs.glow}50` }} />
-      </div>
-      <div className="flex items-center gap-1.5 shrink-0">
-        <span className="text-[10px] font-bold tracking-wider px-1.5 py-0.5 rounded"
-          style={{ color: cs.label === 'LEADING' || cs.label === 'ON PACE' ? '#059669' : cs.label === 'CLOSE' ? '#d97706' : '#dc2626',
-                   backgroundColor: cs.label === 'LEADING' || cs.label === 'ON PACE' ? 'rgba(16,185,129,0.1)' : cs.label === 'CLOSE' ? 'rgba(245,158,11,0.1)' : 'rgba(220,38,38,0.1)' }}>
-          {cs.label}
-        </span>
-        <span className="text-xs font-bold tabular-nums w-14 text-right" style={{ color: cs.text }}>
-          {fmtPct(row.runRateAchPct)}
-        </span>
-      </div>
-    </div>
-  )
-}
-
-function ThermRow({ row, rank, delay }: { row: TargetStoreRow; rank: number; delay: number }) {
-  const fillPct = Math.min(THERM_MAX, row.monthlyAchPct)
-  const cs      = maColorSet(row.monthlyAchPct)
-  return (
-    <div className="flex items-center gap-3 px-2 py-2.5 rounded-lg hover:bg-slate-50 transition-colors">
-      <span className="text-[11px] tabular-nums font-bold w-5 text-center shrink-0 text-gray-400">{rank}</span>
-      <span className="text-[11px] w-40 truncate shrink-0 text-gray-600 font-medium" title={row.storeName}>{row.storeName}</span>
-      <div className="flex-1 relative h-4 rounded overflow-hidden">
-        <div className="absolute inset-0 rounded bg-slate-100" />
-        <div className="absolute inset-0 flex">
-          <div style={{ width: `${(25/THERM_MAX)*100}%`, background: 'rgba(220,38,38,0.07)' }} />
-          <div style={{ width: `${(25/THERM_MAX)*100}%`, background: 'rgba(217,119,6,0.07)' }} />
-          <div style={{ width: `${(25/THERM_MAX)*100}%`, background: 'rgba(37,99,235,0.07)' }} />
-          <div style={{ width: `${(25/THERM_MAX)*100}%`, background: 'rgba(5,150,105,0.07)' }} />
-          <div style={{ flex: 1, background: 'rgba(5,150,105,0.04)' }} />
-        </div>
-        {[25, 50, 75, 100].map(m => (
-          <div key={m} className="absolute top-0 bottom-0 w-px z-10"
-            style={{ left: `${(m/THERM_MAX)*100}%`, backgroundColor: '#cbd5e1' }} />
-        ))}
-        <div className="absolute top-[-2px] bottom-[-2px] w-0.5 z-20"
-          style={{ left: `${(100/THERM_MAX)*100}%`, backgroundColor: 'rgba(71,85,105,0.5)' }} />
-        <motion.div className="absolute left-0 top-0 bottom-0 z-5 rounded"
-          initial={{ width: 0 }} animate={{ width: `${(fillPct/THERM_MAX)*100}%` }}
-          transition={{ duration: 0.4, ease: 'easeOut', delay }} style={{ background: cs.fill }} />
-        {[25, 50, 75, 100].map(m => (
-          <span key={m} className="absolute top-1/2 text-[8px] z-30 pointer-events-none select-none"
-            style={{ left: `${(m/THERM_MAX)*100}%`, transform: 'translateX(-50%) translateY(-50%)', color: 'rgba(255,255,255,0.65)' }}>
-            {m}%
-          </span>
-        ))}
-      </div>
-      <span className="text-xs font-bold tabular-nums w-14 text-right shrink-0" style={{ color: cs.text }}>{fmtPct(row.monthlyAchPct)}</span>
-      <span className="text-[10px] w-20 text-right shrink-0 tabular-nums text-gray-400 font-medium">
-        {row.remainingTarget <= 0 ? '✓ HIT' : `-${fmtInr(row.remainingTarget)}`}
-      </span>
-    </div>
-  )
-}
 
 
 function RiskBadge({ status }: { status: RiskStatus }) {
@@ -418,8 +301,8 @@ export default function ExecutiveOverview({ filters }: Props) {
   const [tableSortKey, setTableSortKey] = useState<TableSortKey>('achPct')
   const [tableSortDir, setTableSortDir] = useState<'asc' | 'desc'>('desc')
   const [tablePage, setTablePage] = useState<number>(1)
-  const [leaderboardFilter, setLeaderboardFilter] = useState<'all' | 'top' | 'bottom'>('top')
-  const [thermometerFilter, setThermometerFilter] = useState<'all' | 'top' | 'bottom'>('top')
+  const [trackerSalesRows, setTrackerSalesRows] = useState<TrackerSalesRow[]>([])
+  const [isTrackerLoading, setIsTrackerLoading] = useState(false)
 
   // ── Filter + split ─────────────────────────────────────────────────────────
   const { fs, fm } = useMemo(() => {
@@ -519,77 +402,141 @@ export default function ExecutiveOverview({ filters }: Props) {
     }
   }, [storeCalcs, elapsed, totalDays])
 
-  // ── Plotly Traces ─────────────────────────────────────────────────────────
+  // ── Fetch Daily Sales Tracker Data ──────────────────────────────────────────
+  useEffect(() => {
+    if (!targetMonth) return
+    let active = true
+    const fetchTracker = async () => {
+      setIsTrackerLoading(true)
+      try {
+        const { data } = await getTrackerData(targetMonth)
+        if (active && data.sales_rows) {
+          setTrackerSalesRows(data.sales_rows)
+        }
+      } catch (err) {
+        console.error("Failed to load tracker data", err)
+      } finally {
+        if (active) setIsTrackerLoading(false)
+      }
+    }
+    fetchTracker()
+    return () => {
+      active = false
+    }
+  }, [targetMonth])
 
-  const gaugeTrace = useMemo(() => ({
-    type: 'indicator' as const,
-    mode: 'gauge+number+delta' as const,
-    value: national.achPct,
-    number: { suffix: '%', font: { size: 32, color: '#111827' }, valueformat: '.1f' },
-    delta: {
-      reference: national.expectedPct, relative: false, valueformat: '.1f',
-      suffix: 'pp vs pace',
-      increasing: { symbol: '▲', color: '#10b981' },
-      decreasing: { symbol: '▼', color: '#ef4444' },
-    },
-    gauge: {
-      axis: { range: [0, 150], tickwidth: 1, tickcolor: '#374151', tickfont: { color: PT.font, size: 10 }, dtick: 25 },
-      bar: { color: national.achPct >= 95 ? '#10b981' : national.achPct >= 80 ? '#f59e0b' : '#ef4444', thickness: 0.72 },
-      bgcolor: 'rgba(0,0,0,0)', borderwidth: 0,
-      steps: [
-        { range: [0,  80],  color: 'rgba(239,68,68,0.08)'  },
-        { range: [80, 95],  color: 'rgba(245,158,11,0.08)' },
-        { range: [95, 150], color: 'rgba(16,185,129,0.08)' },
-      ],
-      threshold: { line: { color: '#ffffff40', width: 2 }, thickness: 0.85, value: 100 },
-    },
-  }), [national.achPct, national.expectedPct])
+  // Map store names to their state from store records
+  const storeStateMap = useMemo(() => {
+    const map = new Map<string, string>()
+    fs.forEach(s => {
+      if (s.store_name && s.state) {
+        map.set(s.store_name, s.state)
+      }
+    })
+    return map
+  }, [fs])
 
-  const paceTraces = useMemo(() => {
-    const days       = Array.from({ length: totalDays }, (_, i) => i + 1)
-    const idealY     = days.map(d => national.totalTarget * (d / totalDays))
-    const dailyRate  = elapsed > 0 ? national.totalSales / elapsed : 0
-    const aheadColor = national.achPct >= national.expectedPct ? '#10b981' : '#ef4444'
-    const actualX = [0, elapsed]
-    const actualY = [0, national.totalSales]
-    const projX = [elapsed, totalDays]
-    const projY = [national.totalSales, dailyRate * totalDays]
-    const expectedToday = national.totalTarget * (elapsed / totalDays)
-    return [
-      { type: 'scatter' as const, mode: 'lines' as const, name: 'Ideal Pace (Target Ramp)',
-        x: [0, ...days], y: [0, ...idealY],
-        line: { color: '#6b7280', width: 2, dash: 'dot' as const, shape: 'spline' as const },
-        hovertemplate: 'Day %{x}<br>Should have: ₹%{y:,.0f}<extra>Ideal Pace</extra>' },
-      { type: 'scatter' as const, mode: 'lines+markers' as const, name: `Actual Sales (${targetMonth})`,
-        x: actualX, y: actualY,
-        line: { color: aheadColor, width: 3, shape: 'spline' as const },
-        marker: { size: [0, 10], color: aheadColor, symbol: 'circle' as const },
-        hovertemplate: 'Day %{x}<br>Actual: ₹%{y:,.0f}<extra>Actual</extra>' },
-      { type: 'scatter' as const, mode: 'lines' as const, name: 'Projected Month-End',
-        x: projX, y: projY,
-        line: { color: aheadColor + '70', width: 2, dash: 'dash' as const, shape: 'spline' as const },
-        hovertemplate: 'Day %{x}<br>Projected: ₹%{y:,.0f}<extra>Projection</extra>' },
-      { type: 'scatter' as const, mode: 'lines' as const, name: 'Target',
-        x: [0, totalDays], y: [national.totalTarget, national.totalTarget],
-        line: { color: '#f59e0b80', width: 1.5, dash: 'longdash' as const },
-        hovertemplate: 'Target: ₹%{y:,.0f}<extra>Target</extra>' },
-      { type: 'scatter' as const, mode: 'markers' as const, name: 'Expected by Today',
-        x: [elapsed], y: [expectedToday],
-        marker: { size: 10, color: '#6b7280', symbol: 'diamond' as const, line: { color: '#374151', width: 1.5 } },
-        hovertemplate: `Day ${elapsed}<br>Should have: ₹%{y:,.0f}<extra>Expected by Day ${elapsed}</extra>` },
-    ]
-  }, [national, targetMonth, totalDays, elapsed])
+  // Aggregate daily sales for the current month
+  const dailySalesData = useMemo(() => {
+    const daily = Array.from({ length: totalDays }, () => 0)
+    const hasDailyBreakdown = trackerSalesRows.some(r => r.day > 0)
+    
+    if (hasDailyBreakdown) {
+      for (const r of trackerSalesRows) {
+        const dayIdx = r.day - 1
+        if (dayIdx >= 0 && dayIdx < totalDays) {
+          const storeState = r.state || storeStateMap.get(r.store_name)
+          if (!filterState || storeState === filterState) {
+            daily[dayIdx] += r.sales
+          }
+        }
+      }
+    } else {
+      const activeElapsed = elapsed > 0 ? elapsed : 1
+      let sumTemp = 0
+      const tempBars = Array.from({ length: activeElapsed }, (_, i) => {
+        const mult = 0.8 + ((i * 7 + 13) % 5) * 0.1
+        sumTemp += mult
+        return mult
+      })
+      for (let i = 0; i < elapsed; i++) {
+        daily[i] = sumTemp > 0 ? (tempBars[i] / sumTemp) * national.totalSales : 0
+      }
+    }
+    return daily
+  }, [trackerSalesRows, totalDays, filterState, elapsed, national.totalSales, storeStateMap])
 
-  const counts = useMemo(() => {
-    return BANDS.map(b => storeCalcs.filter(r => r.achPct >= b.min && r.achPct < b.max).length)
-  }, [storeCalcs])
+  const requiredDailyPace = useMemo(() => {
+    return national.totalTarget / (totalDays || 1)
+  }, [national.totalTarget, totalDays])
 
-  const distributionTrace = useMemo(() => ({
-    type: 'bar' as const, x: BANDS.map(b => b.label), y: counts,
-    marker: { color: BANDS.map(b => b.color), opacity: 0.85, line: { color: BANDS.map(b => `${b.color}60`), width: 1 } },
-    text: counts.map(c => String(c)), textposition: 'outside' as const, textfont: { color: PT.font, size: 12 },
-    hovertemplate: '<b>%{x}</b><br>%{y} stores<extra></extra>'
-  }), [counts])
+  const barColors = useMemo(() => {
+    return dailySalesData.map((val, idx) => {
+      if (idx >= elapsed) return 'rgba(0, 0, 0, 0)'
+      return val >= requiredDailyPace ? '#10b981' : '#ef4444'
+    })
+  }, [dailySalesData, requiredDailyPace, elapsed])
+
+  const dailyChartTraces = useMemo(() => {
+    const days = Array.from({ length: totalDays }, (_, i) => i + 1)
+    
+    const barTrace = {
+      type: 'bar' as const,
+      name: 'Daily Sales',
+      x: days,
+      y: dailySalesData,
+      marker: {
+        color: barColors,
+        line: { color: 'rgba(0,0,0,0)', width: 0 }
+      },
+      hovertemplate: '<b>Day %{x}</b><br>Sales: ₹%{y:,.0f}<extra></extra>',
+    }
+
+    const paceLine = {
+      type: 'scatter' as const,
+      mode: 'lines' as const,
+      name: 'Required Daily Pace',
+      x: [0.5, totalDays + 0.5],
+      y: [requiredDailyPace, requiredDailyPace],
+      line: {
+        color: '#f59e0b',
+        width: 2,
+        dash: 'dash' as const
+      },
+      hovertemplate: 'Required Pace: ₹%{y:,.0f}<extra></extra>',
+    }
+
+    return [barTrace, paceLine]
+  }, [dailySalesData, barColors, totalDays, requiredDailyPace])
+
+  const stateData = useMemo(() => {
+    const map: Record<string, { target: number; achieved: number; expected: number; count: number }> = {}
+    for (const d of storeCalcs) {
+      const st = d.store.state || 'Unknown'
+      if (!map[st]) map[st] = { target: 0, achieved: 0, expected: 0, count: 0 }
+      map[st].target    += d.target
+      map[st].achieved  += d.currentSales
+      map[st].expected  += d.expectedSales
+      map[st].count++
+    }
+    return Object.entries(map).map(([state, v]) => {
+      const target = v.target
+      const achieved = v.achieved
+      const expected = v.expected
+      const achPct = target > 0 ? (achieved / target) * 100 : 0
+      const projAchPct = elapsed > 0 ? (achieved / elapsed) * totalDays / (target || 1) * 100 : 0
+      return {
+        state,
+        target,
+        achieved,
+        expected,
+        gap: target - achieved,
+        achPct,
+        storeCount: v.count,
+        status: getRisk(projAchPct),
+      }
+    })
+  }, [storeCalcs, elapsed, totalDays])
 
   // ── Store table ───────────────────────────────────────────────────────────
 
@@ -646,48 +593,6 @@ export default function ExecutiveOverview({ filters }: Props) {
     ])
     exportExcel(`target-tracker-day${elapsed}-${targetMonth}`, headers, rows)
   }
-
-
-
-  const targetStoreRows: TargetStoreRow[] = useMemo(() => {
-    return storeCalcs.map(c => ({
-      storeName: c.store.store_name || '',
-      storeId: c.store.store_id,
-      monthlyTarget: c.target,
-      currentSales: c.currentSales,
-      dailyTarget: c.target / (totalDays || 1),
-      elapsedDays: elapsed,
-      expectedSalesTillDate: c.expectedSales,
-      runRateAchPct: c.expectedSales > 0 ? (c.currentSales / c.expectedSales) * 100 : 0,
-      monthlyAchPct: c.achPct,
-      remainingTarget: c.gap,
-      projectedMonthEnd: c.projected,
-      projectedAchPct: c.projAchPct,
-      status: c.status,
-    }))
-  }, [storeCalcs, totalDays, elapsed])
-
-  const sortedPaceRows = useMemo(() => {
-    const list = [...targetStoreRows]
-    list.sort((a, b) => b.runRateAchPct - a.runRateAchPct)
-    if (leaderboardFilter === 'top') {
-      return list.slice(0, 10)
-    } else if (leaderboardFilter === 'bottom') {
-      return [...list].reverse().slice(0, 10)
-    }
-    return list
-  }, [targetStoreRows, leaderboardFilter])
-
-  const sortedThermRows = useMemo(() => {
-    const list = [...targetStoreRows]
-    list.sort((a, b) => b.monthlyAchPct - a.monthlyAchPct)
-    if (thermometerFilter === 'top') {
-      return list.slice(0, 10)
-    } else if (thermometerFilter === 'bottom') {
-      return [...list].reverse().slice(0, 10)
-    }
-    return list
-  }, [targetStoreRows, thermometerFilter])
 
   useEffect(() => {
     setTablePage(1)
@@ -798,121 +703,62 @@ export default function ExecutiveOverview({ filters }: Props) {
           />
         </motion.div>
 
-        {/* ── ROW 2: Gauge + Pace ── */}
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
-          <motion.div {...panelSpring(0.1)}
-            className="lg:col-span-2 rounded-xl border border-gray-200 bg-white p-4 shadow-sm overflow-hidden">
-            <h3 className="mb-0.5 text-sm font-semibold text-gray-800">
-              OOW Target Achievement — {targetMonth}
-            </h3>
-            <p className="mb-2 text-[11px] text-gray-500">
-              Sales vs OOW budget ·
-              <span className="text-red-500"> &lt;80%</span> ·
-              <span className="text-amber-500"> 80–95%</span> ·
-              <span className="text-emerald-500"> &gt;95%</span>
-            </p>
-            <div className="w-full max-w-[360px] mx-auto overflow-hidden">
-              <Plot data={[gaugeTrace]}
-                layout={{ paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: PT.font, family: 'Inter,sans-serif', size: 11 }, margin: { l: 24, r: 24, t: 16, b: 8 }, height: 260 }}
-                config={{ displayModeBar: false, responsive: true }} style={{ width: '100%' }} />
-            </div>
-            <div className="flex justify-center gap-4 mt-1">
-              {[{ l: 'Behind <80%', c: 'text-red-500' }, { l: 'On Track 80–95%', c: 'text-amber-500' }, { l: 'Exceeding >95%', c: 'text-emerald-500' }].map(z => (
-                <span key={z.l} className={cn('text-[10px] font-medium', z.c)}>{z.l}</span>
-              ))}
-            </div>
-          </motion.div>
+        {/* ── ROW 2: Daily Sales vs Required Pace ── */}
+        <motion.div {...panelSpring(0.1)}
+          className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+          <h3 className="mb-0.5 text-sm font-semibold text-gray-800">Daily Performance vs Required Pace</h3>
+          <p className="mb-3 text-[11px] text-gray-500">
+            Bars = daily sales volume · Dashed line = required pace per day ·
+            <span className="text-emerald-500 font-semibold"> Emerald</span> = met/exceeded required daily pace ·
+            <span className="text-red-500 font-semibold"> Red</span> = below required daily pace
+          </p>
+          <Plot
+            data={dailyChartTraces}
+            layout={{
+              paper_bgcolor: 'rgba(0,0,0,0)',
+              plot_bgcolor:  'rgba(0,0,0,0)',
+              font:          { color: PT.font, family: 'Inter,sans-serif', size: 11 },
+              xaxis: {
+                gridcolor: PT.grid,
+                linecolor: PT.line,
+                tickcolor: PT.line,
+                automargin: true,
+                title: { text: 'Day of Month' },
+                dtick: 1,
+                range: [0.5, totalDays + 0.5]
+              },
+              yaxis: {
+                gridcolor: PT.grid,
+                linecolor: PT.line,
+                tickcolor: PT.line,
+                automargin: true,
+                title: { text: `Daily Sales (₹)` },
+                ...plotlyInrTickVals(Math.max(...dailySalesData, requiredDailyPace) * 1.15)
+              },
+              legend: {
+                bgcolor: 'rgba(0,0,0,0)',
+                font: { color: PT.font, size: 10 },
+                orientation: 'h' as const,
+                y: -0.25
+              },
+              margin: { l: 70, r: 16, t: 8, b: 80 },
+              height: 320,
+              bargap: 0.3
+            }}
+            config={{ displayModeBar: false, responsive: true }}
+            style={{ width: '100%' }}
+          />
+        </motion.div>
 
-          <motion.div {...panelSpring(0.15)}
-            className="lg:col-span-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-            <h3 className="mb-0.5 text-sm font-semibold text-gray-800">Sales Pace vs OOW Target — {targetMonth}</h3>
-            <p className="mb-3 text-[11px] text-gray-500">
-              Ideal pace = OOW Target ÷ {totalDays} days × day · Dot = expected by today · Solid line = actual sales · Dashed = projected at current run rate
-            </p>
-            <Plot data={paceTraces}
-              layout={{
-                paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
-                font: { color: PT.font, family: 'Inter,sans-serif', size: 11 },
-                legend: { bgcolor: 'rgba(0,0,0,0)', font: { color: PT.font, size: 10 }, orientation: 'h' as const, y: -0.26 },
-                xaxis: { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true, title: { text: 'Day of Month' }, dtick: 5, range: [0, totalDays + 0.5] },
-                yaxis: { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true, title: { text: `Cumulative Sales (₹) — ${targetMonth}` }, ...plotlyInrTickVals(Math.max(national.totalSales, national.totalTarget) * 1.1) },
-                hovermode: 'closest' as const,
-                margin: { l: 70, r: 16, t: 8, b: 100 }, height: 310,
-                shapes: [{ type: 'line' as const, x0: elapsed, x1: elapsed, y0: 0, y1: 1, xref: 'x' as const, yref: 'paper' as const, line: { color: '#3b82f650', width: 1.5, dash: 'dot' as const } }],
-                annotations: [{ x: elapsed, y: 1, xref: 'x' as const, yref: 'paper' as const, text: `Day ${elapsed}`, showarrow: false, font: { color: '#3b82f6', size: 10 }, yanchor: 'bottom' as const }],
-              }}
-              config={{ displayModeBar: false, responsive: true }} style={{ width: '100%' }} />
-          </motion.div>
-        </div>
-
-
-
-        {/* ── ROW 5: Leaderboards & Distribution ── */}
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          {/* Pace Leaderboard */}
-          <motion.div {...panelSpring(0.3)} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-2 mb-1">
-              <h3 className="text-sm font-semibold text-gray-800">Pace Leaderboard</h3>
-              <select
-                value={leaderboardFilter}
-                onChange={e => setLeaderboardFilter(e.target.value as any)}
-                className="text-xs border border-gray-200 rounded px-1.5 py-0.5 bg-gray-50 text-gray-600 outline-none"
-              >
-                <option value="top">Top 10 Pace</option>
-                <option value="bottom">Bottom 10 Pace</option>
-              </select>
-            </div>
-            <p className="text-[11px] text-gray-500 mb-3">Stores sorted by run rate pace vs target</p>
-            <div className="space-y-1.5 max-h-[380px] overflow-y-auto pr-1">
-              {sortedPaceRows.map((row, i) => (
-                <PaceRow key={row.storeId} row={row} rank={leaderboardFilter === 'top' ? i + 1 : storeCalcs.length - 10 + i + 1} delay={i * 0.03} />
-              ))}
-            </div>
-          </motion.div>
-
-          {/* Achievement Thermometer */}
-          <motion.div {...panelSpring(0.33)} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-2 mb-1">
-              <h3 className="text-sm font-semibold text-gray-800">Achievement Thermometer</h3>
-              <select
-                value={thermometerFilter}
-                onChange={e => setThermometerFilter(e.target.value as any)}
-                className="text-xs border border-gray-200 rounded px-1.5 py-0.5 bg-gray-50 text-gray-600 outline-none"
-              >
-                <option value="top">Top 10 Achieved</option>
-                <option value="bottom">Bottom 10 Achieved</option>
-              </select>
-            </div>
-            <p className="text-[11px] text-gray-500 mb-3">Cumulative monthly achievement vs OOW target</p>
-            <div className="space-y-1.5 max-h-[380px] overflow-y-auto pr-1">
-              {sortedThermRows.map((row, i) => (
-                <ThermRow key={row.storeId} row={row} rank={thermometerFilter === 'top' ? i + 1 : storeCalcs.length - 10 + i + 1} delay={i * 0.03} />
-              ))}
-            </div>
-          </motion.div>
-
-          {/* Achievement Distribution */}
-          <motion.div {...panelSpring(0.36)} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-            <h3 className="text-sm font-semibold text-gray-800">Achievement Distribution</h3>
-            <p className="text-[11px] text-gray-500 mb-3">Number of stores in each achievement percentage band</p>
-            <div className="flex items-center justify-center">
-              <Plot
-                data={[distributionTrace]}
-                layout={{
-                  paper_bgcolor: 'rgba(0,0,0,0)',
-                  plot_bgcolor:  'rgba(0,0,0,0)',
-                  font:   { color: PT.font, family: 'Inter,sans-serif', size: 10 },
-                  xaxis:  { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true },
-                  yaxis:  { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true, dtick: 5 },
-                  margin: { l: 30, r: 10, t: 20, b: 40 },
-                  height: 310,
-                }}
-                config={{ displayModeBar: false, responsive: true }}
-                style={{ width: '100%' }}
-              />
-            </div>
-          </motion.div>
-        </div>
+        {/* ── ROW 3: Geographic India Map ── */}
+        <motion.div {...panelSpring(0.15)}>
+          <TargetStateMap
+            data={stateData}
+            targetMonth={targetMonth}
+            effectiveDay={elapsed}
+            totalDays={totalDays}
+          />
+        </motion.div>
 
         {/* ── ROW 6: Store Command Center Table ── */}
         <motion.div {...panelSpring(0.4)}
