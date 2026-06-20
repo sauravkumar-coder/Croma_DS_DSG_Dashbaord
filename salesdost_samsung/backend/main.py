@@ -77,6 +77,90 @@ import tracker as trk
 
 logger = logging.getLogger(__name__)
 
+_samsung_targets_cache = None
+_samsung_targets_mtime = 0
+
+def get_samsung_targets(retailer: str) -> dict[str, float]:
+    global _samsung_targets_cache, _samsung_targets_mtime
+    possible_paths = [
+        "Samsung Targets (1).xlsx",
+        "../Samsung Targets (1).xlsx",
+        "../../Samsung Targets (1).xlsx",
+        "../../../Samsung Targets (1).xlsx",
+        "backend/data/Samsung Targets (1).xlsx",
+        "data/Samsung Targets (1).xlsx",
+        "/app/data/Samsung Targets (1).xlsx",
+        "c:/Users/Yoganshu Sharma/Desktop/samsung_dashboard/Samsung Targets (1).xlsx",
+    ]
+    file_path = None
+    for path in possible_paths:
+        try:
+            if os.path.exists(path):
+                file_path = path
+                break
+        except Exception:
+            pass
+
+    if not file_path:
+        return {}
+
+    try:
+        mtime = os.path.getmtime(file_path)
+        if _samsung_targets_cache is not None and mtime == _samsung_targets_mtime:
+            cache = _samsung_targets_cache
+        else:
+            logger.info("Parsing Samsung Targets (1).xlsx from %s", file_path)
+            xl = pd.ExcelFile(file_path)
+            croma_targets = {}
+            if "Croma" in xl.sheet_names:
+                df = pd.read_excel(xl, sheet_name="Croma")
+                df.columns = [str(c).strip() for c in df.columns]
+                store_code_col = next((c for c in df.columns if c.lower() == "store code"), None)
+                croma_val_col = next((c for c in df.columns if c.lower() == "croma"), None)
+                if store_code_col and croma_val_col:
+                    for _, row in df.iterrows():
+                        code = str(row[store_code_col]).strip()
+                        try:
+                            val = float(row[croma_val_col])
+                        except (ValueError, TypeError):
+                            val = 0.0
+                        if code and val > 0:
+                            croma_targets[code.lower()] = val
+
+            vs_targets = {}
+            vs_sheet = next((name for name in xl.sheet_names if name.strip().lower() in ["vs", "vs "]), None)
+            if vs_sheet:
+                df = pd.read_excel(xl, sheet_name=vs_sheet)
+                df.columns = [str(c).strip() for c in df.columns]
+                store_branch_col = next((c for c in df.columns if c.lower() == "store / branch"), None)
+                val_col = next((c for c in df.columns if c.lower() == "target value"), None)
+                if store_branch_col and val_col:
+                    for _, row in df.iterrows():
+                        branch = str(row[store_branch_col]).strip()
+                        try:
+                            val = float(row[val_col])
+                        except (ValueError, TypeError):
+                            val = 0.0
+                        if branch and val > 0:
+                            vs_targets[branch.lower()] = val
+
+            _samsung_targets_cache = {"croma": croma_targets, "vijaysales": vs_targets}
+            _samsung_targets_mtime = mtime
+            logger.info("Loaded %d Croma and %d VS targets from Excel.", len(croma_targets), len(vs_targets))
+            cache = _samsung_targets_cache
+    except Exception as exc:
+        logger.error("Error loading Samsung Targets (1).xlsx: %s", exc)
+        return {}
+
+    r_lower = retailer.lower()
+    if r_lower == "croma":
+        return cache.get("croma", {})
+    elif r_lower == "vijaysales":
+        return cache.get("vijaysales", {})
+    return {}
+
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -583,6 +667,8 @@ async def get_dashboard_data(retailer: str = ""):
     cursor = db["Store"].aggregate(pipeline)
     stores_docs = await cursor.to_list(None)
 
+    samsung_targets = get_samsung_targets(retailer) if retailer else {}
+
     _MONTH_MAP = {
         1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
         7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
@@ -630,9 +716,13 @@ async def get_dashboard_data(retailer: str = ""):
             else:
                 monthly_attach[m] = 0.0
 
-        target_val = 0
-        for t in doc.get("targets", []):
-            target_val += t.get("targetRevenue", 0) or 0
+        excel_target = samsung_targets.get(store_id.lower()) or samsung_targets.get(store_name.lower())
+        if excel_target is not None:
+            target_val = excel_target
+        else:
+            target_val = 0
+            for t in doc.get("targets", []):
+                target_val += t.get("targetRevenue", 0) or 0
 
         store_obj = {
             "store_id": store_id,
