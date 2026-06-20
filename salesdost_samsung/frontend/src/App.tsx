@@ -20,10 +20,6 @@ import TargetTrackerPage from './pages/TargetTrackerPage'
 import ExecutiveOverview from './components/tabs/ExecutiveOverview'
 import MonthlyRevenue from './components/tabs/MonthlyRevenue'
 import StoreJourneyMap from './components/tabs/StoreJourneyMap'
-import GeoAnalytics from './components/tabs/GeoAnalytics'
-import RisingStars from './components/tabs/RisingStars'
-import FallenStars from './components/tabs/FallenStars'
-import RevenueMovers from './components/tabs/RevenueMovers'
 import StoreDeepDive from './components/tabs/StoreDeepDive'
 import TargetCommandCenter from './components/tabs/TargetCommandCenter'
 import StateJourneyAnalysis from './components/tabs/StateJourneyAnalysis'
@@ -38,14 +34,10 @@ import { RETAILER_IDS, getRetailerConfig } from './retailers/retailerFactory'
 //  3-5  Performance Breakdown: "Where is performance coming from?"
 //  6-8  Momentum & Risk:      "What is changing, and where should we act?"
 const TABS = [
-  { id: 'executive',       label: 'Overview'        },
-  { id: 'monthly-revenue', label: 'Revenue Trend'   },
-  { id: 'store-journey',   label: 'Store Journeys'  },
-  { id: 'state-journey',   label: 'State Health'    },
-  { id: 'geo',             label: 'Geo Map'         },
-  { id: 'revenue-movers',  label: 'Top Movers'      },
-  { id: 'rising-stars',    label: 'Rising Stores'   },
-  { id: 'fallen-stars',    label: 'Fallen Stores'   },
+  { id: 'executive',       label: 'Overview'                },
+  { id: 'monthly-revenue', label: 'Revenue Trend'           },
+  { id: 'store-journey',   label: 'Store Level Insight'     },
+  { id: 'state-journey',   label: 'State Level Performance' },
 ] as const
 
 type TabId = typeof TABS[number]['id']
@@ -302,10 +294,6 @@ export default function App() {
       case 'monthly-revenue': return <MonthlyRevenue filters={filters} />
       case 'store-journey':   return <StoreJourneyMap filters={filters} onNavigateToStore={handleNavigateToStore} initialCategory={journeyPrefilter} />
       case 'state-journey':   return <StateJourneyAnalysis filters={filters} />
-      case 'geo':             return <GeoAnalytics filters={filters} />
-      case 'revenue-movers':  return <RevenueMovers filters={filters} />
-      case 'rising-stars':    return <RisingStars filters={filters} onNavigateToStore={handleNavigateToStore} onNavigateToJourneyCategory={handleNavigateToJourneyCategory} />
-      case 'fallen-stars':    return <FallenStars filters={filters} onNavigateToStore={handleNavigateToStore} onNavigateToJourneyCategory={handleNavigateToJourneyCategory} />
       default:                return <TabPlaceholder label={currentTab.label} filters={filters} />
     }
   }

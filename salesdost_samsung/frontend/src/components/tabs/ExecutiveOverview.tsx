@@ -679,57 +679,6 @@ export default function ExecutiveOverview({ filters }: Props) {
     ]
   }, [national, targetMonth, totalDays, elapsed])
 
-  const bubbleTraces = useMemo(() => {
-    if (storeCalcs.length === 0) return []
-    const maxT = Math.max(...storeCalcs.map(d => d.target), 1)
-    const minT = Math.min(...storeCalcs.map(d => d.target), 1)
-    const sz   = (t: number) => 10 + ((t - minT) / (maxT - minT || 1)) * 36
-    const above = storeCalcs.filter(d => d.currentSales >= d.expectedSales)
-    const below = storeCalcs.filter(d => d.currentSales <  d.expectedSales)
-    const maxVal = Math.max(...storeCalcs.map(d => Math.max(d.expectedSales, d.currentSales)), 1) * 1.12
-    const mkTrace = (data: typeof storeCalcs, color: string, name: string) => ({
-      type: 'scatter' as const, mode: 'markers' as const, name,
-      x: data.map(d => d.expectedSales), y: data.map(d => d.currentSales),
-      marker: { size: data.map(d => sz(d.target)), color, opacity: 0.72, line: { color: '#111827', width: 1 } },
-      customdata: data.map(d => [d.store.store_name || '', d.store.store_id || '', d.target, d.currentSales, d.achPct, d.expectedPct, d.gap]),
-      hovertemplate: '<b>%{customdata[0]}</b><br>Target: ₹%{customdata[2]:,.0f}<br>Sales: ₹%{customdata[3]:,.0f}<br>Achievement: %{customdata[4]:.1f}%<br>Expected: %{customdata[5]:.1f}%<extra></extra>',
-    })
-    return [
-      { type: 'scatter' as const, mode: 'lines' as const, name: 'On Pace (Y=X)',
-        x: [0, maxVal], y: [0, maxVal],
-        line: { color: '#374151', width: 1.5, dash: 'dash' as const },
-        hoverinfo: 'skip' as const, showlegend: true },
-      mkTrace(above, '#10b981', 'Ahead of Pace'),
-      mkTrace(below, '#ef4444', 'Behind Pace'),
-    ]
-  }, [storeCalcs])
-
-  const projMatrixTraces = useMemo(() => {
-    if (storeCalcs.length === 0) return []
-    const maxT = Math.max(...storeCalcs.map(d => d.target), 1)
-    const minT = Math.min(...storeCalcs.map(d => d.target), 1)
-    const sz   = (t: number) => 10 + ((t - minT) / (maxT - minT || 1)) * 36
-    return RISK_ORDER.map(status => {
-      const data = storeCalcs.filter(d => d.status === status)
-      return {
-        type: 'scatter' as const, mode: 'markers' as const,
-        name: `${status} (${data.length})`,
-        x: data.map(d => d.target),
-        y: data.map(d => d.projAchPct),
-        marker: { size: data.map(d => sz(d.target)), color: RISK_CFG[status].color, opacity: 0.78, line: { color: '#111827', width: 1 } },
-        customdata: data.map(d => [d.store.store_name || '', d.store.store_id || '', d.target, d.currentSales, d.achPct, d.projAchPct, d.gap]),
-        hovertemplate:
-          '<b>%{customdata[0]}</b><br>' +
-          'Target: ₹%{customdata[2]:,.0f}<br>' +
-          'Sales: ₹%{customdata[3]:,.0f}<br>' +
-          'Current Ach: %{customdata[4]:.1f}%<br>' +
-          'Projected: %{customdata[5]:.1f}%<br>' +
-          'Gap: ₹%{customdata[6]:,.0f}' +
-          '<extra></extra>',
-      }
-    })
-  }, [storeCalcs])
-
   const counts = useMemo(() => {
     return BANDS.map(b => storeCalcs.filter(r => r.achPct >= b.min && r.achPct < b.max).length)
   }, [storeCalcs])
@@ -1010,9 +959,7 @@ export default function ExecutiveOverview({ filters }: Props) {
   }, [tableSearch, tableSortKey, tableSortDir])
 
   const renderTargetMode = () => {
-    const achClass = national.achPct >= 95 ? 'text-emerald-600' : national.achPct >= 80 ? 'text-amber-600' : 'text-red-600'
     const gapPositive = national.gap > 0
-    const projYMax = Math.max(160, ...storeCalcs.map(d => d.projAchPct + 10))
 
     return (
       <div className="space-y-6 animate-in fade-in duration-200">
@@ -1122,14 +1069,14 @@ export default function ExecutiveOverview({ filters }: Props) {
           <KPICard
             label="Remaining Target"
             value={national.remaining_target}
-            formattedValue={national.remaining_target > 0 ? fmtInr(national.remaining_target) : '—'}
+            formattedValue={fmtInr(national.remaining_target)}
             sub={`${national.remaining} days left`}
             icon={<Minus className="h-4 w-4 text-amber-500" />}
           />
           <KPICard
             label="Req. Daily Run Rate"
             value={national.reqDRR}
-            formattedValue={national.reqDRR > 0 ? fmtInr(national.reqDRR) : '—'}
+            formattedValue={fmtInr(national.reqDRR)}
             sub="per day to close gap"
             icon={<Zap className="h-4 w-4 text-amber-500" />}
           />
@@ -1146,7 +1093,7 @@ export default function ExecutiveOverview({ filters }: Props) {
         {/* ── ROW 2: Gauge + Pace ── */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
           <motion.div {...panelSpring(0.1)}
-            className="lg:col-span-2 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+            className="lg:col-span-2 rounded-xl border border-gray-200 bg-white p-4 shadow-sm overflow-hidden">
             <h3 className="mb-0.5 text-sm font-semibold text-gray-800">
               OOW Target Achievement — {targetMonth}
             </h3>
@@ -1156,9 +1103,11 @@ export default function ExecutiveOverview({ filters }: Props) {
               <span className="text-amber-500"> 80–95%</span> ·
               <span className="text-emerald-500"> &gt;95%</span>
             </p>
-            <Plot data={[gaugeTrace]}
-              layout={{ paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: PT.font, family: 'Inter,sans-serif', size: 11 }, margin: { l: 24, r: 24, t: 16, b: 8 }, height: 260 }}
-              config={{ displayModeBar: false, responsive: true }} style={{ width: '100%' }} />
+            <div className="w-full max-w-[360px] mx-auto overflow-hidden">
+              <Plot data={[gaugeTrace]}
+                layout={{ paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', font: { color: PT.font, family: 'Inter,sans-serif', size: 11 }, margin: { l: 24, r: 24, t: 16, b: 8 }, height: 260 }}
+                config={{ displayModeBar: false, responsive: true }} style={{ width: '100%' }} />
+            </div>
             <div className="flex justify-center gap-4 mt-1">
               {[{ l: 'Behind <80%', c: 'text-red-500' }, { l: 'On Track 80–95%', c: 'text-amber-500' }, { l: 'Exceeding >95%', c: 'text-emerald-500' }].map(z => (
                 <span key={z.l} className={cn('text-[10px] font-medium', z.c)}>{z.l}</span>
@@ -1188,97 +1137,7 @@ export default function ExecutiveOverview({ filters }: Props) {
           </motion.div>
         </div>
 
-        {/* ── ROW 3: Daily Pace Matrix ── */}
-        <motion.div {...panelSpring(0.2)}
-          className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-          <h3 className="mb-0.5 text-sm font-semibold text-gray-800">Daily Pace Matrix — {targetMonth}</h3>
-          <p className="mb-3 text-[11px] text-gray-500">
-            Each bubble = 1 store · Bubble size = OOW target ·
-            X = expected sales by Day {elapsed} ·
-            Y = actual {targetMonth} sales ·
-            <span className="text-emerald-500"> Green</span> = above pace ·
-            <span className="text-red-500"> Red</span> = below pace
-          </p>
-          <Plot data={bubbleTraces}
-            layout={{
-              paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
-              font: { color: PT.font, family: 'Inter,sans-serif', size: 11 },
-              legend: { bgcolor: 'rgba(0,0,0,0)', font: { color: PT.font, size: 10 }, orientation: 'h' as const, y: -0.18 },
-              xaxis: { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true, title: { text: `Expected Sales at Day ${elapsed} (₹)` }, ...plotlyInrTickVals(Math.max(...storeCalcs.map(d => Math.max(d.expectedSales, d.currentSales)), 1) * 1.12) },
-              yaxis: { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true, title: { text: 'Actual Sales (₹)' }, ...plotlyInrTickVals(Math.max(...storeCalcs.map(d => Math.max(d.expectedSales, d.currentSales)), 1) * 1.12) },
-              hovermode: 'closest' as const,
-              margin: { l: 70, r: 20, t: 16, b: 90 }, height: 380,
-            }}
-            config={{ displayModeBar: false, responsive: true }} style={{ width: '100%' }} />
-          <div className="mt-3 flex flex-wrap gap-4 px-1">
-            {[
-              { l: 'Stores Ahead', v: storeCalcs.filter(d => d.currentSales >= d.expectedSales).length, c: 'text-emerald-600' },
-              { l: 'Stores Behind', v: storeCalcs.filter(d => d.currentSales < d.expectedSales).length, c: 'text-red-600' },
-              { l: 'Avg Achievement', v: `${(storeCalcs.reduce((s, d) => s + d.achPct, 0) / storeCalcs.length).toFixed(1)}%`, c: achClass },
-              { l: 'Expected Pace', v: `${national.expectedPct.toFixed(1)}%`, c: 'text-gray-500' },
-            ].map(({ l, v, c }) => (
-              <div key={l} className="flex items-center gap-2">
-                <span className="text-[11px] text-gray-500">{l}</span>
-                <span className={cn('text-sm font-bold tabular-nums', c)}>{v}</span>
-              </div>
-            ))}
-          </div>
-        </motion.div>
 
-        {/* ── ROW 4: Month-End Projection Matrix ── */}
-        <motion.div {...panelSpring(0.25)}
-          className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-          <h3 className="mb-0.5 text-sm font-semibold text-gray-800">Month-End Projection Matrix — {targetMonth}</h3>
-          <p className="mb-3 text-[11px] text-gray-500">
-            Each bubble = 1 store · X = OOW target (log scale) · Y = projected achievement % ·
-            Projection = (actual sales ÷ Day {elapsed}) × {totalDays} ÷ OOW Target
-          </p>
-          <Plot
-            data={projMatrixTraces}
-            layout={{
-              paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
-              font: { color: PT.font, family: 'Inter,sans-serif', size: 11 },
-              legend: { bgcolor: 'rgba(0,0,0,0)', font: { color: PT.font, size: 10 }, orientation: 'h' as const, y: -0.18 },
-              xaxis: { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true, type: 'log' as const, title: { text: 'Monthly Target (₹, log scale)' }, ...plotlyInrLogTickVals(Math.max(...storeCalcs.map(d => d.target), 1)) },
-              yaxis: { gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line, automargin: true, title: { text: 'Projected Achievement %' }, range: [0, projYMax] },
-              hovermode: 'closest' as const,
-              margin: { l: 64, r: 20, t: 16, b: 90 }, height: 420,
-              shapes: [
-                { type: 'rect' as const, xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 110,    y1: projYMax, fillcolor: RISK_CFG['Champion']['zone'],  line: { width: 0 } },
-                { type: 'rect' as const, xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 95,     y1: 110,      fillcolor: RISK_CFG['On Track']['zone'],  line: { width: 0 } },
-                { type: 'rect' as const, xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 80,     y1: 95,       fillcolor: RISK_CFG['Watchlist']['zone'], line: { width: 0 } },
-                { type: 'rect' as const, xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 0,      y1: 80,       fillcolor: RISK_CFG['At Risk']['zone'],   line: { width: 0 } },
-                { type: 'line' as const, xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 110, y1: 110, line: { color: '#10b98130', width: 1.5, dash: 'dot' as const } },
-                { type: 'line' as const, xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 100, y1: 100, line: { color: '#6b728060', width: 2,   dash: 'dash' as const } },
-                { type: 'line' as const, xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 95,  y1: 95,  line: { color: '#3b82f630', width: 1.5, dash: 'dot' as const } },
-                { type: 'line' as const, xref: 'paper', yref: 'y', x0: 0, x1: 1, y0: 80,  y1: 80,  line: { color: '#ef444430', width: 1.5, dash: 'dot' as const } },
-              ],
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              annotations: ([
-                { y: (110 + projYMax) / 2, text: 'CHAMPION',  color: RISK_CFG['Champion']['color']  },
-                { y: 102.5,                text: 'ON TRACK',   color: RISK_CFG['On Track']['color']  },
-                { y: 87.5,                 text: 'WATCHLIST',  color: RISK_CFG['Watchlist']['color'] },
-                { y: 40,                   text: 'AT RISK',    color: RISK_CFG['At Risk']['color']   },
-              ] as { y: number; text: string; color: string }[]).map(a => ({
-                xref: 'paper', x: 0.98, yref: 'y', y: a.y,
-                text: a.text, showarrow: false, xanchor: 'right', yanchor: 'middle',
-                font: { color: a.color + 'aa', size: 11, family: 'Inter,sans-serif' },
-              })) as any[],
-            }}
-            config={{ displayModeBar: false, responsive: true }} style={{ width: '100%' }} />
-          <div className="mt-3 flex flex-wrap gap-3 px-1">
-            {RISK_ORDER.map(status => {
-              const count = storeCalcs.filter(d => d.status === status).length
-              return (
-                <div key={status} className="flex items-center gap-2">
-                  <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: RISK_CFG[status].color }} />
-                  <span className="text-[11px] text-gray-500">{status}</span>
-                  <span className="text-sm font-bold tabular-nums" style={{ color: RISK_CFG[status].color }}>{count}</span>
-                </div>
-              )
-            })}
-          </div>
-        </motion.div>
 
         {/* ── ROW 5: Leaderboards & Distribution ── */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
