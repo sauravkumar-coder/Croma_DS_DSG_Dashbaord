@@ -77,9 +77,9 @@ const RISK_CFG: Record<RiskStatus, { color: string; badge: string; zone: string 
 
 const BANDS = [
   { label: '0–25%',   min: 0,   max: 25,       color: '#ef4444',  name: 'Critical'   },
-  { label: '25–50%',  min: 25,  max: 50,       color: '#b45309',  name: 'Lagging'    },
-  { label: '50–75%',  min: 50,  max: 75,       color: '#1d4ed8',  name: 'Developing' },
-  { label: '75–100%', min: 75,  max: 100,      color: '#065f46',  name: 'On Track'   },
+  { label: '25–50%',  min: 25,  max: 50,       color: '#f97316',  name: 'Lagging'    },
+  { label: '50–75%',  min: 50,  max: 75,       color: '#f59e0b',  name: 'Developing' },
+  { label: '75–100%', min: 75,  max: 100,      color: '#3b82f6',  name: 'On Track'   },
   { label: '100%+',   min: 100, max: Infinity, color: '#10b981',  name: 'Champions'  },
 ]
 
@@ -572,24 +572,6 @@ export default function ExecutiveOverview({ filters }: Props) {
   const bandCounts = useMemo(() => {
     return BANDS.map(b => storeCalcs.filter(r => r.achPct >= b.min && r.achPct < b.max).length)
   }, [storeCalcs])
-
-  const distributionTrace = useMemo(() => {
-    return {
-      type: 'bar' as const,
-      x: BANDS.map(b => b.label),
-      y: bandCounts,
-      marker: {
-        color: BANDS.map(b => b.color),
-        opacity: 0.85,
-        line: { color: BANDS.map(b => `${b.color}60`), width: 1 }
-      },
-      text: bandCounts.map(c => String(c)),
-      textposition: 'outside' as const,
-      textfont: { color: PT.font, size: 12 },
-      hovertemplate: '<b>%{x}</b><br>%{y} stores<extra></extra>'
-    }
-  }, [bandCounts])
-
   // ── Store table ───────────────────────────────────────────────────────────
 
   const storeTableData = useMemo(() => {
@@ -673,19 +655,6 @@ export default function ExecutiveOverview({ filters }: Props) {
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            {targetStatesList.length > 0 && (
-              <Select value={filterState || '__all__'} onValueChange={v => setFilterState(v === '__all__' ? '' : v)}>
-                <SelectTrigger className="h-8 w-36 text-xs bg-white">
-                  <SelectValue placeholder="All States" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__all__">All States</SelectItem>
-                  {targetStatesList.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            )}
-
-
           </div>
         </motion.div>
 
@@ -885,71 +854,157 @@ export default function ExecutiveOverview({ filters }: Props) {
 
         {/* ── ROW 5: Achievement Distribution ── */}
         <motion.div {...panelSpring(0.3)}
-          className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm p-4">
-          <div className="mb-4">
-            <h3 className="text-sm font-semibold text-gray-800">Achievement Distribution</h3>
-            <p className="text-[11px] text-gray-500 mt-0.5">
-              Store count by Monthly Achievement % · Click a segment or card to list the stores in that band
-            </p>
-          </div>
+          className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm p-5">
           
-          <div className="p-2 border border-gray-100 rounded-xl mb-4 bg-gray-50/50">
-            <Plot data={[distributionTrace]}
-              layout={{
-                paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
-                font: { color: PT.font, family: 'Inter,sans-serif', size: 11 },
-                xaxis: {
-                  gridcolor: PT.grid,
-                  linecolor: PT.line,
-                  tickcolor: PT.line,
-                  automargin: true,
-                  title: { text: 'Monthly Achievement Band' }
-                },
-                yaxis: {
-                  gridcolor: PT.grid,
-                  linecolor: PT.line,
-                  tickcolor: PT.line,
-                  automargin: true,
-                  title: { text: 'Number of Stores' }
-                },
-                hovermode: 'closest' as const,
-                margin: { l: 50, r: 24, t: 24, b: 50 }, height: 300, bargap: 0.25
-              }}
-              onClick={(event) => {
-                const pointIndex = event.points?.[0]?.pointIndex
-                if (pointIndex !== undefined && pointIndex >= 0 && pointIndex < BANDS.length) {
-                  const clickedBand = BANDS[pointIndex]
-                  setSelectedBand(prev => prev?.name === clickedBand.name ? null : clickedBand)
-                }
-              }}
-              config={{ displayModeBar: false, responsive: true }} style={{ width: '100%' }} />
+          {/* Card Header: Title on Left, State Dropdown on Right */}
+          <div className="flex items-start justify-between gap-3 flex-wrap mb-5">
+            <div>
+              <h3 className="text-sm font-semibold text-gray-800">Achievement Distribution</h3>
+              <p className="text-[11px] text-gray-500 mt-0.5">
+                Store count by Monthly Achievement % · Click a segment or card to list the stores in that band
+              </p>
+            </div>
+            {targetStatesList.length > 0 && (
+              <Select value={filterState || '__all__'} onValueChange={v => setFilterState(v === '__all__' ? '' : v)}>
+                <SelectTrigger className="h-8 w-36 text-xs bg-white">
+                  <SelectValue placeholder="All States" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">All States</SelectItem>
+                  {targetStatesList.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            )}
           </div>
 
-          <div className="flex flex-wrap gap-2 mb-2">
+          {/* Row of 5 Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
             {BANDS.map((b, i) => {
+              const count = storeCalcs.filter(r => r.achPct >= b.min && r.achPct < b.max).length
+              const totalCount = storeCalcs.length
+              const pct = totalCount > 0 ? (count / totalCount) * 100 : 0
               const isSelected = selectedBand?.name === b.name
+              
               return (
                 <button
                   key={b.label}
                   onClick={() => setSelectedBand(isSelected ? null : b)}
                   className={cn(
-                    "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer text-xs",
-                    isSelected
-                      ? "ring-2 ring-blue-500/25 border-current"
-                      : "hover:bg-gray-50 border-gray-200"
+                    "flex flex-col text-left p-4 rounded-xl border transition-all duration-200",
+                    "hover:shadow-md cursor-pointer relative overflow-hidden bg-white",
+                    isSelected 
+                      ? "ring-2 ring-blue-500 border-blue-500" 
+                      : "border-gray-100 hover:border-gray-200"
                   )}
                   style={{
-                    backgroundColor: isSelected ? `${b.color}15` : `${b.color}08`,
-                    borderColor: isSelected ? b.color : undefined,
-                    color: b.color
+                    borderLeftWidth: '4px',
+                    borderLeftColor: b.color,
                   }}
                 >
-                  <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: b.color }} />
-                  <span className="font-semibold">{b.name} ({b.label})</span>
-                  <span className="font-bold tabular-nums ml-1 px-1.5 py-0.5 rounded bg-white border border-gray-100 text-gray-800">{bandCounts[i]}</span>
+                  <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{b.label}</span>
+                  <span className="text-3xl font-bold mt-1.5 tabular-nums" style={{ color: b.color }}>
+                    {count}
+                  </span>
+                  <span className="text-[10px] text-gray-500 mt-1">{pct.toFixed(1)}% of stores</span>
                 </button>
               )
             })}
+          </div>
+
+          {/* Two Column Layout: Donut Chart on Left, Progress Bar Legend on Right */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center border border-gray-50 rounded-xl p-4 bg-gray-50/20">
+            {/* Donut Chart */}
+            <div className="lg:col-span-5 flex justify-center items-center">
+              <Plot
+                data={[{
+                  type: 'pie' as const,
+                  hole: 0.65,
+                  values: bandCounts,
+                  labels: BANDS.map(b => b.label),
+                  marker: {
+                    colors: BANDS.map(b => b.color),
+                    line: { color: '#ffffff', width: 2 },
+                  },
+                  textinfo: 'none' as const,
+                  hovertemplate: '<b>%{label} Achievement</b><br>%{value} stores (%{percent})<extra></extra>',
+                  sort: false,
+                }]}
+                layout={{
+                  paper_bgcolor: 'rgba(0,0,0,0)',
+                  plot_bgcolor:  'rgba(0,0,0,0)',
+                  font:  { color: PT.font, family: 'Inter, sans-serif', size: 10 },
+                  showlegend: false,
+                  margin: { l: 20, r: 20, t: 20, b: 20 },
+                  height: 260,
+                  uirevision: 'constant',
+                  annotations: [
+                    {
+                      font: { size: 28, color: '#111827', family: 'Inter,sans-serif', weight: 'bold' },
+                      showarrow: false,
+                      text: `<b>${storeCalcs.length}</b>`,
+                      x: 0.5,
+                      y: 0.55
+                    },
+                    {
+                      font: { size: 12, color: '#6b7280', family: 'Inter,sans-serif' },
+                      showarrow: false,
+                      text: 'stores',
+                      x: 0.5,
+                      y: 0.38
+                    }
+                  ]
+                }}
+                onClick={(event) => {
+                  const pointIndex = event.points?.[0]?.pointIndex
+                  if (pointIndex !== undefined && pointIndex >= 0 && pointIndex < BANDS.length) {
+                    const clickedBand = BANDS[pointIndex]
+                    setSelectedBand(prev => prev?.name === clickedBand.name ? null : clickedBand)
+                  }
+                }}
+                config={{ displayModeBar: false, responsive: true }}
+                style={{ width: '100%', maxWidth: '280px' }}
+              />
+            </div>
+
+            {/* Custom Legend with Progress Bars */}
+            <div className="lg:col-span-7 space-y-3">
+              {BANDS.map((b, i) => {
+                const count = bandCounts[i]
+                const totalCount = storeCalcs.length
+                const pct = totalCount > 0 ? (count / totalCount) * 100 : 0
+                const isSelected = selectedBand?.name === b.name
+                
+                return (
+                  <div
+                    key={b.label}
+                    onClick={() => setSelectedBand(isSelected ? null : b)}
+                    className={cn(
+                      "flex items-center justify-between gap-4 p-2 rounded-lg transition-colors cursor-pointer",
+                      isSelected ? "bg-gray-100/70" : "hover:bg-gray-50"
+                    )}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: b.color }} />
+                      <span className="text-xs font-semibold text-gray-700">{b.label} Achievement</span>
+                    </div>
+                    
+                    <div className="flex items-center gap-4">
+                      <span className="text-xs font-bold text-gray-900 w-8 text-right tabular-nums">{count}</span>
+                      <div className="w-32 h-1.5 rounded-full bg-gray-100 overflow-hidden shrink-0 hidden sm:block">
+                        <motion.div
+                          className="h-full rounded-full"
+                          style={{ backgroundColor: b.color }}
+                          initial={{ width: 0 }}
+                          animate={{ width: `${pct}%` }}
+                          transition={{ duration: 0.8, ease: 'easeOut' }}
+                        />
+                      </div>
+                      <span className="text-xs text-gray-500 w-8 text-right tabular-nums font-medium">{pct.toFixed(0)}%</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
           </div>
 
           <AnimatePresence>
