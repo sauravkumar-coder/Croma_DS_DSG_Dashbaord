@@ -18,7 +18,6 @@ import { AppSkeleton } from './components/Skeleton'
 import StoreDeepDivePage from './pages/StoreDeepDivePage'
 import TargetTrackerPage from './pages/TargetTrackerPage'
 import ExecutiveOverview from './components/tabs/ExecutiveOverview'
-import MonthlyRevenue from './components/tabs/MonthlyRevenue'
 import StoreJourneyMap from './components/tabs/StoreJourneyMap'
 import StoreDeepDive from './components/tabs/StoreDeepDive'
 import TargetCommandCenter from './components/tabs/TargetCommandCenter'
@@ -35,7 +34,6 @@ import { RETAILER_IDS, getRetailerConfig } from './retailers/retailerFactory'
 //  6-8  Momentum & Risk:      "What is changing, and where should we act?"
 const TABS = [
   { id: 'executive',       label: 'Overview'                },
-  { id: 'monthly-revenue', label: 'Revenue Trend'           },
   { id: 'store-journey',   label: 'Store Level Insight'     },
   { id: 'state-journey',   label: 'State Level Performance' },
 ] as const
@@ -291,7 +289,6 @@ export default function App() {
   function renderTab() {
     switch (activeTab) {
       case 'executive':       return <ExecutiveOverview filters={filters} />
-      case 'monthly-revenue': return <MonthlyRevenue filters={filters} />
       case 'store-journey':   return <StoreJourneyMap filters={filters} onNavigateToStore={handleNavigateToStore} initialCategory={journeyPrefilter} />
       case 'state-journey':   return <StateJourneyAnalysis filters={filters} />
       default:                return <TabPlaceholder label={currentTab.label} filters={filters} />
