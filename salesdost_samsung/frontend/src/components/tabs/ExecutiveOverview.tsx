@@ -303,6 +303,7 @@ export default function ExecutiveOverview({ filters }: Props) {
   const [tablePage, setTablePage] = useState<number>(1)
   const [trackerSalesRows, setTrackerSalesRows] = useState<TrackerSalesRow[]>([])
   const [isTrackerLoading, setIsTrackerLoading] = useState(false)
+  const [selectedBand, setSelectedBand] = useState<typeof BANDS[number] | null>(null)
 
   // ── Filter + split ─────────────────────────────────────────────────────────
   const { fs, fm } = useMemo(() => {
@@ -510,33 +511,84 @@ export default function ExecutiveOverview({ filters }: Props) {
   }, [dailySalesData, barColors, totalDays, requiredDailyPace])
 
   const stateData = useMemo(() => {
-    const map: Record<string, { target: number; achieved: number; expected: number; count: number }> = {}
+    const map: Record<string, { target: number; achieved: number; expected: number; projected: number; count: number }> = {}
     for (const d of storeCalcs) {
       const st = d.store.state || 'Unknown'
-      if (!map[st]) map[st] = { target: 0, achieved: 0, expected: 0, count: 0 }
+      if (!map[st]) map[st] = { target: 0, achieved: 0, expected: 0, projected: 0, count: 0 }
       map[st].target    += d.target
       map[st].achieved  += d.currentSales
       map[st].expected  += d.expectedSales
+      map[st].projected += d.projected
       map[st].count++
     }
     return Object.entries(map).map(([state, v]) => {
       const target = v.target
       const achieved = v.achieved
       const expected = v.expected
+      const projected = v.projected
       const achPct = target > 0 ? (achieved / target) * 100 : 0
-      const projAchPct = elapsed > 0 ? (achieved / elapsed) * totalDays / (target || 1) * 100 : 0
+      const projPct = target > 0 ? (projected / target) * 100 : 0
       return {
         state,
         target,
         achieved,
         expected,
+        projected,
         gap: target - achieved,
         achPct,
+        projPct,
         storeCount: v.count,
-        status: getRisk(projAchPct),
+        status: getRisk(projPct),
       }
-    })
+    }).sort((a, b) => b.achPct - a.achPct)
   }, [storeCalcs, elapsed, totalDays])
+
+  const stateBarsHeight = useMemo(() => {
+    return Math.max(240, stateData.length * 36 + 80)
+  }, [stateData])
+
+  const stateBarTraces = useMemo(() => {
+    const rev = [...stateData].reverse()
+    return [
+      {
+        type: 'bar' as const, orientation: 'h' as const, name: 'Current Ach %',
+        x: rev.map(d => d.achPct), y: rev.map(d => d.state),
+        marker: { color: rev.map(d => d.achPct >= 95 ? '#10b981' : d.achPct >= 80 ? '#f59e0b' : '#ef4444'), opacity: 0.82 },
+        hovertemplate: '<b>%{y}</b><br>Achievement: %{x:.1f}%<extra>Current</extra>',
+      },
+      {
+        type: 'scatter' as const, mode: 'markers' as const, name: 'Projected %',
+        x: rev.map(d => d.projPct), y: rev.map(d => d.state),
+        marker: {
+          symbol: 'diamond' as const, size: 10,
+          color: rev.map(d => d.projPct >= 95 ? '#10b981' : d.projPct >= 80 ? '#f59e0b' : '#ef4444'),
+          opacity: 0.9, line: { color: '#111827', width: 1.5 },
+        },
+        hovertemplate: '<b>%{y}</b><br>Projected: %{x:.1f}%<extra>Projected</extra>',
+      },
+    ]
+  }, [stateData])
+
+  const bandCounts = useMemo(() => {
+    return BANDS.map(b => storeCalcs.filter(r => r.achPct >= b.min && r.achPct < b.max).length)
+  }, [storeCalcs])
+
+  const distributionTrace = useMemo(() => {
+    return {
+      type: 'bar' as const,
+      x: BANDS.map(b => b.label),
+      y: bandCounts,
+      marker: {
+        color: BANDS.map(b => b.color),
+        opacity: 0.85,
+        line: { color: BANDS.map(b => `${b.color}60`), width: 1 }
+      },
+      text: bandCounts.map(c => String(c)),
+      textposition: 'outside' as const,
+      textfont: { color: PT.font, size: 12 },
+      hovertemplate: '<b>%{x}</b><br>%{y} stores<extra></extra>'
+    }
+  }, [bandCounts])
 
   // ── Store table ───────────────────────────────────────────────────────────
 
@@ -758,6 +810,208 @@ export default function ExecutiveOverview({ filters }: Props) {
             effectiveDay={elapsed}
             totalDays={totalDays}
           />
+        </motion.div>
+
+        {/* ── ROW 4: State Target Analysis ── */}
+        <motion.div {...panelSpring(0.2)}
+          className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
+          <div className="px-4 py-3 border-b border-gray-100">
+            <h3 className="text-sm font-semibold text-gray-800">State Target Analysis</h3>
+            <p className="text-[11px] text-gray-500 mt-0.5">
+              Bars = current achievement % · Diamond = projected % · Dashed line = 100% target
+            </p>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-gray-100">
+            <div className="p-4">
+              <Plot data={stateBarTraces}
+                layout={{
+                  paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+                  font: { color: PT.font, family: 'Inter,sans-serif', size: 11 },
+                  legend: { bgcolor: 'rgba(0,0,0,0)', font: { color: PT.font, size: 10 }, orientation: 'h' as const, y: -0.22 },
+                  xaxis: {
+                    gridcolor: PT.grid,
+                    linecolor: PT.line,
+                    tickcolor: PT.line,
+                    automargin: true,
+                    title: { text: 'Achievement %' },
+                    range: [0, Math.max(130, ...stateData.map(d => d.projPct + 5))]
+                  },
+                  yaxis: {
+                    gridcolor: PT.grid,
+                    linecolor: PT.line,
+                    tickcolor: PT.line,
+                    automargin: true
+                  },
+                  hovermode: 'y unified' as const,
+                  margin: { l: 110, r: 20, t: 8, b: 60 }, height: stateBarsHeight,
+                  shapes: [{ type: 'line' as const, xref: 'x', yref: 'paper', x0: 100, x1: 100, y0: 0, y1: 1, line: { color: '#4b556380', width: 1.5, dash: 'dash' as const } }],
+                  annotations: [{ x: 100, y: 1, xref: 'x' as const, yref: 'paper' as const, text: '100%', showarrow: false, font: { color: '#6b7280', size: 10 }, yanchor: 'bottom' as const }],
+                }}
+                config={{ displayModeBar: false, responsive: true }} style={{ width: '100%' }} />
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 bg-gray-50">
+                    {['State', 'Stores', 'Target', 'Achieved', 'Ach%', 'Gap', 'Proj%', 'Status'].map(h => (
+                      <th key={h} className="px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wider text-gray-500 whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {stateData.map(row => (
+                    <tr key={row.state} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                      <td className="px-3 py-2.5 text-gray-900 font-medium whitespace-nowrap">{row.state}</td>
+                      <td className="px-3 py-2.5 text-gray-500 tabular-nums text-xs">{row.storeCount}</td>
+                      <td className="px-3 py-2.5 text-gray-700 tabular-nums text-xs whitespace-nowrap">{fmtInr(row.target)}</td>
+                      <td className="px-3 py-2.5 text-gray-700 tabular-nums text-xs whitespace-nowrap">{fmtInr(row.achieved)}</td>
+                      <td className={cn('px-3 py-2.5 tabular-nums text-xs font-semibold', row.achPct >= 95 ? 'text-emerald-600' : row.achPct >= 80 ? 'text-amber-600' : 'text-red-600')}>
+                        {row.achPct.toFixed(1)}%
+                      </td>
+                      <td className={cn('px-3 py-2.5 tabular-nums text-xs whitespace-nowrap', row.gap <= 0 ? 'text-emerald-600' : 'text-red-600')}>
+                        {row.gap <= 0 ? `+${fmtInr(-row.gap)}` : fmtInr(row.gap)}
+                      </td>
+                      <td className={cn('px-3 py-2.5 tabular-nums text-xs font-semibold', row.projPct >= 95 ? 'text-emerald-600' : row.projPct >= 80 ? 'text-amber-600' : 'text-red-600')}>
+                        {row.projPct.toFixed(1)}%
+                      </td>
+                      <td className="px-3 py-2.5"><RiskBadge status={row.status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* ── ROW 5: Achievement Distribution ── */}
+        <motion.div {...panelSpring(0.3)}
+          className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm p-4">
+          <div className="mb-4">
+            <h3 className="text-sm font-semibold text-gray-800">Achievement Distribution</h3>
+            <p className="text-[11px] text-gray-500 mt-0.5">
+              Store count by Monthly Achievement % · Click a segment or card to list the stores in that band
+            </p>
+          </div>
+          
+          <div className="p-2 border border-gray-100 rounded-xl mb-4 bg-gray-50/50">
+            <Plot data={[distributionTrace]}
+              layout={{
+                paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+                font: { color: PT.font, family: 'Inter,sans-serif', size: 11 },
+                xaxis: {
+                  gridcolor: PT.grid,
+                  linecolor: PT.line,
+                  tickcolor: PT.line,
+                  automargin: true,
+                  title: { text: 'Monthly Achievement Band' }
+                },
+                yaxis: {
+                  gridcolor: PT.grid,
+                  linecolor: PT.line,
+                  tickcolor: PT.line,
+                  automargin: true,
+                  title: { text: 'Number of Stores' }
+                },
+                hovermode: 'closest' as const,
+                margin: { l: 50, r: 24, t: 24, b: 50 }, height: 300, bargap: 0.25
+              }}
+              onClick={(event) => {
+                const pointIndex = event.points?.[0]?.pointIndex
+                if (pointIndex !== undefined && pointIndex >= 0 && pointIndex < BANDS.length) {
+                  const clickedBand = BANDS[pointIndex]
+                  setSelectedBand(prev => prev?.name === clickedBand.name ? null : clickedBand)
+                }
+              }}
+              config={{ displayModeBar: false, responsive: true }} style={{ width: '100%' }} />
+          </div>
+
+          <div className="flex flex-wrap gap-2 mb-2">
+            {BANDS.map((b, i) => {
+              const isSelected = selectedBand?.name === b.name
+              return (
+                <button
+                  key={b.label}
+                  onClick={() => setSelectedBand(isSelected ? null : b)}
+                  className={cn(
+                    "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer text-xs",
+                    isSelected
+                      ? "ring-2 ring-blue-500/25 border-current"
+                      : "hover:bg-gray-50 border-gray-200"
+                  )}
+                  style={{
+                    backgroundColor: isSelected ? `${b.color}15` : `${b.color}08`,
+                    borderColor: isSelected ? b.color : undefined,
+                    color: b.color
+                  }}
+                >
+                  <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: b.color }} />
+                  <span className="font-semibold">{b.name} ({b.label})</span>
+                  <span className="font-bold tabular-nums ml-1 px-1.5 py-0.5 rounded bg-white border border-gray-100 text-gray-800">{bandCounts[i]}</span>
+                </button>
+              )
+            })}
+          </div>
+
+          <AnimatePresence>
+            {selectedBand && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="mt-4 border-t border-gray-100 pt-4 overflow-hidden"
+              >
+                <div className="flex items-center justify-between mb-3 bg-gray-50 px-3 py-2 rounded-lg border border-gray-100">
+                  <div className="flex items-center gap-2">
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: selectedBand.color }} />
+                    <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">
+                      Stores in {selectedBand.name} Band ({selectedBand.label})
+                    </h4>
+                  </div>
+                  <button
+                    onClick={() => setSelectedBand(null)}
+                    className="p-1 rounded-full hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                {(() => {
+                  const storesInBand = storeCalcs.filter(r => r.achPct >= selectedBand.min && r.achPct < selectedBand.max)
+                  if (storesInBand.length === 0) {
+                    return <p className="text-xs text-gray-500 italic px-2">No stores in this achievement band.</p>
+                  }
+                  return (
+                    <div className="max-h-64 overflow-y-auto border border-gray-100 rounded-lg divide-y divide-gray-100">
+                      <table className="w-full text-left text-xs">
+                        <thead>
+                          <tr className="bg-gray-50 text-gray-500 sticky top-0 font-semibold border-b border-gray-100">
+                            <th className="px-3 py-2">Store Name</th>
+                            <th className="px-3 py-2">State</th>
+                            <th className="px-3 py-2 text-right">Target</th>
+                            <th className="px-3 py-2 text-right">Achieved</th>
+                            <th className="px-3 py-2 text-right">Ach %</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {storesInBand.map(r => (
+                            <tr key={r.store.store_id} className="hover:bg-gray-50/50 transition-colors border-b border-gray-100 last:border-0">
+                              <td className="px-3 py-2 font-medium text-gray-900">{r.store.store_name}</td>
+                              <td className="px-3 py-2 text-gray-500">{r.store.state}</td>
+                              <td className="px-3 py-2 text-right tabular-nums text-gray-600">{fmtInr(r.target)}</td>
+                              <td className="px-3 py-2 text-right tabular-nums text-gray-900 font-semibold">{fmtInr(r.currentSales)}</td>
+                              <td className="px-3 py-2 text-right tabular-nums font-bold" style={{ color: selectedBand.color }}>
+                                {r.achPct.toFixed(1)}%
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                })()}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </motion.div>
 
         {/* ── ROW 6: Store Command Center Table ── */}
