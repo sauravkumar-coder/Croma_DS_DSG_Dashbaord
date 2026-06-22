@@ -276,6 +276,7 @@ export default function StateJourneyAnalysis({ filters }: Props) {
   const { stores, months, targetMonth } = useDataContext()
   const [sortKey, setSortKey] = useState<SortKey>('revenue')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [searchQuery, setSearchQuery] = useState('')
 
   const tabClassification = useMemo(() => {
     return getTabClassification(stores, months, filters.planCategory);
@@ -701,9 +702,14 @@ export default function StateJourneyAnalysis({ filters }: Props) {
     return { rows: filteredRows, traces, expectedPct, tMonth, elapsed, totalDays, totalTarget, totalAchieved, overallAchPct, statesAbovePace, maxVal }
   }, [classifiedStores, fm, targetMonth])
 
-  // ── Sorted table rows ─────────────────────────────────────────────────────
-  const tableRows = useMemo(() =>
-    [...stateMetrics].sort((a, b) => {
+  // ── Sorted and searched table rows ─────────────────────────────────────────
+  const tableRows = useMemo(() => {
+    let list = [...stateMetrics]
+    const q = searchQuery.trim().toLowerCase()
+    if (q) {
+      list = list.filter(r => r.state.toLowerCase().includes(q))
+    }
+    list.sort((a, b) => {
       let d = 0
       switch (sortKey) {
         case 'state':   d = a.state.localeCompare(b.state); break
@@ -718,8 +724,9 @@ export default function StateJourneyAnalysis({ filters }: Props) {
         default:        d = a.totalRevV - b.totalRevV
       }
       return sortDir === 'asc' ? d : -d
-    }),
-  [stateMetrics, sortKey, sortDir])
+    })
+    return list
+  }, [stateMetrics, sortKey, sortDir, searchQuery])
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -1486,6 +1493,9 @@ export default function StateJourneyAnalysis({ filters }: Props) {
           title="State Ranking Table"
           subtitle="Click a column header to sort"
           onExportCsv={handleExportCsv}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          searchPlaceholder="Search state..."
         >
         <table className="w-full text-xs whitespace-nowrap">
             <thead>
