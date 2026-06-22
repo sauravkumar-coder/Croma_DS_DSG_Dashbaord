@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, Fragment } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
-  ChevronUp, ChevronDown,
+  ChevronUp, ChevronDown, ChevronRight,
   TrendingUp, TrendingDown,
   Star, ShieldAlert, Zap, MapPin, Store, Info,
 } from 'lucide-react'
@@ -277,6 +277,27 @@ export default function StateJourneyAnalysis({ filters }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>('revenue')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [searchQuery, setSearchQuery] = useState('')
+  const [expandedState, setExpandedState] = useState<string | null>(null)
+
+  const getStoreCity = (storeName?: string) => {
+    if (!storeName) return 'Unknown'
+    const clean = storeName.replace(/^(croma|vijay sales|vs|reliance|hotspot)\s+/i, '')
+    const firstWord = clean.split(/\s+/)[0]
+    return firstWord || 'Unknown'
+  }
+
+  const getCategoryBadgeClass = (category: string) => {
+    switch (category) {
+      case 'New Bloomer':    return 'bg-emerald-50 text-emerald-700 border-emerald-200'
+      case 'Rising Star':    return 'bg-amber-50 text-amber-700 border-amber-200'
+      case 'Growing Store':  return 'bg-blue-50 text-blue-700 border-blue-200'
+      case 'Constant Store': return 'bg-violet-50 text-violet-700 border-violet-200'
+      case 'Declining Store': return 'bg-orange-50 text-orange-700 border-orange-200'
+      case 'Fallen Star':    return 'bg-red-50 text-red-700 border-red-200'
+      case 'Inactive Store': return 'bg-gray-100 text-gray-600 border-gray-200'
+      default:               return 'bg-gray-50 text-gray-500 border-gray-200'
+    }
+  }
 
   const tabClassification = useMemo(() => {
     return getTabClassification(stores, months, filters.planCategory);
@@ -707,12 +728,20 @@ export default function StateJourneyAnalysis({ filters }: Props) {
     return { rows, totalStores, statesFor80, top5cum, top10cum, isConc, traces }
   }, [stateMetrics, classifiedStores, fm])
 
-  // ── Sorted and searched table rows ─────────────────────────────────────────
   const tableRows = useMemo(() => {
     let list = [...stateMetrics]
     const q = searchQuery.trim().toLowerCase()
     if (q) {
-      list = list.filter(r => r.state.toLowerCase().includes(q))
+      list = list.filter(r => {
+        if (r.state.toLowerCase().includes(q)) return true
+        const storesInState = classifiedStores.filter(c => (c.store.state ?? 'Unknown') === r.state)
+        return storesInState.some(c => {
+          const storeName = (c.store.store_name || '').toLowerCase()
+          const storeId = (c.store.store_id || '').toLowerCase()
+          const city = getStoreCity(c.store.store_name).toLowerCase()
+          return storeName.includes(q) || storeId.includes(q) || city.includes(q)
+        })
+      })
     }
     list.sort((a, b) => {
       let d = 0
@@ -1592,85 +1621,179 @@ export default function StateJourneyAnalysis({ filters }: Props) {
 
             <tbody>
               {tableRows.map((row, i) => (
-                <tr key={row.state} className="border-b border-gray-100 hover:bg-blue-50/40 transition-colors">
-                  <td className="px-3 py-2.5 text-gray-400 tabular-nums sticky left-0 bg-white">{i + 1}</td>
+                <Fragment key={row.state}>
+                  <tr
+                    onClick={() => setExpandedState(prev => prev === row.state ? null : row.state)}
+                    className="border-b border-gray-100 hover:bg-blue-50/40 transition-colors cursor-pointer"
+                  >
+                    <td className="px-3 py-2.5 text-gray-400 tabular-nums sticky left-0 bg-white">{i + 1}</td>
 
-                  <td className="px-3 py-2.5 sticky left-8 bg-white z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]">
-                    <span className="font-semibold text-gray-800">{row.state}</span>
-                  </td>
+                    <td className="px-3 py-2.5 sticky left-8 bg-white z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]">
+                      <span className="font-semibold text-gray-800 flex items-center gap-1">
+                        {expandedState === row.state ? (
+                          <ChevronDown className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                        ) : (
+                          <ChevronRight className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                        )}
+                        {row.state}
+                      </span>
+                    </td>
 
-                  <td className="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">
-                    {filters.planCategory || 'All'}
-                  </td>
-                  <td className="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">
-                    {filters.productSubcategory || 'All'}
-                  </td>
+                    <td className="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">
+                      {filters.planCategory || 'All'}
+                    </td>
+                    <td className="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">
+                      {filters.productSubcategory || 'All'}
+                    </td>
 
-                  <td className="px-3 py-2.5 text-center text-gray-700 tabular-nums font-medium">{row.total}</td>
-                  <td className="px-3 py-2.5 text-center text-emerald-600 tabular-nums font-medium">{row.active}</td>
+                    <td className="px-3 py-2.5 text-center text-gray-700 tabular-nums font-medium">{row.total}</td>
+                    <td className="px-3 py-2.5 text-center text-emerald-600 tabular-nums font-medium">{row.active}</td>
 
-                  <td className="px-3 py-2.5 text-right text-gray-600 tabular-nums">{fmtInr(row.earlyRev)}</td>
-                  <td className="px-3 py-2.5 text-right text-gray-800 tabular-nums font-medium">{fmtInr(row.recentRev)}</td>
+                    <td className="px-3 py-2.5 text-right text-gray-600 tabular-nums">{fmtInr(row.earlyRev)}</td>
+                    <td className="px-3 py-2.5 text-right text-gray-800 tabular-nums font-medium">{fmtInr(row.recentRev)}</td>
 
-                  <td className={cn(
-                    'px-3 py-2.5 text-right tabular-nums font-semibold',
-                    row.growthPct === null ? 'text-gray-400'
-                      : row.growthPct >= 0  ? 'text-emerald-600' : 'text-red-500',
-                  )}>
-                    {row.growthPct === null ? 'N/A' : fmtPct(row.growthPct)}
-                  </td>
+                    <td className={cn(
+                      'px-3 py-2.5 text-right tabular-nums font-semibold',
+                      row.growthPct === null ? 'text-gray-400'
+                        : row.growthPct >= 0  ? 'text-emerald-600' : 'text-red-500',
+                    )}>
+                      {row.growthPct === null ? 'N/A' : fmtPct(row.growthPct)}
+                    </td>
 
-                  <td className="px-3 py-2.5 text-right text-gray-700 tabular-nums">{fmtInr(row.avgStore)}</td>
+                    <td className="px-3 py-2.5 text-right text-gray-700 tabular-nums">{fmtInr(row.avgStore)}</td>
 
-                  <td className={cn(
-                    'px-3 py-2.5 text-right tabular-nums',
-                    row.netPct === null ? 'text-gray-400' : 'text-blue-600 font-medium',
-                  )}>
-                    {row.netPct === null ? '—' : `${row.netPct.toFixed(1)}%`}
-                  </td>
+                    <td className={cn(
+                      'px-3 py-2.5 text-right tabular-nums',
+                      row.netPct === null ? 'text-gray-400' : 'text-blue-600 font-medium',
+                    )}>
+                      {row.netPct === null ? '—' : `${row.netPct.toFixed(1)}%`}
+                    </td>
 
-                  <td className="px-3 py-2.5 text-center">
-                    {row.newBloomer > 0
-                      ? <span className="inline-flex items-center justify-center h-5 min-w-[20px] rounded-full bg-emerald-100 text-emerald-700 font-bold px-1.5">{row.newBloomer}</span>
-                      : <span className="text-gray-300">0</span>}
-                  </td>
-                  <td className="px-3 py-2.5 text-center">
-                    {row.rising > 0
-                      ? <span className="inline-flex items-center justify-center h-5 min-w-[20px] rounded-full bg-amber-100 text-amber-700 font-bold px-1.5">{row.rising}</span>
-                      : <span className="text-gray-300">0</span>}
-                  </td>
-                  <td className="px-3 py-2.5 text-center text-blue-500 tabular-nums">{row.growing}</td>
-                  <td className="px-3 py-2.5 text-center text-violet-500 tabular-nums">{row.constant}</td>
-                  <td className="px-3 py-2.5 text-center text-orange-500 tabular-nums">{row.declining}</td>
-                  <td className="px-3 py-2.5 text-center">
-                    {row.fallen > 0
-                      ? <span className="inline-flex items-center justify-center h-5 min-w-[20px] rounded-full bg-red-100 text-red-600 font-bold px-1.5">{row.fallen}</span>
-                      : <span className="text-gray-300">0</span>}
-                  </td>
-                  <td className="px-3 py-2.5 text-center text-gray-400 tabular-nums">
-                    {row.inactiveStore > 0 ? row.inactiveStore : <span className="text-gray-200">0</span>}
-                  </td>
+                    <td className="px-3 py-2.5 text-center">
+                      {row.newBloomer > 0
+                        ? <span className="inline-flex items-center justify-center h-5 min-w-[20px] rounded-full bg-emerald-100 text-emerald-700 font-bold px-1.5">{row.newBloomer}</span>
+                        : <span className="text-gray-300">0</span>}
+                    </td>
+                    <td className="px-3 py-2.5 text-center">
+                      {row.rising > 0
+                        ? <span className="inline-flex items-center justify-center h-5 min-w-[20px] rounded-full bg-amber-100 text-amber-700 font-bold px-1.5">{row.rising}</span>
+                        : <span className="text-gray-300">0</span>}
+                    </td>
+                    <td className="px-3 py-2.5 text-center text-blue-500 tabular-nums">{row.growing}</td>
+                    <td className="px-3 py-2.5 text-center text-violet-500 tabular-nums">{row.constant}</td>
+                    <td className="px-3 py-2.5 text-center text-orange-500 tabular-nums">{row.declining}</td>
+                    <td className="px-3 py-2.5 text-center">
+                      {row.fallen > 0
+                        ? <span className="inline-flex items-center justify-center h-5 min-w-[20px] rounded-full bg-red-100 text-red-600 font-bold px-1.5">{row.fallen}</span>
+                        : <span className="text-gray-300">0</span>}
+                    </td>
+                    <td className="px-3 py-2.5 text-center text-gray-400 tabular-nums">
+                      {row.inactiveStore > 0 ? row.inactiveStore : <span className="text-gray-200">0</span>}
+                    </td>
 
-                  <td className="px-3 py-2.5 text-right"><HealthBadge value={row.health} /></td>
-                  <td className="px-3 py-2.5 text-right"><RiskBadge value={row.risk} /></td>
+                    <td className="px-3 py-2.5 text-right"><HealthBadge value={row.health} /></td>
+                    <td className="px-3 py-2.5 text-right"><RiskBadge value={row.risk} /></td>
 
-                  <td className="px-3 py-2.5 text-right">
-                    <span className="inline-flex items-center gap-0.5 text-amber-600 font-semibold tabular-nums">
-                      <Zap className="h-3 w-3" />{row.opp}
-                    </span>
-                  </td>
+                    <td className="px-3 py-2.5 text-right">
+                      <span className="inline-flex items-center gap-0.5 text-amber-600 font-semibold tabular-nums">
+                        <Zap className="h-3 w-3" />{row.opp}
+                      </span>
+                    </td>
 
-                  <td className="px-3 py-2.5 max-w-[120px]">
-                    <span className="block truncate text-gray-600" title={row.topStore?.store.store_name ?? row.topStore?.store.store_id ?? ''}>
-                      {row.topStore?.store.store_id ?? '—'}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2.5 max-w-[120px]">
-                    <span className="block truncate text-gray-400" title={row.worstStore?.store.store_name ?? row.worstStore?.store.store_id ?? ''}>
-                      {row.worstStore?.store.store_id ?? '—'}
-                    </span>
-                  </td>
-                </tr>
+                    <td className="px-3 py-2.5 max-w-[120px]">
+                      <span className="block truncate text-gray-600" title={row.topStore?.store.store_name ?? row.topStore?.store.store_id ?? ''}>
+                        {row.topStore?.store.store_id ?? '—'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 max-w-[120px]">
+                      <span className="block truncate text-gray-400" title={row.worstStore?.store.store_name ?? row.worstStore?.store.store_id ?? ''}>
+                        {row.worstStore?.store.store_id ?? '—'}
+                      </span>
+                    </td>
+                  </tr>
+                  {expandedState === row.state && (
+                    <tr className="bg-blue-50/5 border-b border-blue-100">
+                      <td colSpan={23} className="p-4 bg-gray-50/30">
+                        <div className="flex flex-col gap-2 min-w-0">
+                          <h4 className="text-xs font-bold text-gray-700 tracking-wide uppercase text-left">
+                            City & Store Detail List for {row.state}
+                          </h4>
+                          
+                          {(() => {
+                            const q = searchQuery.trim().toLowerCase()
+                            const storesInState = classifiedStores.filter(c => (c.store.state ?? 'Unknown') === row.state)
+                            const filtered = q
+                              ? storesInState.filter(c => {
+                                  const storeName = (c.store.store_name || '').toLowerCase()
+                                  const storeId = (c.store.store_id || '').toLowerCase()
+                                  const city = getStoreCity(c.store.store_name).toLowerCase()
+                                  const stateName = (c.store.state || '').toLowerCase()
+                                  if (stateName.includes(q)) return true
+                                  return storeName.includes(q) || storeId.includes(q) || city.includes(q)
+                                })
+                              : storesInState
+                              
+                            const sorted = [...filtered].sort((a, b) => b.rev - a.rev)
+                            
+                            if (sorted.length === 0) {
+                              return <p className="text-xs italic text-gray-400 text-left">No stores match the search query inside this state.</p>
+                            }
+                            
+                            return (
+                              <div className="overflow-x-auto border border-gray-200 rounded-lg shadow-sm bg-white max-h-80">
+                                <table className="w-full text-left text-xs whitespace-nowrap">
+                                  <thead>
+                                    <tr className="bg-gray-50 border-b border-gray-100 font-semibold text-gray-500">
+                                      <th className="px-3 py-2 w-8 text-center">#</th>
+                                      <th className="px-3 py-2">Store ID</th>
+                                      <th className="px-3 py-2">Store Name</th>
+                                      <th className="px-3 py-2">City</th>
+                                      <th className="px-3 py-2">Category</th>
+                                      <th className="px-3 py-2 text-right">Early Sales</th>
+                                      <th className="px-3 py-2 text-right">Recent Sales</th>
+                                      <th className="px-3 py-2 text-right">Growth %</th>
+                                      <th className="px-3 py-2 text-right font-bold text-gray-900">Total Sales</th>
+                                      <th className="px-3 py-2 text-center">Lifecycle Status</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-100">
+                                    {sorted.map((item, idx) => (
+                                      <tr key={item.store.store_id} className="hover:bg-gray-50/50 transition-colors">
+                                        <td className="px-3 py-2 text-center text-gray-400 tabular-nums">{idx + 1}</td>
+                                        <td className="px-3 py-2 text-gray-500 tabular-nums">{item.store.store_id}</td>
+                                        <td className="px-3 py-2 font-semibold text-gray-900">{item.store.store_name}</td>
+                                        <td className="px-3 py-2 text-gray-600">{getStoreCity(item.store.store_name)}</td>
+                                        <td className="px-3 py-2 text-gray-500">{item.store.category || '—'}</td>
+                                        <td className="px-3 py-2 text-right tabular-nums text-gray-600">{fmtInr(item.earlyR)}</td>
+                                        <td className="px-3 py-2 text-right tabular-nums text-gray-600">{fmtInr(item.recentR)}</td>
+                                        <td className={cn(
+                                          "px-3 py-2 text-right tabular-nums font-semibold",
+                                          item.growthPct === null ? "text-gray-400" :
+                                          item.growthPct >= 0 ? "text-emerald-600" : "text-red-500"
+                                        )}>
+                                          {item.growthPct === null ? "N/A" : fmtPct(item.growthPct)}
+                                        </td>
+                                        <td className="px-3 py-2 text-right tabular-nums font-bold text-gray-900">{fmtInr(item.rev)}</td>
+                                        <td className="px-3 py-2 text-center">
+                                          <span className={cn(
+                                            "inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border",
+                                            getCategoryBadgeClass(item.category)
+                                          )}>
+                                            {item.category}
+                                          </span>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )
+                          })()}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>
