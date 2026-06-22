@@ -630,103 +630,98 @@ export default function StateJourneyAnalysis({ filters }: Props) {
     }]
   }, [stateMetrics, stateScopedStores, filters.state])
 
-  // ── Pareto: Store Footprint Concentration (no-state view) ─────────────────
-  const paretoData = useMemo(() => {
-    const sorted = [...stateMetrics]
-      .filter(m => m.total > 0)
-      .sort((a, b) => b.total - a.total)
+  // ── State Target Performance (no-state view) ───────────────────────────────
+  const targetPerformanceData = useMemo(() => {
+    const tMonth = targetMonth || fm[fm.length - 1]
+    if (!tMonth) return null
 
-    if (!sorted.length) return null
+    const totalDays = getDaysInMonth(tMonth)
+    const now = new Date()
+    const currentMonthLabel = now.toLocaleString('en-US', { month: 'short' }) + '-' + now.getFullYear()
+    const elapsed = tMonth === currentMonthLabel ? Math.min(now.getDate(), totalDays) : totalDays
+    const expectedPct = (elapsed / totalDays) * 100
 
-    const totalStores = sorted.reduce((s, m) => s + m.total, 0)
-
-    // Plans sold per state from raw store records (respects all existing filters)
-    const plansMap = new Map<string, number>()
+    // Group stores by state to sum target and sales
+    const stateMap = new Map<string, { target: number; achieved: number }>()
     for (const c of classifiedStores) {
-      const st = c.store.state ?? 'Unknown'
-      const p  = fm.reduce((s, mo) => s + (c.store.monthly_plans_count?.[mo] ?? 0), 0)
-      plansMap.set(st, (plansMap.get(st) ?? 0) + p)
+      const st = c.store.state || 'Unknown'
+      if (!stateMap.has(st)) {
+        stateMap.set(st, { target: 0, achieved: 0 })
+      }
+      const val = stateMap.get(st)!
+      val.target += (c.store.target || 0)
+      val.achieved += (c.store.monthly_sales[tMonth] || 0)
     }
 
-    let runningPct = 0
-    const rows = sorted.map(m => {
-      const contrib = totalStores > 0 ? (m.total / totalStores) * 100 : 0
-      runningPct = Math.min(runningPct + contrib, 100)
-      return {
-        state:       m.state,
-        count:       m.total,
-        contrib:     Math.round(contrib * 10) / 10,
-        cumulative:  Math.round(runningPct * 10) / 10,
-        rev:         m.totalRevV,
-        growthPct:   m.growthPct,
-        revPerStore: m.total > 0 ? m.totalRevV / m.total : 0,
-        plans:       plansMap.get(m.state) ?? 0,
-      }
-    })
+    const rows = Array.from(stateMap.entries())
+      .map(([state, v]) => {
+        const achPct = v.target > 0 ? (v.achieved / v.target) * 100 : 0
+        return {
+          state,
+          target: v.target,
+          achieved: v.achieved,
+          achPct,
+        }
+      })
+      // Sort by target size descending
+      .sort((a, b) => b.target - a.target)
 
-    const paretoIdx   = rows.findIndex(r => r.cumulative >= 80)
-    const statesFor80 = paretoIdx >= 0 ? paretoIdx + 1 : rows.length
-    const top5cum     = rows[Math.min(4, rows.length - 1)]?.cumulative  ?? 0
-    const top10cum    = rows[Math.min(9, rows.length - 1)]?.cumulative ?? 0
-    const isConc      = statesFor80 <= Math.ceil(rows.length * 0.4)
+    if (rows.length === 0) return null
 
-    const barColors = rows.map((_, i) =>
-      paretoIdx < 0 || i <= paretoIdx ? '#3b82f6' : '#bfdbfe'
-    )
+    // We display states with target > 0 or achieved > 0
+    const filteredRows = rows.filter(r => r.target > 0 || r.achieved > 0)
+
+    const maxVal = Math.max(...filteredRows.flatMap(r => [r.target, r.achieved]), 1) * 1.15
 
     const traces = [
       {
         type: 'bar' as const,
-        name: 'Store Count',
-        x: rows.map(r => r.state),
-        y: rows.map(r => r.count),
-        marker: { color: barColors, opacity: 0.88, line: { width: 0 } },
+        name: 'State Target',
+        x: filteredRows.map(r => r.state),
+        y: filteredRows.map(r => r.target),
+        marker: { color: '#cbd5e1', opacity: 0.8 },
         yaxis: 'y' as const,
-        customdata: rows.map(r => [
-          r.contrib.toFixed(1),
-          r.cumulative.toFixed(1),
-          fmtInr(r.rev),
-          fmtInr(r.revPerStore),
-          r.growthPct !== null ? fmtPct(r.growthPct) : 'N/A',
-          r.plans.toLocaleString('en-IN'),
-        ]),
-        hovertemplate:
-          '<b>%{x}</b>'
-          + '<br>Stores: <b>%{y}</b>'
-          + '<br>Contribution: %{customdata[0]}%'
-          + '<br>Cumulative: %{customdata[1]}%'
-          + '<br>Revenue: %{customdata[2]}'
-          + '<br>Rev / Store: %{customdata[3]}'
-          + '<br>Growth: %{customdata[4]}'
-          + '<br>Plans Sold: %{customdata[5]}'
-          + '<extra></extra>',
+        hovertemplate: '<b>%{x}</b><br>Target: ₹%{y:,.0f}<extra></extra>',
+      },
+      {
+        type: 'bar' as const,
+        name: 'Sales Achieved',
+        x: filteredRows.map(r => r.state),
+        y: filteredRows.map(r => r.achieved),
+        marker: { color: '#3b82f6', opacity: 0.88 },
+        yaxis: 'y' as const,
+        hovertemplate: '<b>%{x}</b><br>Achieved: ₹%{y:,.0f}<extra></extra>',
       },
       {
         type: 'scatter' as const,
         mode: 'lines+markers' as const,
-        name: 'Cumulative %',
-        x: rows.map(r => r.state),
-        y: rows.map(r => r.cumulative),
+        name: 'Achievement %',
+        x: filteredRows.map(r => r.state),
+        y: filteredRows.map(r => r.achPct),
         yaxis: 'y2' as const,
-        line:   { color: '#f59e0b', width: 2.5 },
-        marker: { size: 5, color: '#f59e0b' },
-        hovertemplate: '<b>%{x}</b><br>Cumulative: %{y:.1f}%<extra></extra>',
+        line: { color: '#f59e0b', width: 2.5 },
+        marker: { size: 6, color: '#f59e0b' },
+        hovertemplate: '<b>%{x}</b><br>Achievement: %{y:.1f}%<extra></extra>',
       },
       {
         type: 'scatter' as const,
         mode: 'lines' as const,
-        name: '80% Pareto line',
-        x: [rows[0]?.state, rows[rows.length - 1]?.state],
-        y: [80, 80],
+        name: `Expected Pace (${expectedPct.toFixed(0)}%)`,
+        x: [filteredRows[0]?.state, filteredRows[filteredRows.length - 1]?.state],
+        y: [expectedPct, expectedPct],
         yaxis: 'y2' as const,
         line: { color: '#ef4444', width: 1.5, dash: 'dash' as const },
-        hoverinfo: 'skip' as const,
-        showlegend: true,
-      },
+        hovertemplate: `Expected Pace: ${expectedPct.toFixed(1)}%<extra></extra>`,
+      }
     ]
 
-    return { rows, totalStores, statesFor80, top5cum, top10cum, isConc, traces }
-  }, [stateMetrics, classifiedStores, fm])
+    const totalTarget = filteredRows.reduce((s, r) => s + r.target, 0)
+    const totalAchieved = filteredRows.reduce((s, r) => s + r.achieved, 0)
+    const overallAchPct = totalTarget > 0 ? (totalAchieved / totalTarget) * 100 : 0
+    const statesAbovePace = filteredRows.filter(r => r.achPct >= expectedPct).length
+
+    return { rows: filteredRows, traces, expectedPct, tMonth, elapsed, totalDays, totalTarget, totalAchieved, overallAchPct, statesAbovePace, maxVal }
+  }, [classifiedStores, fm, targetMonth])
 
   const tableRows = useMemo(() => {
     let list = [...stateMetrics]
@@ -1344,19 +1339,21 @@ export default function StateJourneyAnalysis({ filters }: Props) {
         </motion.div>
       </div>
 
-      {/* ── Store Distribution / Store Footprint Concentration ── */}
+      {/* ── Store Distribution / State Target Performance ── */}
       <motion.div
         initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.22, duration: 0.4 }}
         className={card}
       >
         <h3 className="text-sm font-semibold text-gray-800 mb-0.5">
-          {filters.state ? `Store Distribution — ${filters.state}` : 'Store Footprint Concentration'}
+          {filters.state ? `Store Distribution — ${filters.state}` : 'State Target Performance'}
         </h3>
         <p className="text-[11px] text-gray-400 mb-3">
           {filters.state
             ? `Category health breakdown · ${stateScopedStores.length} stores total · bar colour = category`
-            : 'Shows how the store network is distributed across states and highlights concentration risk'
+            : targetPerformanceData
+              ? `Comparison of target vs achieved sales by state for ${targetPerformanceData.tMonth} · expected pace: ${targetPerformanceData.expectedPct.toFixed(1)}%`
+              : 'Shows state target tracking metrics'
           }
         </p>
 
@@ -1384,50 +1381,49 @@ export default function StateJourneyAnalysis({ filters }: Props) {
               style={{ width: '100%' }}
             />
           </div>
-        ) : paretoData ? (
-          /* ── Pareto: Store Footprint Concentration ── */
+        ) : targetPerformanceData ? (
+          /* ── State Target Performance comparison ── */
           <>
-            {/* Dynamic insight chips */}
+            {/* Dynamic target insight chips */}
             <div className="flex flex-wrap gap-2 mb-4">
               <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 border border-blue-100 px-3 py-1 text-[10px] font-semibold text-blue-700">
-                Top {Math.min(5, paretoData.rows.length)} states →{' '}
-                <span className="font-bold">{paretoData.top5cum.toFixed(0)}%</span> of stores
+                Total Target: <span className="font-bold">₹{fmtInr(targetPerformanceData.totalTarget)}</span>
               </span>
-              {paretoData.rows.length > 5 && (
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 border border-blue-100 px-3 py-1 text-[10px] font-semibold text-blue-700">
-                  Top {Math.min(10, paretoData.rows.length)} states →{' '}
-                  <span className="font-bold">{paretoData.top10cum.toFixed(0)}%</span> of stores
-                </span>
-              )}
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 border border-amber-100 px-3 py-1 text-[10px] font-semibold text-amber-700">
-                <span className="font-bold">{paretoData.statesFor80}</span> of{' '}
-                {paretoData.rows.length} states reach the 80% threshold
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 border border-blue-100 px-3 py-1 text-[10px] font-semibold text-blue-700">
+                Total Achieved: <span className="font-bold">₹{fmtInr(targetPerformanceData.totalAchieved)}</span>
               </span>
               <span className={cn(
                 'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[10px] font-semibold border',
-                paretoData.isConc
-                  ? 'bg-red-50 border-red-100 text-red-700'
-                  : 'bg-emerald-50 border-emerald-100 text-emerald-700',
+                targetPerformanceData.overallAchPct >= targetPerformanceData.expectedPct
+                  ? 'bg-emerald-50 border-emerald-100 text-emerald-700'
+                  : 'bg-red-50 border-red-100 text-red-700',
               )}>
-                {paretoData.isConc ? 'Highly Concentrated' : 'Broadly Distributed'}
+                Achievement: <span className="font-bold">{targetPerformanceData.overallAchPct.toFixed(1)}%</span>
+                {targetPerformanceData.overallAchPct >= targetPerformanceData.expectedPct ? ' (On Track)' : ' (Behind Pace)'}
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 border border-amber-100 px-3 py-1 text-[10px] font-semibold text-amber-700">
+                <span className="font-bold">{targetPerformanceData.statesAbovePace}</span> of{' '}
+                {targetPerformanceData.rows.length} states are on/ahead of pace
               </span>
             </div>
 
-            {/* Pareto chart */}
+            {/* Target vs Achieved chart */}
             <Plot
-              data={paretoData.traces}
+              data={targetPerformanceData.traces}
               layout={{
                 ...PLOTLY_BASE,
+                barmode: 'group' as const,
                 yaxis: {
                   gridcolor: PT.grid, linecolor: PT.line, tickcolor: PT.line,
-                  title: { text: 'Store Count', font: { size: 10, color: '#6b7280' } },
+                  title: { text: 'Value (₹)', font: { size: 10, color: '#6b7280' } },
                   automargin: true,
+                  ...plotlyInrTickVals(targetPerformanceData.maxVal)
                 },
                 yaxis2: {
-                  title: { text: 'Cumulative %', font: { size: 10, color: '#6b7280' } },
+                  title: { text: 'Achievement %', font: { size: 10, color: '#6b7280' } },
                   overlaying: 'y' as const,
                   side: 'right' as const,
-                  range: [0, 106],
+                  range: [0, Math.max(120, ...targetPerformanceData.rows.map(r => r.achPct)) * 1.1],
                   ticksuffix: '%',
                   gridcolor: 'transparent',
                   linecolor: PT.line,
@@ -1442,12 +1438,12 @@ export default function StateJourneyAnalysis({ filters }: Props) {
                 },
                 legend: {
                   orientation: 'h' as const,
-                  y: -0.22,
+                  y: -0.25,
                   font: { size: 10, color: PT.font },
                   bgcolor: 'rgba(0,0,0,0)',
                 },
                 height: 400,
-                margin: { l: 50, r: 60, t: 10, b: 90 },
+                margin: { l: 75, r: 60, t: 10, b: 90 },
               }}
               config={{ displayModeBar: false, responsive: true }}
               style={{ width: '100%' }}
@@ -1455,8 +1451,8 @@ export default function StateJourneyAnalysis({ filters }: Props) {
 
             {/* Legend note */}
             <p className="text-[10px] text-gray-400 mt-1">
-              Blue bars = states within 80% threshold · Light bars = remaining states ·
-              Hover for revenue, growth and plans detail
+              Gray bars = state target budgets · Blue bars = achieved sales ·
+              Amber line = state achievement % · Red dashed line = expected month pace
             </p>
           </>
         ) : (
