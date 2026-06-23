@@ -45,6 +45,7 @@ Generic (file-explorer, kept for compatibility):
 import io
 import logging
 import os
+import re
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -76,6 +77,29 @@ import storage as st
 import tracker as trk
 
 logger = logging.getLogger(__name__)
+
+def _normalize_store_name(name: str) -> str:
+    name = str(name).lower()
+    # Replace common synonyms
+    name = name.replace('rr nagar', 'rajarajeshwari nagar')
+    name = name.replace('marathalli', 'marthahalli')
+    name = name.replace('marathahalli', 'marthahalli')
+    name = name.replace('kanakpura', 'kanakapura')
+    name = name.replace('rajajinagar', 'rajaji nagar')
+    name = name.replace('tirupathi', 'tirupati')
+    
+    # strip prefix
+    name = re.sub(r'^(vs|croma|vijay\s*sales|vijaysales|vijay)\s*[-–—]?\s*', '', name)
+    name = re.sub(r'\s+br(\.|\b)?$', '', name)
+    name = re.sub(r'\s+branch$', '', name)
+    
+    # Remove city/state noise words to make matching location-agnostic
+    noise_words = ['bangalore', 'blr', 'mumbai', 'mum', 'delhi', 'pune', 'hyderabad', 'hyd', 'chennai', 'ts', 'ap', 'up', 'haryana', 'cassette', 'tv', 'trading']
+    for word in noise_words:
+        name = name.replace(word, '')
+        
+    name = re.sub(r'[^a-z0-9]', '', name)
+    return name
 
 _samsung_targets_cache = None
 _samsung_targets_mtime = 0
@@ -125,7 +149,7 @@ def get_samsung_targets(retailer: str) -> dict[str, float]:
                         except (ValueError, TypeError):
                             val = 0.0
                         if code and val > 0:
-                            croma_targets[code.lower()] = val
+                            croma_targets[_normalize_store_name(code)] = val
 
             vs_targets = {}
             vs_sheet = next((name for name in xl.sheet_names if name.strip().lower() in ["vs", "vs "]), None)
@@ -142,7 +166,7 @@ def get_samsung_targets(retailer: str) -> dict[str, float]:
                         except (ValueError, TypeError):
                             val = 0.0
                         if branch and val > 0:
-                            vs_targets[branch.lower()] = val
+                            vs_targets[_normalize_store_name(branch)] = val
 
             _samsung_targets_cache = {"croma": croma_targets, "vijaysales": vs_targets}
             _samsung_targets_mtime = mtime
@@ -631,6 +655,20 @@ async def get_dashboard_data(retailer: str = ""):
         _NO_DATA["warnings"].append("MongoDB not connected.")
         return _NO_DATA
 
+    # Determine target month dynamically from StoreTarget
+    target_month_num = 6
+    target_year = 2026
+    target_doc = await db["StoreTarget"].find_one()
+    if target_doc:
+        target_month_num = target_doc.get("month", 6)
+        target_year = target_doc.get("year", 2026)
+    
+    _MONTH_MAP = {
+        1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+        7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
+    }
+    target_month_str = f"{_MONTH_MAP.get(target_month_num, 'Jun')}-{target_year}"
+
     match_stage = {}
     if retailer:
         r_lower = retailer.lower()
@@ -652,8 +690,17 @@ async def get_dashboard_data(retailer: str = ""):
     pipeline.extend([
         {"$lookup": {
             "from": "SalesRecord",
-            "localField": "_id",
-            "foreignField": "storeId",
+            "let": {"store_id": "$_id"},
+            "pipeline": [
+                {"$match": {
+                    "$expr": {
+                        "$and": [
+                            {"$eq": ["$storeId", "$$store_id"]},
+                            {"$eq": ["$year", 2026]}
+                        ]
+                    }
+                }}
+            ],
             "as": "sales"
         }},
         {"$lookup": {
@@ -661,11 +708,32 @@ async def get_dashboard_data(retailer: str = ""):
             "localField": "_id",
             "foreignField": "storeId",
             "as": "targets"
+        }},
+        {"$lookup": {
+            "from": "StoreBrand",
+            "let": {"store_id": "$_id"},
+            "pipeline": [
+                {"$match": {
+                    "$expr": {
+                        "$and": [
+                            {"$eq": ["$storeId", "$$store_id"]},
+                            {"$eq": ["$brandId", "brand_002"]}
+                        ]
+                    }
+                }}
+            ],
+            "as": "brand_info"
         }}
     ])
 
     cursor = db["Store"].aggregate(pipeline)
     stores_docs = await cursor.to_list(None)
+
+    # Load ProductSubCategory mappings
+    psc_names = {}
+    psc_cursor = db["ProductSubCategory"].find()
+    psc_docs = await psc_cursor.to_list(None)
+    psc_names = {str(psc["_id"]): psc["name"] for psc in psc_docs}
 
     samsung_targets = get_samsung_targets(retailer) if retailer else {}
 
@@ -680,21 +748,43 @@ async def get_dashboard_data(retailer: str = ""):
     categories_set = set()
     
     for doc in stores_docs:
-        store_id = str(doc.get("_id", ""))
+        brand_info = doc.get("brand_info", [])
+        store_brand_id = brand_info[0].get("storeBrandId", "") if brand_info else ""
+        store_id = store_brand_id if store_brand_id else str(doc.get("_id", ""))
+        
         store_name = doc.get("storeName", "")
         state = doc.get("state", "")
-        category = doc.get("storeCategory", "")
         
         if state: states_set.add(state)
-        if category: categories_set.add(category)
         
         monthly_sales = {}
+        monthly_sales_ds = {}
+        monthly_sales_dsg = {}
+        monthly_sales_sp = {}
+        monthly_sales_adld = {}
+        monthly_sales_combo = {}
+        monthly_sales_ew = {}
         monthly_plans = {}
         monthly_main = {}
         monthly_attach = {}
+        subcat_revenue = {}
 
         for sale in doc.get("sales", []):
             year = sale.get("year")
+            plan_type = sale.get("planType") or ""
+            plan_type_lower = plan_type.strip().lower()
+            
+            is_ds = plan_type_lower in ["sp", "device secure", "ds"]
+            is_dsg = plan_type_lower in ["adld", "combo", "ew", "device secure gold", "dsg"]
+            
+            is_sp = plan_type_lower in ["sp", "device secure", "ds"]
+            is_adld = plan_type_lower in ["adld", "device secure gold", "dsg"]
+            is_combo = plan_type_lower in ["combo"]
+            is_ew = plan_type_lower in ["ew"]
+            
+            subcat_id = sale.get("productSubCategoryId")
+            subcat_name = psc_names.get(subcat_id) if subcat_id else None
+            
             monthly = sale.get("monthlySales", [])
             if (not monthly or len(monthly) == 0) and "dailySales" in sale:
                 daily = sale.get("dailySales", {})
@@ -722,9 +812,29 @@ async def get_dashboard_data(retailer: str = ""):
                     if not m_abbr: continue
                     m = f"{m_abbr}-{year}"
                     months_set.add(m)
-                    monthly_sales[m] = monthly_sales.get(m, 0) + float(m_data.get("revenue", 0) or 0)
+                    
+                    rev_val = float(m_data.get("revenue", 0) or 0)
+                    
+                    monthly_sales[m] = monthly_sales.get(m, 0) + rev_val
                     monthly_plans[m] = monthly_plans.get(m, 0) + int(m_data.get("planSales", 0) or 0)
                     monthly_main[m] = monthly_main.get(m, 0) + int(m_data.get("deviceSales", 0) or 0)
+                    
+                    if is_ds:
+                        monthly_sales_ds[m] = monthly_sales_ds.get(m, 0) + rev_val
+                    elif is_dsg:
+                        monthly_sales_dsg[m] = monthly_sales_dsg.get(m, 0) + rev_val
+                        
+                    if is_sp:
+                        monthly_sales_sp[m] = monthly_sales_sp.get(m, 0) + rev_val
+                    if is_adld:
+                        monthly_sales_adld[m] = monthly_sales_adld.get(m, 0) + rev_val
+                    if is_combo:
+                        monthly_sales_combo[m] = monthly_sales_combo.get(m, 0) + rev_val
+                    if is_ew:
+                        monthly_sales_ew[m] = monthly_sales_ew.get(m, 0) + rev_val
+                        
+                    if subcat_name:
+                        subcat_revenue[subcat_name] = subcat_revenue.get(subcat_name, 0.0) + rev_val
         
         for m in monthly_sales.keys():
             plans = monthly_plans.get(m, 0)
@@ -734,13 +844,43 @@ async def get_dashboard_data(retailer: str = ""):
             else:
                 monthly_attach[m] = 0.0
 
-        excel_target = samsung_targets.get(store_id.lower()) or samsung_targets.get(store_name.lower())
-        if excel_target is not None:
+        # Prioritize database targets for the active target month/year
+        db_target = 0
+        for t in doc.get("targets", []):
+            if t.get("month") == target_month_num and t.get("year") == target_year:
+                db_target += t.get("targetRevenue", 0) or 0
+
+        # Normalise store target matching (spreadsheet backup)
+        norm_name = _normalize_store_name(store_name)
+        excel_target = samsung_targets.get(norm_name)
+        if excel_target is None:
+            # try substring match
+            for k, v in samsung_targets.items():
+                if k and (k in norm_name or norm_name in k):
+                    excel_target = v
+                    break
+
+        if db_target > 0:
+            target_val = db_target
+        elif excel_target is not None:
             target_val = excel_target
         else:
             target_val = 0
-            for t in doc.get("targets", []):
-                target_val += t.get("targetRevenue", 0) or 0
+
+        # Primary subcat as the category field
+        primary_subcat = "—"
+        if subcat_revenue:
+            primary_subcat = max(subcat_revenue, key=subcat_revenue.get)
+            
+        if primary_subcat and primary_subcat != "—":
+            category = primary_subcat.strip()
+            if category:
+                category = category[0].upper() + category[1:]
+        else:
+            category = "—"
+
+        if category and category != "—":
+            categories_set.add(category)
 
         store_obj = {
             "store_id": store_id,
@@ -748,6 +888,12 @@ async def get_dashboard_data(retailer: str = ""):
             "state": state,
             "category": category,
             "monthly_sales": monthly_sales,
+            "monthly_sales_ds": monthly_sales_ds,
+            "monthly_sales_dsg": monthly_sales_dsg,
+            "monthly_sales_sp": monthly_sales_sp,
+            "monthly_sales_adld": monthly_sales_adld,
+            "monthly_sales_combo": monthly_sales_combo,
+            "monthly_sales_ew": monthly_sales_ew,
             "monthly_plans_count": monthly_plans,
             "monthly_main_qty": monthly_main,
             "monthly_attach_pct": monthly_attach,
@@ -764,7 +910,7 @@ async def get_dashboard_data(retailer: str = ""):
         "states": sorted(list(states_set)),
         "categories": sorted(list(categories_set)),
         "has_targets": True,
-        "target_month": None,
+        "target_month": target_month_str,
         "warnings": []
     }
 
@@ -774,13 +920,26 @@ async def get_store_detail(store_id: str, retailer: str = ""):
     db = get_db()
     if db is None:
         raise HTTPException(status_code=500, detail="Database not connected.")
+        
+    # Check if store_id matches any storeBrandId in StoreBrand
+    sb_doc = await db["StoreBrand"].find_one({"storeBrandId": store_id, "brandId": "brand_002"})
+    actual_store_id = sb_doc.get("storeId") if sb_doc else store_id
     
     pipeline = [
-        {"$match": {"_id": store_id}},
+        {"$match": {"_id": actual_store_id}},
         {"$lookup": {
             "from": "SalesRecord",
-            "localField": "_id",
-            "foreignField": "storeId",
+            "let": {"store_id": "$_id"},
+            "pipeline": [
+                {"$match": {
+                    "$expr": {
+                        "$and": [
+                            {"$eq": ["$storeId", "$$store_id"]},
+                            {"$eq": ["$year", 2026]}
+                        ]
+                    }
+                }}
+            ],
             "as": "sales"
         }},
         {"$lookup": {
@@ -788,6 +947,21 @@ async def get_store_detail(store_id: str, retailer: str = ""):
             "localField": "_id",
             "foreignField": "storeId",
             "as": "targets"
+        }},
+        {"$lookup": {
+            "from": "StoreBrand",
+            "let": {"store_id": "$_id"},
+            "pipeline": [
+                {"$match": {
+                    "$expr": {
+                        "$and": [
+                            {"$eq": ["$storeId", "$$store_id"]},
+                            {"$eq": ["$brandId", "brand_002"]}
+                        ]
+                    }
+                }}
+            ],
+            "as": "brand_info"
         }}
     ]
     cursor = db["Store"].aggregate(pipeline)
@@ -797,23 +971,52 @@ async def get_store_detail(store_id: str, retailer: str = ""):
         
     doc = docs[0]
 
-    store_id = str(doc.get("_id", ""))
+    brand_info = doc.get("brand_info", [])
+    store_brand_id = brand_info[0].get("storeBrandId", "") if brand_info else ""
+    store_id = store_brand_id if store_brand_id else str(doc.get("_id", ""))
+    
     store_name = doc.get("storeName", "")
     state = doc.get("state", "")
-    category = doc.get("storeCategory", "")
     
+    # Load ProductSubCategory mappings
+    psc_names = {}
+    psc_cursor = db["ProductSubCategory"].find()
+    psc_docs = await psc_cursor.to_list(None)
+    psc_names = {str(psc["_id"]): psc["name"] for psc in psc_docs}
+
     _MONTH_MAP = {
         1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
         7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
     }
 
     monthly_sales = {}
+    monthly_sales_ds = {}
+    monthly_sales_dsg = {}
+    monthly_sales_sp = {}
+    monthly_sales_adld = {}
+    monthly_sales_combo = {}
+    monthly_sales_ew = {}
     monthly_plans = {}
     monthly_main = {}
     monthly_attach = {}
+    subcat_revenue = {}
 
     for sale in doc.get("sales", []):
         year = sale.get("year")
+        plan_type = sale.get("planType") or ""
+        plan_type_lower = plan_type.strip().lower()
+        
+        is_ds = plan_type_lower in ["sp", "device secure", "ds"]
+        is_dsg = plan_type_lower in ["adld", "combo", "ew", "device secure gold", "dsg"]
+        
+        is_sp = plan_type_lower in ["sp", "device secure", "ds"]
+        is_adld = plan_type_lower in ["adld", "device secure gold", "dsg"]
+        is_combo = plan_type_lower in ["combo"]
+        is_ew = plan_type_lower in ["ew"]
+        
+        subcat_id = sale.get("productSubCategoryId")
+        subcat_name = psc_names.get(subcat_id) if subcat_id else None
+        
         monthly = sale.get("monthlySales", [])
         if (not monthly or len(monthly) == 0) and "dailySales" in sale:
             daily = sale.get("dailySales", {})
@@ -840,9 +1043,29 @@ async def get_store_detail(store_id: str, retailer: str = ""):
                 m_abbr = _MONTH_MAP.get(int(month_num))
                 if not m_abbr: continue
                 m = f"{m_abbr}-{year}"
-                monthly_sales[m] = monthly_sales.get(m, 0) + float(m_data.get("revenue", 0) or 0)
+                
+                rev_val = float(m_data.get("revenue", 0) or 0)
+                
+                monthly_sales[m] = monthly_sales.get(m, 0) + rev_val
                 monthly_plans[m] = monthly_plans.get(m, 0) + int(m_data.get("planSales", 0) or 0)
                 monthly_main[m] = monthly_main.get(m, 0) + int(m_data.get("deviceSales", 0) or 0)
+                
+                if is_ds:
+                    monthly_sales_ds[m] = monthly_sales_ds.get(m, 0) + rev_val
+                elif is_dsg:
+                    monthly_sales_dsg[m] = monthly_sales_dsg.get(m, 0) + rev_val
+                    
+                if is_sp:
+                    monthly_sales_sp[m] = monthly_sales_sp.get(m, 0) + rev_val
+                if is_adld:
+                    monthly_sales_adld[m] = monthly_sales_adld.get(m, 0) + rev_val
+                if is_combo:
+                    monthly_sales_combo[m] = monthly_sales_combo.get(m, 0) + rev_val
+                if is_ew:
+                    monthly_sales_ew[m] = monthly_sales_ew.get(m, 0) + rev_val
+                    
+                if subcat_name:
+                    subcat_revenue[subcat_name] = subcat_revenue.get(subcat_name, 0.0) + rev_val
     
     for m in monthly_sales.keys():
         plans = monthly_plans.get(m, 0)
@@ -852,9 +1075,55 @@ async def get_store_detail(store_id: str, retailer: str = ""):
         else:
             monthly_attach[m] = 0.0
 
-    target_val = 0
+    # Determine target month dynamically from StoreTarget
+    target_month_num = 6
+    target_year = 2026
+    target_doc = await db["StoreTarget"].find_one()
+    if target_doc:
+        target_month_num = target_doc.get("month", 6)
+        target_year = target_doc.get("year", 2026)
+
+    # Prioritize database targets for the active target month/year
+    db_target = 0
     for t in doc.get("targets", []):
-        target_val += t.get("targetRevenue", 0) or 0
+        if t.get("month") == target_month_num and t.get("year") == target_year:
+            db_target += t.get("targetRevenue", 0) or 0
+
+    # Normalise store target matching (infer retailer if not specified)
+    retailer_inferred = retailer
+    if not retailer_inferred:
+        sname_lower = store_name.lower()
+        if "croma" in sname_lower:
+            retailer_inferred = "croma"
+        elif "vs" in sname_lower or "vijay" in sname_lower:
+            retailer_inferred = "vijaysales"
+            
+    samsung_targets = get_samsung_targets(retailer_inferred) if retailer_inferred else {}
+    norm_name = _normalize_store_name(store_name)
+    excel_target = samsung_targets.get(norm_name)
+    if excel_target is None:
+        for k, v in samsung_targets.items():
+            if k and (k in norm_name or norm_name in k):
+                excel_target = v
+                break
+
+    if db_target > 0:
+        target_val = db_target
+    elif excel_target is not None:
+        target_val = excel_target
+    else:
+        target_val = 0
+
+    primary_subcat = "—"
+    if subcat_revenue:
+        primary_subcat = max(subcat_revenue, key=subcat_revenue.get)
+        
+    if primary_subcat and primary_subcat != "—":
+        category = primary_subcat.strip()
+        if category:
+            category = category[0].upper() + category[1:]
+    else:
+        category = "—"
 
     return {
         "store_id": store_id,
@@ -862,6 +1131,12 @@ async def get_store_detail(store_id: str, retailer: str = ""):
         "state": state,
         "category": category,
         "monthly_sales": monthly_sales,
+        "monthly_sales_ds": monthly_sales_ds,
+        "monthly_sales_dsg": monthly_sales_dsg,
+        "monthly_sales_sp": monthly_sales_sp,
+        "monthly_sales_adld": monthly_sales_adld,
+        "monthly_sales_combo": monthly_sales_combo,
+        "monthly_sales_ew": monthly_sales_ew,
         "monthly_plans_count": monthly_plans,
         "monthly_main_qty": monthly_main,
         "monthly_attach_pct": monthly_attach,

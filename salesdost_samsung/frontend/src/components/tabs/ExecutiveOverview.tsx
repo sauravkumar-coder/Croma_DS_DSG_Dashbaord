@@ -290,7 +290,7 @@ function KPICard({ label, value, sub, icon, barRatio, barColor, danger, formatte
 interface Props { filters: FilterState }
 
 export default function ExecutiveOverview({ filters }: Props) {
-  const { stores, months } = useDataContext()
+  const { stores, months, targetMonth: contextTargetMonth } = useDataContext()
 
   const [dayOfMonth, setDayOfMonth] = useState<number>(() => {
     const d = new Date().getDate()
@@ -323,8 +323,8 @@ export default function ExecutiveOverview({ filters }: Props) {
   // ── Target Tracker Computations ─────────────────────────────────────────────
 
   const targetMonth = useMemo(() => {
-    return fm[fm.length - 1] || 'Jun-2026'
-  }, [fm])
+    return contextTargetMonth || fm[fm.length - 1] || 'Jun-2026'
+  }, [contextTargetMonth, fm])
 
   const totalDays = useMemo(() => getDaysInMonth(targetMonth), [targetMonth])
   const elapsed = useMemo(() => Math.min(dayOfMonth, totalDays), [dayOfMonth, totalDays])

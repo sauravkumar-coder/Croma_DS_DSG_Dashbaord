@@ -1,16 +1,21 @@
 import type { StoreRecord } from './api'
 import { classifyAllStores, type ClassificationResult } from './classificationEngine'
 
-/**
- * Return all plan categories that have active sales for this store.
- */
 export function getStorePlanCategories(store: StoreRecord): string {
-  const hasDS = store.monthly_sales_ds && Object.values(store.monthly_sales_ds).some(v => v > 0);
-  const hasDSG = store.monthly_sales_dsg && Object.values(store.monthly_sales_dsg).some(v => v > 0);
-  if (hasDS && hasDSG) return "SP, DSG";
-  if (hasDS) return "SP";
-  if (hasDSG) return "DSG";
-  return "—";
+  const categories: string[] = [];
+  if (store.monthly_sales_sp && Object.values(store.monthly_sales_sp).some(v => v > 0)) {
+    categories.push("SP");
+  }
+  if (store.monthly_sales_adld && Object.values(store.monthly_sales_adld).some(v => v > 0)) {
+    categories.push("ADLD");
+  }
+  if (store.monthly_sales_combo && Object.values(store.monthly_sales_combo).some(v => v > 0)) {
+    categories.push("Combo");
+  }
+  if (store.monthly_sales_ew && Object.values(store.monthly_sales_ew).some(v => v > 0)) {
+    categories.push("EW");
+  }
+  return categories.length > 0 ? categories.join(", ") : "—";
 }
 
 /**
@@ -19,16 +24,17 @@ export function getStorePlanCategories(store: StoreRecord): string {
 export function transformStoresByPlanCategory(stores: StoreRecord[], planCategory: string): StoreRecord[] {
   if (!planCategory) return stores;
   
-  const isDS = planCategory === 'SP';
-  const isDSG = ['ADLD', 'Combo', 'EW'].includes(planCategory);
-  
   return stores
     .map(s => {
       let monthlySales: Record<string, number> = {};
-      if (isDS) {
-        monthlySales = s.monthly_sales_ds || {};
-      } else if (isDSG) {
-        monthlySales = s.monthly_sales_dsg || {};
+      if (planCategory === 'SP') {
+        monthlySales = s.monthly_sales_sp || {};
+      } else if (planCategory === 'ADLD') {
+        monthlySales = s.monthly_sales_adld || {};
+      } else if (planCategory === 'Combo') {
+        monthlySales = s.monthly_sales_combo || {};
+      } else if (planCategory === 'EW') {
+        monthlySales = s.monthly_sales_ew || {};
       } else {
         monthlySales = s.monthly_sales || {};
       }

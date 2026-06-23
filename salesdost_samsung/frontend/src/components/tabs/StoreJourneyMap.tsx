@@ -375,15 +375,12 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
       'Plan Category',
       'Product Subcategory',
       'Classification',
-      'Early Rev',
-      'Mid Rev',
-      'Recent Rev',
       'Growth %',
       'Early Plans',
       'Mid Plans',
       'Recent Plans',
     ]
-    const rows = tableRows.map(({ store, earlyTotal, midTotal, recentTotal, growthPct, category, earlyPlans, midPlans, recentPlans }, i) => [
+    const rows = tableRows.map(({ store, growthPct, category, earlyPlans, midPlans, recentPlans }, i) => [
       i + 1,
       store.store_id,
       store.store_name ?? store.store_id,
@@ -391,9 +388,6 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
       filters.planCategory || getStorePlanCategories(store),
       store.category && store.category.toLowerCase() !== 'lfr' ? (store.category.charAt(0).toUpperCase() + store.category.slice(1)) : '—',
       category,
-      earlyTotal,
-      midTotal,
-      recentTotal,
       growthPct != null ? parseFloat(growthPct.toFixed(2)) : '',
       earlyPlans,
       midPlans,
@@ -730,24 +724,6 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
                 <th className="px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Product Subcategory</th>
                 <th className="px-3 py-2.5 text-left text-xs font-medium uppercase tracking-wider text-gray-500">Classification</th>
                 <th className="px-3 py-2.5 text-right">
-                  <button onClick={() => toggleSort('early')}
-                    className="flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-gray-500 hover:text-gray-700 transition-colors ml-auto">
-                    Early Rev{sortIcon('early')}
-                  </button>
-                </th>
-                <th className="px-3 py-2.5 text-right">
-                  <button onClick={() => toggleSort('mid')}
-                    className="flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-gray-500 hover:text-gray-700 transition-colors ml-auto">
-                    Mid Rev{sortIcon('mid')}
-                  </button>
-                </th>
-                <th className="px-3 py-2.5 text-right">
-                  <button onClick={() => toggleSort('recent')}
-                    className="flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-gray-500 hover:text-gray-700 transition-colors ml-auto">
-                    Recent Rev{sortIcon('recent')}
-                  </button>
-                </th>
-                <th className="px-3 py-2.5 text-right">
                   <button onClick={() => toggleSort('growth')}
                     className="flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-gray-500 hover:text-gray-700 transition-colors ml-auto">
                     Growth %{sortIcon('growth')}
@@ -761,10 +737,10 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
             <tbody>
               {tableRows.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="px-3 py-10 text-center text-gray-400 text-sm">No stores match</td>
+                  <td colSpan={10} className="px-3 py-10 text-center text-gray-400 text-sm">No stores match</td>
                 </tr>
               ) : (
-                tableRows.map(({ store, earlyTotal, midTotal, recentTotal, growthPct, category, earlyPlans, midPlans, recentPlans }, i) => (
+                tableRows.map(({ store, growthPct, category, earlyPlans, midPlans, recentPlans }, i) => (
                   <tr
                     key={store.store_id}
                     onClick={() => onNavigateToStore?.(store.store_id)}
@@ -777,7 +753,7 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
                   >
                     <td className="px-3 py-2.5 text-gray-400 tabular-nums text-xs">{i + 1}</td>
                     <td className="px-3 py-2.5">
-                      <span className="text-gray-800 font-medium block truncate max-w-[180px]" title={store.store_name ?? store.store_id}>
+                       <span className="text-gray-800 font-medium block truncate max-w-[180px]" title={store.store_name ?? store.store_id}>
                         {store.store_name ?? store.store_id}
                       </span>
                       <span className="text-[10px] text-gray-400">{store.store_id}</span>
@@ -793,15 +769,6 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
                       <span className={cn('inline-block text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap', CATEGORY_BADGE[category])}>
                         {category}
                       </span>
-                    </td>
-                    <td className="px-3 py-2.5 text-right text-gray-400 tabular-nums text-xs whitespace-nowrap">
-                      {fmtInr(earlyTotal)}
-                    </td>
-                    <td className="px-3 py-2.5 text-right text-violet-600 tabular-nums text-xs whitespace-nowrap">
-                      {fmtInr(midTotal)}
-                    </td>
-                    <td className="px-3 py-2.5 text-right text-gray-800 font-medium tabular-nums text-xs whitespace-nowrap">
-                      {fmtInr(recentTotal)}
                     </td>
                     <td className={cn(
                       'px-3 py-2.5 text-right tabular-nums font-medium text-xs whitespace-nowrap',
