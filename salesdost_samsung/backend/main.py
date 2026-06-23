@@ -696,6 +696,24 @@ async def get_dashboard_data(retailer: str = ""):
         for sale in doc.get("sales", []):
             year = sale.get("year")
             monthly = sale.get("monthlySales", [])
+            if (not monthly or len(monthly) == 0) and "dailySales" in sale:
+                daily = sale.get("dailySales", {})
+                if isinstance(daily, dict):
+                    reconstructed_monthly = []
+                    for m_str, days in daily.items():
+                        if not m_str.isdigit(): continue
+                        m_num = int(m_str)
+                        rev = sum(float(d.get("revenue", 0) or 0) for d in days)
+                        plans = sum(int(d.get("countOfSales", 0) or 0) for d in days)
+                        devices = sum(int(d.get("deviceSales", 0) or 0) for d in days)
+                        reconstructed_monthly.append({
+                            "month": m_num,
+                            "revenue": rev,
+                            "planSales": plans,
+                            "deviceSales": devices
+                        })
+                    monthly = reconstructed_monthly
+
             if isinstance(monthly, list):
                 for m_data in monthly:
                     month_num = m_data.get("month")
@@ -797,6 +815,24 @@ async def get_store_detail(store_id: str, retailer: str = ""):
     for sale in doc.get("sales", []):
         year = sale.get("year")
         monthly = sale.get("monthlySales", [])
+        if (not monthly or len(monthly) == 0) and "dailySales" in sale:
+            daily = sale.get("dailySales", {})
+            if isinstance(daily, dict):
+                reconstructed_monthly = []
+                for m_str, days in daily.items():
+                    if not m_str.isdigit(): continue
+                    m_num = int(m_str)
+                    rev = sum(float(d.get("revenue", 0) or 0) for d in days)
+                    plans = sum(int(d.get("countOfSales", 0) or 0) for d in days)
+                    devices = sum(int(d.get("deviceSales", 0) or 0) for d in days)
+                    reconstructed_monthly.append({
+                        "month": m_num,
+                        "revenue": rev,
+                        "planSales": plans,
+                        "deviceSales": devices
+                    })
+                monthly = reconstructed_monthly
+
         if isinstance(monthly, list):
             for m_data in monthly:
                 month_num = m_data.get("month")
