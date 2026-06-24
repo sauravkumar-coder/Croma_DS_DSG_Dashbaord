@@ -658,7 +658,7 @@ async def get_dashboard_data(retailer: str = ""):
     # Determine target month dynamically from StoreTarget
     target_month_num = 6
     target_year = 2026
-    target_doc = await db["StoreTarget"].find_one()
+    target_doc = await db["StoreTarget"].find_one({"brandId": "brand_002"})
     if target_doc:
         target_month_num = target_doc.get("month", 6)
         target_year = target_doc.get("year", 2026)
@@ -696,6 +696,7 @@ async def get_dashboard_data(retailer: str = ""):
                     "$expr": {
                         "$and": [
                             {"$eq": ["$storeId", "$$store_id"]},
+                            {"$eq": ["$brandId", "brand_002"]},
                             {"$eq": ["$year", 2026]}
                         ]
                     }
@@ -705,8 +706,17 @@ async def get_dashboard_data(retailer: str = ""):
         }},
         {"$lookup": {
             "from": "StoreTarget",
-            "localField": "_id",
-            "foreignField": "storeId",
+            "let": {"store_id": "$_id"},
+            "pipeline": [
+                {"$match": {
+                    "$expr": {
+                        "$and": [
+                            {"$eq": ["$storeId", "$$store_id"]},
+                            {"$eq": ["$brandId", "brand_002"]}
+                        ]
+                    }
+                }}
+            ],
             "as": "targets"
         }},
         {"$lookup": {
@@ -935,6 +945,7 @@ async def get_store_detail(store_id: str, retailer: str = ""):
                     "$expr": {
                         "$and": [
                             {"$eq": ["$storeId", "$$store_id"]},
+                            {"$eq": ["$brandId", "brand_002"]},
                             {"$eq": ["$year", 2026]}
                         ]
                     }
@@ -944,8 +955,17 @@ async def get_store_detail(store_id: str, retailer: str = ""):
         }},
         {"$lookup": {
             "from": "StoreTarget",
-            "localField": "_id",
-            "foreignField": "storeId",
+            "let": {"store_id": "$_id"},
+            "pipeline": [
+                {"$match": {
+                    "$expr": {
+                        "$and": [
+                            {"$eq": ["$storeId", "$$store_id"]},
+                            {"$eq": ["$brandId", "brand_002"]}
+                        ]
+                    }
+                }}
+            ],
             "as": "targets"
         }},
         {"$lookup": {
@@ -1078,7 +1098,7 @@ async def get_store_detail(store_id: str, retailer: str = ""):
     # Determine target month dynamically from StoreTarget
     target_month_num = 6
     target_year = 2026
-    target_doc = await db["StoreTarget"].find_one()
+    target_doc = await db["StoreTarget"].find_one({"brandId": "brand_002"})
     if target_doc:
         target_month_num = target_doc.get("month", 6)
         target_year = target_doc.get("year", 2026)
