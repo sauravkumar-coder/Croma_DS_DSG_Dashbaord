@@ -34,8 +34,8 @@ import { RETAILER_IDS, getRetailerConfig } from './retailers/retailerFactory'
 //  6-8  Momentum & Risk:      "What is changing, and where should we act?"
 const TABS = [
   { id: 'executive',       label: 'Overview'                },
-  { id: 'store-journey',   label: 'Store Level Insight'     },
   { id: 'state-journey',   label: 'State Level Performance' },
+  { id: 'store-journey',   label: 'Store Level Insight'     },
 ] as const
 
 type TabId = typeof TABS[number]['id']
