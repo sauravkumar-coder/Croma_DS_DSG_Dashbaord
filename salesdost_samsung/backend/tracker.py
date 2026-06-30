@@ -203,7 +203,7 @@ def parse_tracker_sales(filepath: str) -> dict[str, Any]:
             try:
                 d = pd.to_datetime(row[c_date])
                 day = d.day
-                if day > max_elapsed:
+                if sales > 0 and day > max_elapsed:
                     max_elapsed = day
             except Exception:
                 pass
