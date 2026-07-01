@@ -913,7 +913,9 @@ async def get_dashboard_data(retailer: str = ""):
         }
         stores.append(store_obj)
         
-    now = datetime.now()
+    from datetime import timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now = datetime.now(ist)
     current_month_str = f"{_MONTH_MAP.get(now.month, 'Jul')}-{now.year}"
     months_set.add(current_month_str)
 
