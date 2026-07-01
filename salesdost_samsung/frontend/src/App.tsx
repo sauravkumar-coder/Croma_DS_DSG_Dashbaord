@@ -35,9 +35,9 @@ import { ScreenshotButton } from './components/ScreenshotButton'
 //  3-5  Performance Breakdown: "Where is performance coming from?"
 //  6-8  Momentum & Risk:      "What is changing, and where should we act?"
 const TABS = [
-  { id: 'executive',     label: 'Target Command Center' },
+  { id: 'executive',     label: 'Overview' },
   { id: 'plan_insights', label: 'Plan Insights' },
-  { id: 'ds_insights',   label: 'Store Classification' },
+  { id: 'state-journey', label: 'State Level Performance' },
   { id: 'store-journey', label: 'Store Level Insight' },
 ] as const
 
@@ -309,7 +309,7 @@ export default function App() {
     switch (activeTab) {
       case 'executive':     return <ExecutiveOverview filters={filters} />
       case 'plan_insights': return <PlanLevelInsight filters={filters} />
-      case 'ds_insights':   return <TabPlaceholder label="Store Classification" filters={filters} />
+      case 'state-journey': return <StateJourneyAnalysis filters={filters} />
       case 'store-journey': return <StoreJourneyMap filters={filters} onNavigateToStore={handleNavigateToStore} initialCategory={journeyPrefilter} />
       default:              return <TabPlaceholder label={currentTab.label} filters={filters} />
     }
