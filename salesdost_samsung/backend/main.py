@@ -775,6 +775,10 @@ async def get_dashboard_data(retailer: str = ""):
         monthly_sales_combo = {}
         monthly_sales_ew = {}
         monthly_plans = {}
+        monthly_plans_sp = {}
+        monthly_plans_adld = {}
+        monthly_plans_combo = {}
+        monthly_plans_ew = {}
         monthly_main = {}
         monthly_attach = {}
         subcat_revenue = {}
@@ -827,6 +831,15 @@ async def get_dashboard_data(retailer: str = ""):
                     
                     monthly_sales[m] = monthly_sales.get(m, 0) + rev_val
                     monthly_plans[m] = monthly_plans.get(m, 0) + int(m_data.get("planSales", 0) or 0)
+                    plans_val = int(m_data.get("planSales", 0) or 0)
+                    if is_sp:
+                        monthly_plans_sp[m] = monthly_plans_sp.get(m, 0) + plans_val
+                    if is_adld:
+                        monthly_plans_adld[m] = monthly_plans_adld.get(m, 0) + plans_val
+                    if is_combo:
+                        monthly_plans_combo[m] = monthly_plans_combo.get(m, 0) + plans_val
+                    if is_ew:
+                        monthly_plans_ew[m] = monthly_plans_ew.get(m, 0) + plans_val
                     monthly_main[m] = monthly_main.get(m, 0) + int(m_data.get("deviceSales", 0) or 0)
                     
                     if is_ds:
@@ -905,6 +918,10 @@ async def get_dashboard_data(retailer: str = ""):
             "monthly_sales_combo": monthly_sales_combo,
             "monthly_sales_ew": monthly_sales_ew,
             "monthly_plans_count": monthly_plans,
+            "monthly_plans_sp": monthly_plans_sp,
+            "monthly_plans_adld": monthly_plans_adld,
+            "monthly_plans_combo": monthly_plans_combo,
+            "monthly_plans_ew": monthly_plans_ew,
             "monthly_main_qty": monthly_main,
             "monthly_attach_pct": monthly_attach,
             "target": target_val if target_val > 0 else None,
@@ -1023,6 +1040,10 @@ async def get_store_detail(store_id: str, retailer: str = ""):
     monthly_sales_combo = {}
     monthly_sales_ew = {}
     monthly_plans = {}
+    monthly_plans_sp = {}
+    monthly_plans_adld = {}
+    monthly_plans_combo = {}
+    monthly_plans_ew = {}
     monthly_main = {}
     monthly_attach = {}
     subcat_revenue = {}
@@ -1074,6 +1095,15 @@ async def get_store_detail(store_id: str, retailer: str = ""):
                 
                 monthly_sales[m] = monthly_sales.get(m, 0) + rev_val
                 monthly_plans[m] = monthly_plans.get(m, 0) + int(m_data.get("planSales", 0) or 0)
+                plans_val = int(m_data.get("planSales", 0) or 0)
+                if is_sp:
+                    monthly_plans_sp[m] = monthly_plans_sp.get(m, 0) + plans_val
+                if is_adld:
+                    monthly_plans_adld[m] = monthly_plans_adld.get(m, 0) + plans_val
+                if is_combo:
+                    monthly_plans_combo[m] = monthly_plans_combo.get(m, 0) + plans_val
+                if is_ew:
+                    monthly_plans_ew[m] = monthly_plans_ew.get(m, 0) + plans_val
                 monthly_main[m] = monthly_main.get(m, 0) + int(m_data.get("deviceSales", 0) or 0)
                 
                 if is_ds:
@@ -1164,6 +1194,10 @@ async def get_store_detail(store_id: str, retailer: str = ""):
         "monthly_sales_combo": monthly_sales_combo,
         "monthly_sales_ew": monthly_sales_ew,
         "monthly_plans_count": monthly_plans,
+        "monthly_plans_sp": monthly_plans_sp,
+        "monthly_plans_adld": monthly_plans_adld,
+        "monthly_plans_combo": monthly_plans_combo,
+        "monthly_plans_ew": monthly_plans_ew,
         "monthly_main_qty": monthly_main,
         "monthly_attach_pct": monthly_attach,
         "target": target_val if target_val > 0 else None,

@@ -71,7 +71,16 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
     let ewTotal = 0
     let overallTotal = 0
 
-    const stateMap = new Map<string, { sp: number; adld: number; combo: number; ew: number; total: number }>()
+    let spPlansTotal = 0
+    let adldPlansTotal = 0
+    let comboPlansTotal = 0
+    let ewPlansTotal = 0
+    let overallPlansTotal = 0
+
+    const stateMap = new Map<string, { 
+      sp: number; adld: number; combo: number; ew: number; total: number;
+      spPlans: number; adldPlans: number; comboPlans: number; ewPlans: number; totalPlans: number;
+    }>()
     const rows: StorePlanRow[] = []
 
     for (const st of targetStores) {
@@ -81,20 +90,43 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
       const ew = st.monthly_sales_ew?.[primaryMonth] || 0
       const tot = sp + adld + combo + ew
 
+      const spPlans = st.monthly_plans_sp?.[primaryMonth] || 0
+      const adldPlans = st.monthly_plans_adld?.[primaryMonth] || 0
+      const comboPlans = st.monthly_plans_combo?.[primaryMonth] || 0
+      const ewPlans = st.monthly_plans_ew?.[primaryMonth] || 0
+      const totPlans = spPlans + adldPlans + comboPlans + ewPlans
+
       spTotal += sp
       adldTotal += adld
       comboTotal += combo
       ewTotal += ew
       overallTotal += tot
 
+      spPlansTotal += spPlans
+      adldPlansTotal += adldPlans
+      comboPlansTotal += comboPlans
+      ewPlansTotal += ewPlans
+      overallPlansTotal += totPlans
+
       const sName = st.state || 'Unknown'
-      if (!stateMap.has(sName)) stateMap.set(sName, { sp: 0, adld: 0, combo: 0, ew: 0, total: 0 })
+      if (!stateMap.has(sName)) {
+        stateMap.set(sName, { 
+          sp: 0, adld: 0, combo: 0, ew: 0, total: 0,
+          spPlans: 0, adldPlans: 0, comboPlans: 0, ewPlans: 0, totalPlans: 0
+        })
+      }
       const sAgg = stateMap.get(sName)!
       sAgg.sp += sp
       sAgg.adld += adld
       sAgg.combo += combo
       sAgg.ew += ew
       sAgg.total += tot
+
+      sAgg.spPlans += spPlans
+      sAgg.adldPlans += adldPlans
+      sAgg.comboPlans += comboPlans
+      sAgg.ewPlans += ewPlans
+      sAgg.totalPlans += totPlans
 
       rows.push({ store: st, totalSales: tot, spSales: sp, adldSales: adld, comboSales: combo, ewSales: ew })
     }
@@ -104,7 +136,10 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
       .sort((a, b) => b.total - a.total)
 
     return {
-      planAggs: { sp: spTotal, adld: adldTotal, combo: comboTotal, ew: ewTotal, total: overallTotal },
+      planAggs: { 
+        sp: spTotal, adld: adldTotal, combo: comboTotal, ew: ewTotal, total: overallTotal,
+        spPlans: spPlansTotal, adldPlans: adldPlansTotal, comboPlans: comboPlansTotal, ewPlans: ewPlansTotal, totalPlans: overallPlansTotal
+      },
       stateAggs: sAggs,
       storeRows: rows,
     }
@@ -119,7 +154,16 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
     const comboTrend = trendMonths.map(m => targetStores.reduce((acc, st) => acc + (st.monthly_sales_combo?.[m] || 0), 0))
     const ewTrend = trendMonths.map(m => targetStores.reduce((acc, st) => acc + (st.monthly_sales_ew?.[m] || 0), 0))
 
-    return { months: trendMonths, sp: spTrend, adld: adldTrend, combo: comboTrend, ew: ewTrend }
+    const spPlansTrend = trendMonths.map(m => targetStores.reduce((acc, st) => acc + (st.monthly_plans_sp?.[m] || 0), 0))
+    const adldPlansTrend = trendMonths.map(m => targetStores.reduce((acc, st) => acc + (st.monthly_plans_adld?.[m] || 0), 0))
+    const comboPlansTrend = trendMonths.map(m => targetStores.reduce((acc, st) => acc + (st.monthly_plans_combo?.[m] || 0), 0))
+    const ewPlansTrend = trendMonths.map(m => targetStores.reduce((acc, st) => acc + (st.monthly_plans_ew?.[m] || 0), 0))
+
+    return { 
+      months: trendMonths, 
+      sp: spTrend, adld: adldTrend, combo: comboTrend, ew: ewTrend,
+      spPlans: spPlansTrend, adldPlans: adldPlansTrend, comboPlans: comboPlansTrend, ewPlans: ewPlansTrend
+    }
   }, [targetStores, fm])
 
   const maxStateVal = useMemo(() => {
@@ -242,9 +286,15 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
                 hole: 0.6,
                 labels: ['SP', 'ADLD', 'Combo', 'EW'],
                 values: [planAggs.sp, planAggs.adld, planAggs.combo, planAggs.ew],
+                customdata: [
+                  [fmtInr(planAggs.sp), planAggs.spPlans],
+                  [fmtInr(planAggs.adld), planAggs.adldPlans],
+                  [fmtInr(planAggs.combo), planAggs.comboPlans],
+                  [fmtInr(planAggs.ew), planAggs.ewPlans],
+                ],
+                hovertemplate: '<b>%{label}</b><br>Sales: %{customdata[0]}<br>Plans Sold: %{customdata[1]}<br>Share: %{percent}<extra></extra>',
                 marker: { colors: ['#3b82f6', '#4f46e5', '#9333ea', '#db2777'] },
                 textinfo: 'label+percent',
-                hovertemplate: '<b>%{label}</b><br>Sales: ₹%{value:,.0f}<br>Share: %{percent}<extra></extra>',
               }]}
               layout={{
                 ...PLOTLY_BASE,
@@ -273,10 +323,38 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
           <div className="flex-1 relative -mx-4 -mb-4">
             <Plot
               data={[
-                { type: 'bar', name: 'SP', x: stateAggs.map(s => s.state), y: stateAggs.map(s => s.sp), marker: { color: '#3b82f6' } },
-                { type: 'bar', name: 'ADLD', x: stateAggs.map(s => s.state), y: stateAggs.map(s => s.adld), marker: { color: '#4f46e5' } },
-                { type: 'bar', name: 'Combo', x: stateAggs.map(s => s.state), y: stateAggs.map(s => s.combo), marker: { color: '#9333ea' } },
-                { type: 'bar', name: 'EW', x: stateAggs.map(s => s.state), y: stateAggs.map(s => s.ew), marker: { color: '#db2777' } },
+                { 
+                  type: 'bar', name: 'SP', 
+                  x: stateAggs.map(s => s.state), 
+                  y: stateAggs.map(s => s.sp), 
+                  customdata: stateAggs.map(s => [fmtInr(s.sp), s.spPlans]),
+                  hovertemplate: '<b>%{x} (SP)</b><br>Sales: %{customdata[0]}<br>Plans Sold: %{customdata[1]}<extra></extra>',
+                  marker: { color: '#3b82f6' } 
+                },
+                { 
+                  type: 'bar', name: 'ADLD', 
+                  x: stateAggs.map(s => s.state), 
+                  y: stateAggs.map(s => s.adld), 
+                  customdata: stateAggs.map(s => [fmtInr(s.adld), s.adldPlans]),
+                  hovertemplate: '<b>%{x} (ADLD)</b><br>Sales: %{customdata[0]}<br>Plans Sold: %{customdata[1]}<extra></extra>',
+                  marker: { color: '#4f46e5' } 
+                },
+                { 
+                  type: 'bar', name: 'Combo', 
+                  x: stateAggs.map(s => s.state), 
+                  y: stateAggs.map(s => s.combo), 
+                  customdata: stateAggs.map(s => [fmtInr(s.combo), s.comboPlans]),
+                  hovertemplate: '<b>%{x} (Combo)</b><br>Sales: %{customdata[0]}<br>Plans Sold: %{customdata[1]}<extra></extra>',
+                  marker: { color: '#9333ea' } 
+                },
+                { 
+                  type: 'bar', name: 'EW', 
+                  x: stateAggs.map(s => s.state), 
+                  y: stateAggs.map(s => s.ew), 
+                  customdata: stateAggs.map(s => [fmtInr(s.ew), s.ewPlans]),
+                  hovertemplate: '<b>%{x} (EW)</b><br>Sales: %{customdata[0]}<br>Plans Sold: %{customdata[1]}<extra></extra>',
+                  marker: { color: '#db2777' } 
+                },
               ]}
               layout={{
                 ...PLOTLY_BASE,
@@ -312,10 +390,34 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
         <div className="flex-1 relative -mx-4 -mb-4">
           <Plot
             data={[
-              { type: 'scatter', mode: 'lines+markers', name: 'SP', x: trendData.months, y: trendData.sp, line: { color: '#3b82f6', width: 3 }, marker: { size: 6 } },
-              { type: 'scatter', mode: 'lines+markers', name: 'ADLD', x: trendData.months, y: trendData.adld, line: { color: '#4f46e5', width: 3 }, marker: { size: 6 } },
-              { type: 'scatter', mode: 'lines+markers', name: 'Combo', x: trendData.months, y: trendData.combo, line: { color: '#9333ea', width: 3 }, marker: { size: 6 } },
-              { type: 'scatter', mode: 'lines+markers', name: 'EW', x: trendData.months, y: trendData.ew, line: { color: '#db2777', width: 3 }, marker: { size: 6 } },
+              { 
+                type: 'scatter', mode: 'lines+markers', name: 'SP', 
+                x: trendData.months, y: trendData.sp, 
+                customdata: trendData.sp.map((val, idx) => [fmtInr(val), trendData.spPlans[idx]]),
+                hovertemplate: '<b>%{x} (SP)</b><br>Sales: %{customdata[0]}<br>Plans Sold: %{customdata[1]}<extra></extra>',
+                line: { color: '#3b82f6', width: 3 }, marker: { size: 6 } 
+              },
+              { 
+                type: 'scatter', mode: 'lines+markers', name: 'ADLD', 
+                x: trendData.months, y: trendData.adld, 
+                customdata: trendData.adld.map((val, idx) => [fmtInr(val), trendData.adldPlans[idx]]),
+                hovertemplate: '<b>%{x} (ADLD)</b><br>Sales: %{customdata[0]}<br>Plans Sold: %{customdata[1]}<extra></extra>',
+                line: { color: '#4f46e5', width: 3 }, marker: { size: 6 } 
+              },
+              { 
+                type: 'scatter', mode: 'lines+markers', name: 'Combo', 
+                x: trendData.months, y: trendData.combo, 
+                customdata: trendData.combo.map((val, idx) => [fmtInr(val), trendData.comboPlans[idx]]),
+                hovertemplate: '<b>%{x} (Combo)</b><br>Sales: %{customdata[0]}<br>Plans Sold: %{customdata[1]}<extra></extra>',
+                line: { color: '#9333ea', width: 3 }, marker: { size: 6 } 
+              },
+              { 
+                type: 'scatter', mode: 'lines+markers', name: 'EW', 
+                x: trendData.months, y: trendData.ew, 
+                customdata: trendData.ew.map((val, idx) => [fmtInr(val), trendData.ewPlans[idx]]),
+                hovertemplate: '<b>%{x} (EW)</b><br>Sales: %{customdata[0]}<br>Plans Sold: %{customdata[1]}<extra></extra>',
+                line: { color: '#db2777', width: 3 }, marker: { size: 6 } 
+              },
             ]}
             layout={{
               ...PLOTLY_BASE,

@@ -27,6 +27,10 @@ export interface StoreRecord {
   monthly_sales_combo?: Record<string, number>
   monthly_sales_ew?: Record<string, number>
   monthly_plans_count?: Record<string, number>
+  monthly_plans_sp?: Record<string, number>
+  monthly_plans_adld?: Record<string, number>
+  monthly_plans_combo?: Record<string, number>
+  monthly_plans_ew?: Record<string, number>
   /** Samsung main-unit volume sold per month (used to compute attach %) */
   monthly_main_qty?: Record<string, number>
   /** Attach percentage per month = plans / main_qty (0–1 range) */
