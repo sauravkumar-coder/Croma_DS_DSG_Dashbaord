@@ -322,8 +322,8 @@ export default function ExecutiveOverview({ filters }: Props) {
   // ── Target Tracker Computations ─────────────────────────────────────────────
 
   const targetMonth = useMemo(() => {
-    return contextTargetMonth || fm[fm.length - 1] || 'Jun-2026'
-  }, [contextTargetMonth, fm])
+    return fm[fm.length - 1] || 'Jun-2026'
+  }, [fm])
 
   useEffect(() => {
     if (!targetMonth) return
