@@ -295,6 +295,7 @@ export default function ExecutiveOverview({ filters }: Props) {
   const [dayOfMonth, setDayOfMonth] = useState<number>(() => {
     return new Date().getDate()
   })
+  const [overrideTargetMonth, setOverrideTargetMonth] = useState<string | null>(null)
   const [filterState, setFilterState] = useState<string>('')
   const [tableSearch, setTableSearch] = useState<string>('')
   const [tableSortKey, setTableSortKey] = useState<TableSortKey>('achPct')
@@ -322,8 +323,8 @@ export default function ExecutiveOverview({ filters }: Props) {
   // ── Target Tracker Computations ─────────────────────────────────────────────
 
   const targetMonth = useMemo(() => {
-    return fm[fm.length - 1] || 'Jun-2026'
-  }, [fm])
+    return overrideTargetMonth || fm[fm.length - 1] || 'Jun-2026'
+  }, [overrideTargetMonth, fm])
 
   useEffect(() => {
     if (!targetMonth) return
@@ -661,10 +662,20 @@ export default function ExecutiveOverview({ filters }: Props) {
             <h2 className="text-xl font-bold text-gray-950">What is the status of the monthly targets?</h2>
             <p className="text-sm text-gray-500 mt-0.5 max-w-2xl leading-relaxed">
               Target month: <span className="text-blue-600 font-semibold">{targetMonth || '—'}</span>
-              {' · '}{storeCalcs.length} stores · OOW Budget · Day {elapsed} of {totalDays}
+              {' · '}{storeCalcs.length} stores · Sales Target · Day {elapsed} of {totalDays}
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            <Select value={targetMonth} onValueChange={setOverrideTargetMonth}>
+              <SelectTrigger className="w-[140px] h-8 text-xs font-semibold bg-white">
+                <SelectValue placeholder="Select Month" />
+              </SelectTrigger>
+              <SelectContent>
+                {months.map(m => (
+                  <SelectItem key={m} value={m}>{m}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </motion.div>
 
@@ -679,7 +690,7 @@ export default function ExecutiveOverview({ filters }: Props) {
           animate="show"
         >
           <KPICard
-            label="OOW Target"
+            label="Sales Target"
             value={national.totalTarget}
             formattedValue={fmtInr(national.totalTarget)}
             sub={`${storeCalcs.length} stores`}
@@ -1122,7 +1133,7 @@ export default function ExecutiveOverview({ filters }: Props) {
                   {([
                     { col: 'name'       as TableSortKey, label: 'Store'       },
                     { col: 'state'      as TableSortKey, label: 'State'       },
-                    { col: 'target'     as TableSortKey, label: 'OOW Target'  },
+                    { col: 'target'     as TableSortKey, label: 'Sales Target'  },
                     { col: 'sales'      as TableSortKey, label: 'Sales'       },
                     { col: 'achPct'     as TableSortKey, label: 'Ach %'       },
                     { col: 'gapPct'     as TableSortKey, label: 'Gap %'       },
