@@ -913,6 +913,10 @@ async def get_dashboard_data(retailer: str = ""):
         }
         stores.append(store_obj)
         
+    now = datetime.now()
+    current_month_str = f"{_MONTH_MAP.get(now.month, 'Jul')}-{now.year}"
+    months_set.add(current_month_str)
+
     return {
         "no_data": len(stores) == 0,
         "stores": stores,

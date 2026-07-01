@@ -293,8 +293,7 @@ export default function ExecutiveOverview({ filters }: Props) {
   const { stores, months, targetMonth: contextTargetMonth } = useDataContext()
 
   const [dayOfMonth, setDayOfMonth] = useState<number>(() => {
-    const d = new Date().getDate()
-    return d
+    return new Date().getDate()
   })
   const [filterState, setFilterState] = useState<string>('')
   const [tableSearch, setTableSearch] = useState<string>('')
@@ -325,6 +324,17 @@ export default function ExecutiveOverview({ filters }: Props) {
   const targetMonth = useMemo(() => {
     return contextTargetMonth || fm[fm.length - 1] || 'Jun-2026'
   }, [contextTargetMonth, fm])
+
+  useEffect(() => {
+    if (!targetMonth) return
+    const now = new Date()
+    const currentMonthStr = now.toLocaleString('en-US', { month: 'short' }) + '-' + now.getFullYear()
+    if (targetMonth === currentMonthStr) {
+      setDayOfMonth(now.getDate())
+    } else {
+      setDayOfMonth(getDaysInMonth(targetMonth))
+    }
+  }, [targetMonth])
 
   const totalDays = useMemo(() => getDaysInMonth(targetMonth), [targetMonth])
   const elapsed = useMemo(() => Math.min(dayOfMonth, totalDays), [dayOfMonth, totalDays])
