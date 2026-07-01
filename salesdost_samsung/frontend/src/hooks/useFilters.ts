@@ -6,6 +6,7 @@ export interface FilterState {
   productSubcategory: string // '' = all product subcategories
   fromMonth: string          // '' = earliest
   toMonth: string            // '' = latest
+  targetMonth: string        // '' = default behavior (latest or June)
 }
 
 const DEFAULT_FILTERS: FilterState = {
@@ -14,6 +15,7 @@ const DEFAULT_FILTERS: FilterState = {
   productSubcategory: '',
   fromMonth: '',
   toMonth: '',
+  targetMonth: '',
 }
 
 export function useFilters() {
@@ -42,7 +44,7 @@ export function useFilters() {
     (tabId: string): number => {
       const f = filtersByTab[tabId]
       if (!f) return 0
-      return [f.state, f.planCategory, f.productSubcategory, f.fromMonth, f.toMonth].filter(Boolean).length
+      return [f.state, f.planCategory, f.productSubcategory, f.fromMonth, f.toMonth, f.targetMonth].filter(Boolean).length
     },
     [filtersByTab]
   )

@@ -295,7 +295,6 @@ export default function ExecutiveOverview({ filters }: Props) {
   const [dayOfMonth, setDayOfMonth] = useState<number>(() => {
     return new Date().getDate()
   })
-  const [overrideTargetMonth, setOverrideTargetMonth] = useState<string | null>(null)
   const [filterState, setFilterState] = useState<string>('')
   const [tableSearch, setTableSearch] = useState<string>('')
   const [tableSortKey, setTableSortKey] = useState<TableSortKey>('achPct')
@@ -323,8 +322,8 @@ export default function ExecutiveOverview({ filters }: Props) {
   // ── Target Tracker Computations ─────────────────────────────────────────────
 
   const targetMonth = useMemo(() => {
-    return overrideTargetMonth || fm[fm.length - 1] || 'Jun-2026'
-  }, [overrideTargetMonth, fm])
+    return filters.targetMonth || fm[fm.length - 1] || 'Jun-2026'
+  }, [filters.targetMonth, fm])
 
   useEffect(() => {
     if (!targetMonth) return
@@ -666,16 +665,6 @@ export default function ExecutiveOverview({ filters }: Props) {
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <Select value={targetMonth} onValueChange={setOverrideTargetMonth}>
-              <SelectTrigger className="w-[140px] h-8 text-xs font-semibold bg-white">
-                <SelectValue placeholder="Select Month" />
-              </SelectTrigger>
-              <SelectContent>
-                {months.map(m => (
-                  <SelectItem key={m} value={m}>{m}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
           </div>
         </motion.div>
 

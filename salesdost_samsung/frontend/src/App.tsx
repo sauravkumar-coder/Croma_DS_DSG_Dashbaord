@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Routes, Route, Link } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Database, ExternalLink, RotateCcw, Target, X } from 'lucide-react'
+import { Database, ExternalLink, RotateCcw, Target, X, Filter, PieChart } from 'lucide-react'
 import { useDataContext } from './contexts/DataContext'
 import { useRetailerContext } from './contexts/RetailerContext'
 import SalesDataManager from './components/SalesDataManager'
@@ -19,6 +19,7 @@ import StoreDeepDivePage from './pages/StoreDeepDivePage'
 import TargetTrackerPage from './pages/TargetTrackerPage'
 import ExecutiveOverview from './components/tabs/ExecutiveOverview'
 import StoreJourneyMap from './components/tabs/StoreJourneyMap'
+import PlanLevelInsight from './components/tabs/PlanLevelInsight'
 import StoreDeepDive from './components/tabs/StoreDeepDive'
 import TargetCommandCenter from './components/tabs/TargetCommandCenter'
 import StateJourneyAnalysis from './components/tabs/StateJourneyAnalysis'
@@ -34,9 +35,10 @@ import { ScreenshotButton } from './components/ScreenshotButton'
 //  3-5  Performance Breakdown: "Where is performance coming from?"
 //  6-8  Momentum & Risk:      "What is changing, and where should we act?"
 const TABS = [
-  { id: 'executive',       label: 'Overview'                },
-  { id: 'state-journey',   label: 'State Level Performance' },
-  { id: 'store-journey',   label: 'Store Level Insight'     },
+  { id: 'executive',     label: 'Target Command Center' },
+  { id: 'plan_insights', label: 'Plan Insights' },
+  { id: 'ds_insights',   label: 'Store Classification' },
+  { id: 'store-journey', label: 'Store Level Insight' },
 ] as const
 
 type TabId = typeof TABS[number]['id']
@@ -142,8 +144,27 @@ function FilterBar({
         </SelectContent>
       </Select>
 
+      {/* Target Month */}
+      <div className="flex items-center gap-1.5 ml-2">
+        <span className="text-xs text-gray-500 font-medium select-none">Target Month:</span>
+        <Select
+          value={toSel(filters.targetMonth)}
+          onValueChange={v => onFilterChange('targetMonth', fromSel(v))}
+        >
+          <SelectTrigger className="h-8 w-32 text-xs font-semibold bg-white border-blue-200">
+            <SelectValue placeholder="Latest" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>Latest (Default)</SelectItem>
+            {months.map(m => (
+              <SelectItem key={m} value={m}>{m}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
       {/* From Month */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 ml-4">
         <span className="text-xs text-gray-500 select-none">From</span>
         <Select
           value={toSel(filters.fromMonth)}
@@ -241,6 +262,7 @@ export default function App() {
   void _sr // consumed via RetailerToggle
 
   const [activeTab, setActiveTab]         = useState<TabId>('executive')
+  const [isFiltersOpen, setIsFiltersOpen] = useState(true)
   const [showDataManager, setShowDataManager] = useState(false)
   const [selectedSpotlightStoreId, setSelectedSpotlightStoreId] = useState<string | null>(null)
   const [journeyPrefilter, setJourneyPrefilter] = useState<StoreCategory | null>(null)
@@ -285,10 +307,11 @@ export default function App() {
 
   function renderTab() {
     switch (activeTab) {
-      case 'executive':       return <ExecutiveOverview filters={filters} />
-      case 'store-journey':   return <StoreJourneyMap filters={filters} onNavigateToStore={handleNavigateToStore} initialCategory={journeyPrefilter} />
-      case 'state-journey':   return <StateJourneyAnalysis filters={filters} />
-      default:                return <TabPlaceholder label={currentTab.label} filters={filters} />
+      case 'executive':     return <ExecutiveOverview filters={filters} />
+      case 'plan_insights': return <PlanLevelInsight filters={filters} />
+      case 'ds_insights':   return <TabPlaceholder label="Store Classification" filters={filters} />
+      case 'store-journey': return <StoreJourneyMap filters={filters} onNavigateToStore={handleNavigateToStore} initialCategory={journeyPrefilter} />
+      default:              return <TabPlaceholder label={currentTab.label} filters={filters} />
     }
   }
 
@@ -393,22 +416,48 @@ export default function App() {
               )}
             </button>
           ))}
+          <div className="ml-auto flex items-center pr-2">
+            <button
+              onClick={() => setIsFiltersOpen(!isFiltersOpen)}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md border transition-colors',
+                isFiltersOpen ? 'bg-blue-50 text-blue-600 border-blue-200 shadow-sm' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+              )}
+            >
+              <Filter className="h-3.5 w-3.5" />
+              {isFiltersOpen ? 'Hide Filters' : 'Show Filters'}
+              {activeCount > 0 && !isFiltersOpen && (
+                <span className="flex items-center justify-center h-4 w-4 rounded-full bg-blue-500 text-white text-[10px] font-bold leading-none ml-1">
+                  {activeCount}
+                </span>
+              )}
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="sticky top-28 z-30 border-b border-gray-200 bg-white/90 backdrop-blur-sm">
-        <div className="px-4 py-2 max-w-screen-2xl mx-auto">
-          <FilterBar
-            states={states}
-            categories={categories}
-            months={months}
-            filters={filters}
-            onFilterChange={handleFilterChange}
-            onReset={handleReset}
-            activeCount={activeCount}
-          />
-        </div>
-      </div>
+      <AnimatePresence>
+        {isFiltersOpen && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="sticky top-28 z-30 border-b border-gray-200 bg-white/90 backdrop-blur-sm overflow-hidden"
+          >
+            <div className="px-4 py-2 max-w-screen-2xl mx-auto">
+              <FilterBar
+                states={states}
+                categories={categories}
+                months={months}
+                filters={filters}
+                onFilterChange={handleFilterChange}
+                onReset={handleReset}
+                activeCount={activeCount}
+              />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ── Tab Content ── */}
       <main className="px-4 py-6 pb-14 max-w-screen-2xl mx-auto">
