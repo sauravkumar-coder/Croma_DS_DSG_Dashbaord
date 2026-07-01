@@ -25,6 +25,7 @@ import StateJourneyAnalysis from './components/tabs/StateJourneyAnalysis'
 import { cn } from './lib/utils'
 import type { StoreCategory } from './lib/classificationEngine'
 import { RETAILER_IDS, getRetailerConfig } from './retailers/retailerFactory'
+import { ScreenshotButton } from './components/ScreenshotButton'
 
 // ── Tab registry ──────────────────────────────────────────────────────────────
 
@@ -463,6 +464,9 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* ── Screenshot FAB ── */}
+      <ScreenshotButton />
 
     </div>
       } />
