@@ -7,7 +7,7 @@ import createPlotlyComponent from 'react-plotly.js/factory'
 import Plotly from 'plotly.js-dist-min'
 import axios from 'axios'
 import { cn } from '@/lib/utils'
-import { fmtInr } from '@/lib/formatting'
+import { fmtInr, plotlyInrTickVals } from '@/lib/formatting'
 import { PT, PLOTLY_BASE, PT_AXIS } from '@/lib/plotlyTheme'
 
 const Plot = createPlotlyComponent(Plotly)
@@ -100,6 +100,8 @@ export default function StoreDeepDivePage() {
   barColors[maxIdx] = '#10b981'
   if (minIdx >= 0 && minIdx !== maxIdx) barColors[minIdx] = '#ef4444'
 
+  const maxChartVal = Math.max(...revenues, target || 0) * 1.15
+
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900">
 
@@ -177,7 +179,7 @@ export default function StoreDeepDivePage() {
                 orientation: 'h' as const, x: 0, y: -0.22,
               },
               xaxis: { ...PT_AXIS },
-              yaxis: { ...PT_AXIS, tickformat: ',.0s' },
+              yaxis: { ...PT_AXIS, ...plotlyInrTickVals(maxChartVal) },
               hovermode: 'x unified' as const,
               margin: { l: 52, r: 12, t: 12, b: 80 },
               height: 340,

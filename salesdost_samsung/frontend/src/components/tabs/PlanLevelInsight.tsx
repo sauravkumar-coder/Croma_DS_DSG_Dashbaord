@@ -14,7 +14,7 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import { transformStoresByPlanCategory } from '@/lib/filterHelpers'
 import { cn } from '@/lib/utils'
-import { fmtInr, fmtPct } from '@/lib/formatting'
+import { fmtInr, fmtPct, plotlyInrTickVals } from '@/lib/formatting'
 import { kpiContainer, kpiItem, panelSpring } from '@/lib/animations'
 import { PLOTLY_BASE, PT_AXIS } from '@/lib/plotlyTheme'
 import type { StoreRecord } from '@/lib/api'
@@ -121,6 +121,17 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
 
     return { months: trendMonths, sp: spTrend, adld: adldTrend, combo: comboTrend, ew: ewTrend }
   }, [targetStores, fm])
+
+  const maxStateVal = useMemo(() => {
+    if (stateAggs.length === 0) return 100000
+    return Math.max(...stateAggs.flatMap(s => [s.sp, s.adld, s.combo, s.ew]))
+  }, [stateAggs])
+
+  const maxTrendVal = useMemo(() => {
+    const allVals = [...trendData.sp, ...trendData.adld, ...trendData.combo, ...trendData.ew]
+    if (allVals.length === 0) return 100000
+    return Math.max(...allVals)
+  }, [trendData])
 
   // ── Table State ─────────────────────────────────────────────────────────────
 
@@ -272,7 +283,10 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
                 barmode: 'group',
                 margin: { t: 20, b: 40, l: 50, r: 20 },
                 xaxis: { ...PT_AXIS, tickangle: -45 },
-                yaxis: { ...PT_AXIS, tickformat: '.2s' },
+                yaxis: {
+                  ...PT_AXIS,
+                  ...plotlyInrTickVals(maxStateVal * 1.1)
+                },
                 legend: { orientation: 'h', y: 1.1, x: 0.5, xanchor: 'center' },
               }}
               config={{ displayModeBar: false }}
@@ -307,7 +321,10 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
               ...PLOTLY_BASE,
               margin: { t: 20, b: 40, l: 50, r: 20 },
               xaxis: { ...PT_AXIS },
-              yaxis: { ...PT_AXIS, tickformat: '.2s' },
+              yaxis: {
+                ...PT_AXIS,
+                ...plotlyInrTickVals(maxTrendVal * 1.1)
+              },
               legend: { orientation: 'h', y: 1.1, x: 0.5, xanchor: 'center' },
             }}
             config={{ displayModeBar: false }}
