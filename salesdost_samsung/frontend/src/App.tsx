@@ -23,6 +23,7 @@ import PlanLevelInsight from './components/tabs/PlanLevelInsight'
 import StoreDeepDive from './components/tabs/StoreDeepDive'
 import TargetCommandCenter from './components/tabs/TargetCommandCenter'
 import StateJourneyAnalysis from './components/tabs/StateJourneyAnalysis'
+import AttachPerformance from './components/tabs/AttachPerformance'
 import { cn } from './lib/utils'
 import type { StoreCategory } from './lib/classificationEngine'
 import { RETAILER_IDS, getRetailerConfig } from './retailers/retailerFactory'
@@ -35,8 +36,9 @@ import { ScreenshotButton } from './components/ScreenshotButton'
 //  3-5  Performance Breakdown: "Where is performance coming from?"
 //  6-8  Momentum & Risk:      "What is changing, and where should we act?"
 const TABS = [
-  { id: 'executive',     label: 'Overview' },
-  { id: 'plan_insights', label: 'Plan Insights' },
+  { id: 'executive',      label: 'Overview' },
+  { id: 'plan_insights',  label: 'Plan Insights' },
+  { id: 'attach_perf',   label: 'Attach Performance' },
   { id: 'state-journey', label: 'State Level Performance' },
   { id: 'store-journey', label: 'Store Level Insight' },
 ] as const
@@ -309,6 +311,7 @@ export default function App() {
     switch (activeTab) {
       case 'executive':     return <ExecutiveOverview filters={filters} />
       case 'plan_insights': return <PlanLevelInsight filters={filters} />
+      case 'attach_perf':  return <AttachPerformance filters={filters} />
       case 'state-journey': return <StateJourneyAnalysis filters={filters} />
       case 'store-journey': return <StoreJourneyMap filters={filters} onNavigateToStore={handleNavigateToStore} initialCategory={journeyPrefilter} />
       default:              return <TabPlaceholder label={currentTab.label} filters={filters} />
