@@ -696,8 +696,7 @@ async def get_dashboard_data(retailer: str = ""):
                     "$expr": {
                         "$and": [
                             {"$eq": ["$storeId", "$$store_id"]},
-                            {"$eq": ["$brandId", "brand_002"]},
-                            {"$eq": ["$year", 2026]}
+                            {"$eq": ["$brandId", "brand_002"]}
                         ]
                     }
                 }}
@@ -968,8 +967,7 @@ async def get_store_detail(store_id: str, retailer: str = ""):
                     "$expr": {
                         "$and": [
                             {"$eq": ["$storeId", "$$store_id"]},
-                            {"$eq": ["$brandId", "brand_002"]},
-                            {"$eq": ["$year", 2026]}
+                            {"$eq": ["$brandId", "brand_002"]}
                         ]
                     }
                 }}
