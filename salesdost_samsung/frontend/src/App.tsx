@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useTransition } from 'react'
 import { Routes, Route, Link } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Database, ExternalLink, RotateCcw, Target, X, Filter, PieChart } from 'lucide-react'
@@ -267,6 +267,25 @@ export default function App() {
   const [isFiltersOpen, setIsFiltersOpen] = useState(true)
   const [showDataManager, setShowDataManager] = useState(false)
   const [selectedSpotlightStoreId, setSelectedSpotlightStoreId] = useState<string | null>(null)
+  const [isSyncing, setIsSyncing] = useState(false)
+  const [, startTransition] = useTransition()
+
+  // Manual sync handler with spinner
+  const handleSync = useCallback(async () => {
+    setIsSyncing(true)
+    startTransition(() => {})
+    try {
+      await refetchData()
+    } finally {
+      setIsSyncing(false)
+    }
+  }, [refetchData])
+
+  // Auto-refresh every 5 minutes so live DB pushes surface automatically
+  useEffect(() => {
+    const interval = setInterval(() => { refetchData() }, 5 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [refetchData])
   const [journeyPrefilter, setJourneyPrefilter] = useState<StoreCategory | null>(null)
 
   const handleNavigateToStore = useCallback((storeId: string) => {
@@ -391,6 +410,22 @@ export default function App() {
               storeCount={stores.length}
               monthCount={months.length}
             />
+
+            {/* Sync Data button */}
+            <button
+              onClick={handleSync}
+              disabled={isSyncing}
+              title="Sync latest data from database"
+              className={cn(
+                'inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-semibold border transition-all',
+                isSyncing
+                  ? 'bg-blue-50 text-blue-400 border-blue-200 cursor-not-allowed'
+                  : 'bg-white text-gray-600 border-gray-200 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200',
+              )}
+            >
+              <RotateCcw className={cn('h-3.5 w-3.5', isSyncing && 'animate-spin')} />
+              {isSyncing ? 'Syncing…' : 'Sync Data'}
+            </button>
           </div>
         </div>
       </header>
