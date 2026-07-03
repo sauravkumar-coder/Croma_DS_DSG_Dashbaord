@@ -658,7 +658,7 @@ async def get_dashboard_data(retailer: str = ""):
     # Determine target month dynamically from StoreTarget
     target_month_num = 6
     target_year = 2026
-    target_doc = await db["StoreTarget"].find_one({"brandId": "brand_002"})
+    target_doc = await db["StoreTarget"].find_one({"brandId": "brand_002"}, sort=[("year", -1), ("month", -1)])
     if target_doc:
         target_month_num = target_doc.get("month", 6)
         target_year = target_doc.get("year", 2026)
