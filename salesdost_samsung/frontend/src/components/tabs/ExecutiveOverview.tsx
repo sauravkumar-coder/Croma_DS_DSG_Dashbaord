@@ -450,10 +450,25 @@ export default function ExecutiveOverview({ filters }: Props) {
   // Aggregate daily sales for the current month
   const dailySalesData = useMemo(() => {
     const daily = Array.from({ length: totalDays }, () => 0)
-    const hasDailyBreakdown = trackerSalesRows.some(r => r.day > 0)
+    
+    // Filter tracker sales rows to only include those belonging to the active retailer's stores
+    const activeRetailerRows = trackerSalesRows.filter(r => {
+      const keyClean = r.store_key ? r.store_key.toLowerCase().trim() : ''
+      const nameClean = r.store_name ? r.store_name.toLowerCase().trim() : ''
+      if (!keyClean && !nameClean) return false
+      
+      return fs.some(s => {
+        const sName = s.store_name?.toLowerCase() || ''
+        if (keyClean && sName.includes(keyClean)) return true
+        if (nameClean && sName.includes(nameClean)) return true
+        return false
+      })
+    })
+
+    const hasDailyBreakdown = activeRetailerRows.some(r => r.day > 0)
     
     if (hasDailyBreakdown) {
-      for (const r of trackerSalesRows) {
+      for (const r of activeRetailerRows) {
         const dayIdx = r.day - 1
         if (dayIdx >= 0 && dayIdx < totalDays) {
           const storeState = r.state || storeStateMap.get(r.store_name)
@@ -475,7 +490,7 @@ export default function ExecutiveOverview({ filters }: Props) {
       }
     }
     return daily
-  }, [trackerSalesRows, totalDays, filterState, elapsed, national.totalSales, storeStateMap])
+  }, [trackerSalesRows, totalDays, filterState, elapsed, national.totalSales, storeStateMap, fs])
 
   const requiredDailyPace = useMemo(() => {
     return national.totalTarget / (totalDays || 1)

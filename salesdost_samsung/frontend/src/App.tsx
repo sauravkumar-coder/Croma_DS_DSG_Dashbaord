@@ -282,7 +282,9 @@ export default function App() {
   const [skeletonDone, setSkeletonDone] = useState(false)
   const skeletonTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    if (!isLoading) {
+    if (isLoading) {
+      setSkeletonDone(false)
+    } else {
       skeletonTimer.current = setTimeout(() => setSkeletonDone(true), 400)
       return () => { if (skeletonTimer.current) clearTimeout(skeletonTimer.current) }
     }

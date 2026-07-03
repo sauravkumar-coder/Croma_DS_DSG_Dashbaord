@@ -34,6 +34,14 @@ export function fmtInrAxis(n: number): string {
  * Generate Plotly tickvals and ticktext for a given max value using INR units.
  */
 export function plotlyInrTickVals(maxVal: number, count = 5): { tickvals: number[], ticktext: string[] } {
+  // Safeguard against 0, NaN, null, undefined or negative values
+  if (!maxVal || isNaN(maxVal) || maxVal <= 0) {
+    return {
+      tickvals: [0],
+      ticktext: ['₹0']
+    }
+  }
+
   // Simple step calculation
   const roughStep = maxVal / count
   const magnitude = Math.pow(10, Math.floor(Math.log10(roughStep)))
@@ -61,6 +69,12 @@ export function plotlyInrTickVals(maxVal: number, count = 5): { tickvals: number
  * Generate Plotly tickvals and ticktext for a log scale using INR units.
  */
 export function plotlyInrLogTickVals(maxVal: number): { tickvals: number[], ticktext: string[] } {
+  if (!maxVal || isNaN(maxVal) || maxVal <= 0) {
+    return {
+      tickvals: [10000],
+      ticktext: ['₹10K']
+    }
+  }
   const tickvals: number[] = []
   const ticktext: string[] = []
   
