@@ -866,6 +866,17 @@ async def get_dashboard_data(retailer: str = ""):
             else:
                 monthly_attach[m] = 0.0
 
+        # Gather targets for all months dynamically from database StoreTarget lookup
+        monthly_targets = {}
+        for t in doc.get("targets", []):
+            t_month = t.get("month")
+            t_year = t.get("year")
+            if t_month and t_year:
+                m_abbr = _MONTH_MAP.get(int(t_month))
+                if m_abbr:
+                    m_label = f"{m_abbr}-{t_year}"
+                    monthly_targets[m_label] = monthly_targets.get(m_label, 0.0) + (t.get("targetRevenue", 0) or 0)
+
         # Prioritize database targets for the active target month/year
         db_target = 0
         for t in doc.get("targets", []):
@@ -889,6 +900,10 @@ async def get_dashboard_data(retailer: str = ""):
         else:
             target_val = 0
 
+        # Fall back spreadsheet targets to monthly_targets for the active month if database has none
+        if target_month_str not in monthly_targets and target_val > 0:
+            monthly_targets[target_month_str] = target_val
+
         # Primary subcat as the category field
         primary_subcat = "—"
         if subcat_revenue:
@@ -910,6 +925,7 @@ async def get_dashboard_data(retailer: str = ""):
             "state": state,
             "category": category,
             "monthly_sales": monthly_sales,
+            "monthly_targets": monthly_targets,
             "monthly_sales_ds": monthly_sales_ds,
             "monthly_sales_dsg": monthly_sales_dsg,
             "monthly_sales_sp": monthly_sales_sp,
@@ -1132,10 +1148,27 @@ async def get_store_detail(store_id: str, retailer: str = ""):
     # Determine target month dynamically from StoreTarget
     target_month_num = 6
     target_year = 2026
-    target_doc = await db["StoreTarget"].find_one({"brandId": "brand_002"})
+    target_doc = await db["StoreTarget"].find_one({"brandId": "brand_002"}, sort=[("year", -1), ("month", -1)])
     if target_doc:
         target_month_num = target_doc.get("month", 6)
         target_year = target_doc.get("year", 2026)
+
+    _MONTH_MAP = {
+        1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+        7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
+    }
+    target_month_str = f"{_MONTH_MAP.get(target_month_num, 'Jun')}-{target_year}"
+
+    # Gather targets for all months dynamically from database StoreTarget lookup
+    monthly_targets = {}
+    for t in doc.get("targets", []):
+        t_month = t.get("month")
+        t_year = t.get("year")
+        if t_month and t_year:
+            m_abbr = _MONTH_MAP.get(int(t_month))
+            if m_abbr:
+                m_label = f"{m_abbr}-{t_year}"
+                monthly_targets[m_label] = monthly_targets.get(m_label, 0.0) + (t.get("targetRevenue", 0) or 0)
 
     # Prioritize database targets for the active target month/year
     db_target = 0
@@ -1168,6 +1201,10 @@ async def get_store_detail(store_id: str, retailer: str = ""):
     else:
         target_val = 0
 
+    # Fall back spreadsheet targets to monthly_targets for the active month if database has none
+    if target_month_str not in monthly_targets and target_val > 0:
+        monthly_targets[target_month_str] = target_val
+
     primary_subcat = "—"
     if subcat_revenue:
         primary_subcat = max(subcat_revenue, key=subcat_revenue.get)
@@ -1185,6 +1222,7 @@ async def get_store_detail(store_id: str, retailer: str = ""):
         "state": state,
         "category": category,
         "monthly_sales": monthly_sales,
+        "monthly_targets": monthly_targets,
         "monthly_sales_ds": monthly_sales_ds,
         "monthly_sales_dsg": monthly_sales_dsg,
         "monthly_sales_sp": monthly_sales_sp,

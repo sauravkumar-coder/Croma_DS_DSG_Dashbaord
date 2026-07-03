@@ -35,6 +35,7 @@ export interface StoreRecord {
   monthly_main_qty?: Record<string, number>
   /** Attach percentage per month = plans / main_qty (0–1 range) */
   monthly_attach_pct?: Record<string, number>
+  monthly_targets?: Record<string, number>
   target?: number | null
   zonal_manager?: string
   cluster_manager?: string

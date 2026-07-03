@@ -343,25 +343,31 @@ export default function ExecutiveOverview({ filters }: Props) {
   const targetStatesList = useMemo(() => {
     const statesSet = new Set<string>()
     fs.forEach(s => {
-      if (s.target && s.target > 0 && s.state) {
+      const target = s.monthly_targets?.[targetMonth] ?? s.target ?? 0
+      const sales = s.monthly_sales[targetMonth] ?? 0
+      if ((target > 0 || sales > 0) && s.state) {
         statesSet.add(s.state)
       }
     })
     return [...statesSet].sort()
-  }, [fs])
+  }, [fs, targetMonth])
 
   const targetStores = useMemo(() => {
-    let list = fs.filter(s => s.target && s.target > 0)
+    let list = fs.filter(s => {
+      const target = s.monthly_targets?.[targetMonth] ?? s.target ?? 0
+      const sales = s.monthly_sales[targetMonth] ?? 0
+      return target > 0 || sales > 0
+    })
     if (filterState) {
       list = list.filter(s => s.state === filterState)
     }
     return list
-  }, [fs, filterState])
+  }, [fs, filterState, targetMonth])
 
   const storeCalcs = useMemo(() => {
     const remaining = Math.max(0, totalDays - elapsed)
     return targetStores.map(store => {
-      const target = store.target || 0
+      const target = store.monthly_targets?.[targetMonth] ?? store.target ?? 0
       const currentSales = store.monthly_sales[targetMonth] ?? 0
       const achPct = target > 0 ? (currentSales / target) * 100 : 0
       const expectedPct = (elapsed / totalDays) * 100
