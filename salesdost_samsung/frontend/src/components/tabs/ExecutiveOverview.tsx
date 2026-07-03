@@ -302,7 +302,7 @@ export default function ExecutiveOverview({ filters }: Props) {
   const [tableSortDir, setTableSortDir] = useState<'asc' | 'desc'>('desc')
   const [tablePage, setTablePage] = useState<number>(1)
   const [trackerSalesRows, setTrackerSalesRows] = useState<TrackerSalesRow[]>([])
-  const [isTrackerLoading, setIsTrackerLoading] = useState(false)
+  const [isTrackerLoading, setIsTrackerLoading] = useState(true)
   const [selectedBand, setSelectedBand] = useState<typeof BANDS[number] | null>(null)
 
   // ── Filter + split ─────────────────────────────────────────────────────────
