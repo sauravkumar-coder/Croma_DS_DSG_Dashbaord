@@ -50,6 +50,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import TargetStateMap from './TargetStateMap'
+import { SkeletonChart } from '@/components/Skeleton'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -477,17 +478,6 @@ export default function ExecutiveOverview({ filters }: Props) {
           }
         }
       }
-    } else {
-      const activeElapsed = elapsed > 0 ? elapsed : 1
-      let sumTemp = 0
-      const tempBars = Array.from({ length: activeElapsed }, (_, i) => {
-        const mult = 0.8 + ((i * 7 + 13) % 5) * 0.1
-        sumTemp += mult
-        return mult
-      })
-      for (let i = 0; i < elapsed; i++) {
-        daily[i] = sumTemp > 0 ? (tempBars[i] / sumTemp) * national.totalSales : 0
-      }
     }
     return daily
   }, [trackerSalesRows, totalDays, filterState, elapsed, national.totalSales, storeStateMap, fs])
@@ -758,42 +748,46 @@ export default function ExecutiveOverview({ filters }: Props) {
             <span className="text-emerald-500 font-semibold"> Emerald</span> = met/exceeded required daily pace ·
             <span className="text-red-500 font-semibold"> Red</span> = below required daily pace
           </p>
-          <Plot
-            data={dailyChartTraces}
-            layout={{
-              paper_bgcolor: 'rgba(0,0,0,0)',
-              plot_bgcolor:  'rgba(0,0,0,0)',
-              font:          { color: PT.font, family: 'Inter,sans-serif', size: 11 },
-              xaxis: {
-                gridcolor: PT.grid,
-                linecolor: PT.line,
-                tickcolor: PT.line,
-                automargin: true,
-                title: { text: 'Day of Month' },
-                dtick: 1,
-                range: [0.5, totalDays + 0.5]
-              },
-              yaxis: {
-                gridcolor: PT.grid,
-                linecolor: PT.line,
-                tickcolor: PT.line,
-                automargin: true,
-                title: { text: `Daily Sales (₹)` },
-                ...plotlyInrTickVals(Math.max(...dailySalesData, requiredDailyPace) * 1.15)
-              },
-              legend: {
-                bgcolor: 'rgba(0,0,0,0)',
-                font: { color: PT.font, size: 10 },
-                orientation: 'h' as const,
-                y: -0.25
-              },
-              margin: { l: 70, r: 16, t: 8, b: 80 },
-              height: 320,
-              bargap: 0.3
-            }}
-            config={{ displayModeBar: false, responsive: true }}
-            style={{ width: '100%' }}
-          />
+          {isTrackerLoading ? (
+            <SkeletonChart tall={false} />
+          ) : (
+            <Plot
+              data={dailyChartTraces}
+              layout={{
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor:  'rgba(0,0,0,0)',
+                font:          { color: PT.font, family: 'Inter,sans-serif', size: 11 },
+                xaxis: {
+                  gridcolor: PT.grid,
+                  linecolor: PT.line,
+                  tickcolor: PT.line,
+                  automargin: true,
+                  title: { text: 'Day of Month' },
+                  dtick: 1,
+                  range: [0.5, totalDays + 0.5]
+                },
+                yaxis: {
+                  gridcolor: PT.grid,
+                  linecolor: PT.line,
+                  tickcolor: PT.line,
+                  automargin: true,
+                  title: { text: `Daily Sales (₹)` },
+                  ...plotlyInrTickVals(Math.max(...dailySalesData, requiredDailyPace) * 1.15)
+                },
+                legend: {
+                  bgcolor: 'rgba(0,0,0,0)',
+                  font: { color: PT.font, size: 10 },
+                  orientation: 'h' as const,
+                  y: -0.25
+                },
+                margin: { l: 70, r: 16, t: 8, b: 80 },
+                height: 320,
+                bargap: 0.3
+              }}
+              config={{ displayModeBar: false, responsive: true }}
+              style={{ width: '100%' }}
+            />
+          )}
         </motion.div>
 
         {/* ── ROW 3: Geographic India Map ── */}
