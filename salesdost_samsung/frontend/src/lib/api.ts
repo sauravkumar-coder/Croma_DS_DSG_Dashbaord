@@ -61,69 +61,6 @@ export const getDashboardData = (retailer?: string) =>
 
 // ── Retailer-specific upload / meta helpers ───────────────────────────────────
 
-export const uploadRetailerSales = (
-  retailer: string,
-  file: File,
-  onProgress?: (pct: number) => void,
-  force = false,
-) => {
-  const form = new FormData()
-  form.append('file', file)
-  const endpoint = `/api/upload/sales/${encodeURIComponent(retailer.toLowerCase())}?force=${force}`
-  return api.post<UploadSalesResult>(endpoint, form, {
-    onUploadProgress: e =>
-      onProgress?.(Math.round((e.loaded * 100) / (e.total ?? 1))),
-  })
-}
-
-export const deleteRetailerSales = (retailer: string) =>
-  api.delete<{ ok: boolean }>(`/api/storage/sales/${encodeURIComponent(retailer.toLowerCase())}`)
-
-export const getRetailerSalesMeta = (retailer: string) =>
-  api.get<SalesMetaResult>(`/api/sales/meta/${encodeURIComponent(retailer.toLowerCase())}`)
-
-export interface UploadSalesResult {
-  ok: boolean
-  stores: number
-  months: string[]
-  needs_confirm: boolean
-  existing?: SalesFileMeta
-}
-export interface UploadTargetsResult {
-  ok: boolean
-  stores: number
-}
-
-export const uploadSales = (
-  file: File,
-  onProgress?: (pct: number) => void,
-  force = false,
-) => {
-  const form = new FormData()
-  form.append('file', file)
-  return api.post<UploadSalesResult>(`/api/upload/sales?force=${force}`, form, {
-    onUploadProgress: e =>
-      onProgress?.(Math.round((e.loaded * 100) / (e.total ?? 1))),
-  })
-}
-
-export const uploadTargets = (
-  file: File,
-  onProgress?: (pct: number) => void,
-) => {
-  const form = new FormData()
-  form.append('file', file)
-  return api.post<UploadTargetsResult>('/api/upload/targets', form, {
-    onUploadProgress: e =>
-      onProgress?.(Math.round((e.loaded * 100) / (e.total ?? 1))),
-  })
-}
-
-export const loadDemoData = (retailer?: string) =>
-  api.post<UploadSalesResult>(
-    retailer ? `/api/demo/load?retailer=${encodeURIComponent(retailer)}` : '/api/demo/load'
-  )
-
 // ── Storage management ────────────────────────────────────────────────────────
 
 export interface SalesFileMeta {

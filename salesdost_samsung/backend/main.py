@@ -1418,7 +1418,7 @@ def get_tracker_status():
 
 
 @app.get("/api/tracker/data")
-def get_tracker_data(month: str):
+async def get_tracker_data(month: str):
     """Return parsed target + sales data for a month."""
     if not st.validate_month_label(month):
         raise HTTPException(status_code=400, detail=f"Invalid month '{month}'")
@@ -1455,6 +1455,121 @@ def get_tracker_data(month: str):
         except Exception as exc:
             logger.warning("Could not parse tracker sales file: %s", exc)
             has_sales = False
+
+    # Fallback to MongoDB if data is missing from files
+    db = get_db()
+    if db is not None:
+        # Parse month parameter into month_num and year
+        parts = month.split("-")
+        month_num, year = None, None
+        if len(parts) == 2:
+            m_abbr, year_str = parts
+            month_num = _MONTH_ORDER.get(m_abbr.lower()) + 1 if m_abbr.lower() in _MONTH_ORDER else None
+            try:
+                year = int(year_str)
+            except ValueError:
+                pass
+
+        if month_num is not None and year is not None:
+            store_map = {}
+            
+            # Helper to lazily load store map if needed
+            async def ensure_store_map():
+                if not store_map:
+                    try:
+                        async for s in db.Store.find({}, {"storeName": 1, "state": 1}):
+                            store_map[str(s["_id"])] = {
+                                "name": s.get("storeName", ""),
+                                "state": s.get("state", ""),
+                                "key": ""
+                            }
+                        async for sb in db.StoreBrand.find({"brandId": "brand_002"}, {"storeBrandId": 1, "storeId": 1}):
+                            sid = str(sb.get("storeId", ""))
+                            if sid in store_map:
+                                store_map[sid]["key"] = str(sb.get("storeBrandId", ""))
+                    except Exception as e:
+                        logger.warning("Error building store map: %s", e)
+
+            # Fallback for targets
+            if not has_target or not targets:
+                await ensure_store_map()
+                if store_map:
+                    try:
+                        targets_cursor = db.StoreTarget.find({
+                            "brandId": "brand_002",
+                            "month": month_num,
+                            "year": year
+                        })
+                        db_targets = []
+                        async for t in targets_cursor:
+                            sid = str(t.get("storeId", ""))
+                            s_info = store_map.get(sid)
+                            if s_info:
+                                db_targets.append({
+                                    "store_key": s_info["key"],
+                                    "store_name": s_info["name"],
+                                    "head_operations": "",
+                                    "zonal_manager": "",
+                                    "cluster_manager": "",
+                                    "target": float(t.get("targetRevenue", 0.0) or 0.0)
+                                })
+                        if db_targets:
+                            targets = db_targets
+                            has_target = True
+                    except Exception as e:
+                        logger.warning("Error fetching fallback targets from DB: %s", e)
+
+            # Fallback for sales_rows
+            if not has_sales or not sales_result["sales_rows"]:
+                await ensure_store_map()
+                if store_map:
+                    try:
+                        sales_cursor = db.SalesRecord.find({
+                            "brandId": "brand_002",
+                            "year": year,
+                            f"dailySales.{month_num}": {"$exists": True}
+                        }, {"storeId": 1, f"dailySales.{month_num}": 1})
+                        
+                        daily_sales_by_store = {}
+                        async for doc in sales_cursor:
+                            sid = str(doc.get("storeId", ""))
+                            daily = doc.get("dailySales", {}).get(str(month_num), [])
+                            if not isinstance(daily, list): continue
+                            
+                            if sid not in daily_sales_by_store:
+                                daily_sales_by_store[sid] = {}
+                                
+                            for idx, day_info in enumerate(daily):
+                                day_num = idx + 1
+                                rev = float(day_info.get("revenue", 0.0) or 0.0)
+                                if rev > 0:
+                                    daily_sales_by_store[sid][day_num] = daily_sales_by_store[sid].get(day_num, 0.0) + rev
+                        
+                        db_sales_rows = []
+                        max_elapsed = 0
+                        for sid, day_map in daily_sales_by_store.items():
+                            s_info = store_map.get(sid, {"name": "", "state": "", "key": ""})
+                            for day_num, rev in day_map.items():
+                                db_sales_rows.append({
+                                    "store_name": s_info["name"],
+                                    "store_key": s_info["key"],
+                                    "sales": rev,
+                                    "day": day_num,
+                                    "state": s_info["state"]
+                                })
+                                if day_num > max_elapsed:
+                                    max_elapsed = day_num
+                        
+                        if db_sales_rows:
+                            sales_result = {
+                                "sales_rows": db_sales_rows,
+                                "detected_month": month,
+                                "max_elapsed": max_elapsed,
+                                "store_count": len(daily_sales_by_store)
+                            }
+                            has_sales = True
+                    except Exception as e:
+                        logger.warning("Error fetching fallback sales from DB: %s", e)
 
     return {
         "month":          month,

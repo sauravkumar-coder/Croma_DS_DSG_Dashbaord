@@ -4,7 +4,6 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { Database, ExternalLink, RotateCcw, Target, X, Filter, PieChart } from 'lucide-react'
 import { useDataContext } from './contexts/DataContext'
 import { useRetailerContext } from './contexts/RetailerContext'
-import SalesDataManager from './components/SalesDataManager'
 import { useFilters, type FilterState } from './hooks/useFilters'
 import {
   Select,
@@ -13,7 +12,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from './components/ui/select'
-import UploadScreen from './components/UploadScreen'
 import { AppSkeleton } from './components/Skeleton'
 import StoreDeepDivePage from './pages/StoreDeepDivePage'
 import TargetTrackerPage from './pages/TargetTrackerPage'
@@ -265,7 +263,6 @@ export default function App() {
 
   const [activeTab, setActiveTab]         = useState<TabId>('executive')
   const [isFiltersOpen, setIsFiltersOpen] = useState(true)
-  const [showDataManager, setShowDataManager] = useState(false)
   const [selectedSpotlightStoreId, setSelectedSpotlightStoreId] = useState<string | null>(null)
   const [isSyncing, setIsSyncing] = useState(false)
   const [, startTransition] = useTransition()
@@ -365,12 +362,6 @@ export default function App() {
         </div>
       </div>
     )
-  }
-
-  // ── Upload / onboarding screen ────────────────────────────────────────────
-
-  if (!hasData) {
-    return <UploadScreen retailer={retailer} onReady={refetchData} />
   }
 
   // ── Main dashboard ────────────────────────────────────────────────────────
@@ -520,19 +511,6 @@ export default function App() {
           {retailerCfg.footer}
         </span>
       </footer>
-
-      {/* ── Sales Data Manager Drawer ── */}
-      <AnimatePresence>
-        {showDataManager && (
-          <SalesDataManager
-            onClose={() => setShowDataManager(false)}
-            onDataChanged={() => {
-              setShowDataManager(false)
-              refetchData()
-            }}
-          />
-        )}
-      </AnimatePresence>
 
       {/* ── Store Spotlight Modal ── */}
       <AnimatePresence>

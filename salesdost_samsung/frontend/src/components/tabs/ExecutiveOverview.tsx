@@ -443,12 +443,17 @@ export default function ExecutiveOverview({ filters }: Props) {
     }
   }, [targetMonth])
 
-  // Map store names to their state from store records
+  // Map store names and keys to their state from store records
   const storeStateMap = useMemo(() => {
     const map = new Map<string, string>()
     fs.forEach(s => {
-      if (s.store_name && s.state) {
-        map.set(s.store_name, s.state)
+      if (s.state) {
+        if (s.store_name) {
+          map.set(s.store_name.toLowerCase().trim(), s.state)
+        }
+        if (s.store_id) {
+          map.set(s.store_id.toLowerCase().trim(), s.state)
+        }
       }
     })
     return map
@@ -465,9 +470,12 @@ export default function ExecutiveOverview({ filters }: Props) {
       if (!keyClean && !nameClean) return false
       
       return fs.some(s => {
+        const sIdClean = s.store_id ? s.store_id.toLowerCase().trim() : ''
         const sName = s.store_name?.toLowerCase() || ''
+        if (keyClean && sIdClean === keyClean) return true
         if (keyClean && sName.includes(keyClean)) return true
-        if (nameClean && sName.includes(nameClean)) return true
+        if (nameClean && sName === nameClean) return true
+        if (nameClean && (sName.includes(nameClean) || nameClean.includes(sName))) return true
         return false
       })
     })
@@ -478,7 +486,9 @@ export default function ExecutiveOverview({ filters }: Props) {
       for (const r of activeRetailerRows) {
         const dayIdx = r.day - 1
         if (dayIdx >= 0 && dayIdx < totalDays) {
-          const storeState = r.state || storeStateMap.get(r.store_name)
+          const keyClean = r.store_key ? r.store_key.toLowerCase().trim() : ''
+          const nameClean = r.store_name ? r.store_name.toLowerCase().trim() : ''
+          const storeState = r.state || (keyClean ? storeStateMap.get(keyClean) : undefined) || (nameClean ? storeStateMap.get(nameClean) : undefined)
           if (!filterState || storeState === filterState) {
             daily[dayIdx] += r.sales
           }

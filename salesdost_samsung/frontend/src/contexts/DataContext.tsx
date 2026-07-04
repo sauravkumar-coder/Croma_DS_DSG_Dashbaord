@@ -71,7 +71,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     try {
       const { data } = await getDashboardData(retailer)
       if (data.no_data) {
-        // Reset to empty — triggers upload screen
+        // Reset to empty
         setStores([])
         setMonths([])
         setStates([])
@@ -79,6 +79,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         setHasTargets(false)
         setTargetMonth(null)
         setWarnings([])
+        setError('MongoDB connection is not active. Make sure the database is running.')
       } else {
         setStores(data.stores)
         setMonths(data.months)
