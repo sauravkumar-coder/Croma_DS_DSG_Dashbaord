@@ -270,6 +270,7 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Donut Chart */}
         <motion.div
+          id="plan-contribution"
           className="lg:col-span-1 rounded-xl bg-white border border-gray-100 p-4 shadow-sm flex flex-col h-[380px]"
           {...panelSpring()}
         >
@@ -311,6 +312,7 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
 
         {/* Regional Performance */}
         <motion.div
+          id="regional-performance"
           className="lg:col-span-2 rounded-xl bg-white border border-gray-100 p-4 shadow-sm flex flex-col h-[380px]"
           {...panelSpring(0.1)}
         >
@@ -392,6 +394,7 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
 
       {/* ── Charts Row 2 ── */}
       <motion.div
+        id="past-6-months-trend"
         className="rounded-xl bg-white border border-gray-100 p-4 shadow-sm flex flex-col h-[380px]"
         {...panelSpring(0.2)}
       >
@@ -452,7 +455,7 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
       </motion.div>
 
       {/* ── Store Drill-Down Table ── */}
-      <motion.div className="rounded-xl bg-white shadow-sm border border-gray-100 overflow-hidden flex flex-col" {...panelSpring(0.3)}>
+      <motion.div id="store-level-plan-performance" className="rounded-xl bg-white shadow-sm border border-gray-100 overflow-hidden flex flex-col" {...panelSpring(0.3)}>
         <div className="px-4 py-3 border-b border-gray-100 bg-gray-50/50 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <div className="p-1.5 rounded-lg bg-pink-50 text-pink-600"><StoreIcon className="h-4 w-4" /></div>

@@ -477,7 +477,7 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
       </motion.div>
 
       {/* Scatter Plot / Category Breakdown */}
-      <motion.div {...panelSpring(0.12)} className={cardCls}>
+      <motion.div {...panelSpring(0.12)} id="store-journey-scatter" className={cardCls}>
         <div className="flex items-start justify-between gap-2 flex-wrap mb-3">
           <div>
             <h3 className="mb-0.5 text-sm font-semibold text-gray-800">Store Journey Scatter</h3>
@@ -667,7 +667,7 @@ export default function StoreJourneyMap({ filters, onNavigateToStore, initialCat
       </motion.div>
 
       {/* Filterable Table */}
-      <motion.div {...panelSpring(0.2)} className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
+      <motion.div {...panelSpring(0.2)} id="all-stores-insight" className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
         <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between flex-wrap gap-2">
           <div>
             <h3 className="text-sm font-semibold text-gray-800">All Stores</h3>
