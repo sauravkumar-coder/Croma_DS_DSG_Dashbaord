@@ -291,18 +291,24 @@ function KPICard({ label, value, sub, icon, barRatio, barColor, danger, formatte
 interface Props { filters: FilterState }
 
 export default function ExecutiveOverview({ filters }: Props) {
-  const { stores, months, targetMonth: contextTargetMonth } = useDataContext()
+  const {
+    stores,
+    months,
+    targetMonth: contextTargetMonth,
+    trackerSalesRows,
+    isTrackerLoading,
+    dayOfMonth,
+    setDayOfMonth,
+    elapsed,
+    totalDays,
+    loadTrackerForMonth,
+  } = useDataContext()
 
-  const [dayOfMonth, setDayOfMonth] = useState<number>(() => {
-    return new Date().getDate()
-  })
   const [filterState, setFilterState] = useState<string>('')
   const [tableSearch, setTableSearch] = useState<string>('')
   const [tableSortKey, setTableSortKey] = useState<TableSortKey>('achPct')
   const [tableSortDir, setTableSortDir] = useState<'asc' | 'desc'>('desc')
   const [tablePage, setTablePage] = useState<number>(1)
-  const [trackerSalesRows, setTrackerSalesRows] = useState<TrackerSalesRow[]>([])
-  const [isTrackerLoading, setIsTrackerLoading] = useState(true)
   const [selectedBand, setSelectedBand] = useState<typeof BANDS[number] | null>(null)
 
   // ── Filter + split ─────────────────────────────────────────────────────────
@@ -325,20 +331,6 @@ export default function ExecutiveOverview({ filters }: Props) {
   const targetMonth = useMemo(() => {
     return filters.targetMonth || fm[fm.length - 1] || 'Jun-2026'
   }, [filters.targetMonth, fm])
-
-  useEffect(() => {
-    if (!targetMonth) return
-    const now = new Date()
-    const currentMonthStr = now.toLocaleString('en-US', { month: 'short' }) + '-' + now.getFullYear()
-    if (targetMonth === currentMonthStr) {
-      setDayOfMonth(now.getDate())
-    } else {
-      setDayOfMonth(getDaysInMonth(targetMonth))
-    }
-  }, [targetMonth])
-
-  const totalDays = useMemo(() => getDaysInMonth(targetMonth), [targetMonth])
-  const elapsed = useMemo(() => Math.min(dayOfMonth, totalDays), [dayOfMonth, totalDays])
 
   const targetStatesList = useMemo(() => {
     const statesSet = new Set<string>()
@@ -466,26 +458,10 @@ export default function ExecutiveOverview({ filters }: Props) {
 
   // ── Fetch Daily Sales Tracker Data ──────────────────────────────────────────
   useEffect(() => {
-    if (!targetMonth) return
-    let active = true
-    const fetchTracker = async () => {
-      setIsTrackerLoading(true)
-      try {
-        const { data } = await getTrackerData(targetMonth)
-        if (active && data.sales_rows) {
-          setTrackerSalesRows(data.sales_rows)
-        }
-      } catch (err) {
-        console.error("Failed to load tracker data", err)
-      } finally {
-        if (active) setIsTrackerLoading(false)
-      }
+    if (targetMonth) {
+      loadTrackerForMonth(targetMonth)
     }
-    fetchTracker()
-    return () => {
-      active = false
-    }
-  }, [targetMonth])
+  }, [targetMonth, loadTrackerForMonth])
 
   // Map store names and keys to their state from store records
   const storeStateMap = useMemo(() => {

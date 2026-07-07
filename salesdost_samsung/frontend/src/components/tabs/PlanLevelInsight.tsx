@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import {
   TrendingUp,
@@ -37,7 +37,14 @@ interface StorePlanRow {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function PlanLevelInsight({ filters }: { filters: FilterState }) {
-  const { stores, months } = useDataContext()
+  const {
+    stores,
+    months,
+    trackerSalesRows,
+    elapsed,
+    totalDays,
+    loadTrackerForMonth,
+  } = useDataContext()
   const [logScale, setLogScale] = useState(true)
 
   // 1. Filter Data
@@ -64,6 +71,48 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
     return filters.targetMonth || fm[fm.length - 1] || 'Jun-2026'
   }, [filters.targetMonth, fm])
 
+  useEffect(() => {
+    if (primaryMonth) {
+      loadTrackerForMonth(primaryMonth)
+    }
+  }, [primaryMonth, loadTrackerForMonth])
+
+  const activeSalesMap = useMemo(() => {
+    const map = new Map<string, number>()
+    
+    const hasDailyBreakdown = trackerSalesRows.some(r => r.day > 0)
+    if (!hasDailyBreakdown) {
+      targetStores.forEach(s => {
+        const sales = s.monthly_sales[primaryMonth] ?? 0
+        if (s.store_id) map.set(s.store_id.toLowerCase().trim(), sales)
+      })
+      return map
+    }
+    
+    for (const r of trackerSalesRows) {
+      if (r.day === 0 || r.day <= elapsed) {
+        const keyClean = r.store_key ? r.store_key.toLowerCase().trim() : ''
+        const nameClean = r.store_name ? r.store_name.toLowerCase().trim() : ''
+        
+        const matchedStore = targetStores.find(s => {
+          const sIdClean = s.store_id ? s.store_id.toLowerCase().trim() : ''
+          const sName = s.store_name?.toLowerCase() || ''
+          if (keyClean && sIdClean === keyClean) return true
+          if (keyClean && sName.includes(keyClean)) return true
+          if (nameClean && sName === nameClean) return true
+          if (nameClean && (sName.includes(nameClean) || nameClean.includes(sName))) return true
+          return false
+        })
+        
+        if (matchedStore && matchedStore.store_id) {
+          const sId = matchedStore.store_id.toLowerCase().trim()
+          map.set(sId, (map.get(sId) ?? 0) + r.sales)
+        }
+      }
+    }
+    return map
+  }, [trackerSalesRows, elapsed, targetStores, primaryMonth])
+
   // 2. Compute Aggregates for the primary month
   const { planAggs, stateAggs, storeRows } = useMemo(() => {
     let spTotal = 0
@@ -85,11 +134,21 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
     const rows: StorePlanRow[] = []
 
     for (const st of targetStores) {
-      const sp = st.monthly_sales_sp?.[primaryMonth] || 0
-      const adld = st.monthly_sales_adld?.[primaryMonth] || 0
-      const combo = st.monthly_sales_combo?.[primaryMonth] || 0
-      const ew = st.monthly_sales_ew?.[primaryMonth] || 0
-      const tot = sp + adld + combo + ew
+      const sId = st.store_id ? st.store_id.toLowerCase().trim() : ''
+      const dbTotal = st.monthly_sales?.[primaryMonth] || 0
+      
+      let currentTotal = dbTotal
+      if (trackerSalesRows.length > 0) {
+        currentTotal = sId ? (activeSalesMap.get(sId) ?? 0) : 0
+      }
+      
+      const ratio = dbTotal > 0 ? currentTotal / dbTotal : 0
+      
+      const sp = (st.monthly_sales_sp?.[primaryMonth] || 0) * ratio
+      const adld = (st.monthly_sales_adld?.[primaryMonth] || 0) * ratio
+      const combo = (st.monthly_sales_combo?.[primaryMonth] || 0) * ratio
+      const ew = (st.monthly_sales_ew?.[primaryMonth] || 0) * ratio
+      const tot = currentTotal
 
       const spPlans = st.monthly_plans_sp?.[primaryMonth] || 0
       const adldPlans = st.monthly_plans_adld?.[primaryMonth] || 0
@@ -144,7 +203,7 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
       stateAggs: sAggs,
       storeRows: rows,
     }
-  }, [targetStores, primaryMonth])
+  }, [targetStores, primaryMonth, trackerSalesRows, activeSalesMap])
 
   // 3. Compute 6-Month Trend
   const trendData = useMemo(() => {
