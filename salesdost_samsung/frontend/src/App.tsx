@@ -253,6 +253,57 @@ function TabPlaceholder({ label, filters }: { label: string; filters: FilterStat
   )
 }
 
+const TOPICS = [
+  {
+    tabId: 'executive',
+    tabLabel: 'Overview',
+    items: [
+      { id: 'daily-performance-vs-required-pace', label: 'Daily Performance vs Required Pace' },
+      { id: 'geographic-performance-india', label: 'Geographic Performance' },
+      { id: 'state-target-analysis', label: 'State Target Analysis' },
+      { id: 'achievement-distribution', label: 'Achievement Distribution' },
+      { id: 'store-command-center', label: 'Store Command Center' },
+    ]
+  },
+  {
+    tabId: 'plan_insights',
+    tabLabel: 'Plan Insights',
+    items: [
+      { id: 'plan-contribution', label: 'Plan Contribution' },
+      { id: 'regional-performance', label: 'Regional Performance' },
+      { id: 'past-6-months-trend', label: 'Past 6 Months Trend' },
+      { id: 'store-level-plan-performance', label: 'Store Level Plan Performance' },
+    ]
+  },
+  {
+    tabId: 'attach_perf',
+    tabLabel: 'Attach Performance',
+    items: [
+      { id: 'month-on-month-attach-lift-or-drop', label: 'Month-on-Month Attach % Lift/Drop' },
+      { id: 'monthly-plan-units-attach-pct', label: 'Monthly Plan Units + Attach %' },
+      { id: 'state-wise-attach-pct', label: 'State-wise Attach %' },
+      { id: 'attach-pct-vs-plans-sold-scatter', label: 'Attach % vs Plans Sold Scatter' },
+      { id: 'store-attach-performance', label: 'Store Attach Performance' },
+    ]
+  },
+  {
+    tabId: 'state-journey',
+    tabLabel: 'State Level Performance',
+    items: [
+      { id: 'network-store-journey-funnel', label: 'Network Store Journey Funnel' },
+      { id: 'state-performance-leaderboard', label: 'State Performance Leaderboard' },
+    ]
+  },
+  {
+    tabId: 'store-journey',
+    tabLabel: 'Store Level Insight',
+    items: [
+      { id: 'store-journey-scatter', label: 'Store Journey Scatter' },
+      { id: 'all-stores-insight', label: 'All Stores' },
+    ]
+  }
+] as const
+
 function GlobalNavDropdown({
   activeTab,
   onSelectTab,
@@ -309,33 +360,48 @@ function GlobalNavDropdown({
             exit={{ opacity: 0, y: -4, scale: 0.98 }}
             transition={{ duration: 0.15, ease: 'easeOut' }}
             role="menu"
-            className="absolute right-0 top-full mt-2 w-64 rounded-xl border border-gray-200 bg-white shadow-lg overflow-hidden z-50"
+            className="absolute right-0 top-full mt-2 w-80 rounded-xl border border-gray-200 bg-white shadow-lg overflow-hidden z-50"
           >
-            <p className="px-3.5 pt-2.5 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
-              Dashboard
-            </p>
-            <div className="px-1.5 pb-1.5">
-              {TABS.map(tab => {
-                const isActive = tab.id === activeTab
-                return (
-                  <button
-                    key={tab.id}
-                    role="menuitem"
-                    onClick={() => { onSelectTab(tab.id); setOpen(false) }}
-                    className={cn(
-                      'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-left transition-colors',
-                      isActive ? 'font-semibold bg-blue-50' : 'text-gray-700 hover:bg-gray-50',
-                    )}
-                    style={isActive ? { color: accentFrom } : {}}
-                  >
-                    <span
-                      className="h-1.5 w-1.5 shrink-0 rounded-full"
-                      style={isActive ? { background: `linear-gradient(to right, ${accentFrom}, ${accentTo})` } : { background: 'transparent' }}
-                    />
-                    {tab.label}
-                  </button>
-                )
-              })}
+            <div className="max-h-[400px] overflow-y-auto divide-y divide-gray-100">
+              {TOPICS.map(category => (
+                <div key={category.tabId} className="p-1.5">
+                  <p className="px-2.5 pt-1.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                    {category.tabLabel}
+                  </p>
+                  <div className="space-y-0.5">
+                    {category.items.map(item => {
+                      return (
+                        <button
+                          key={item.id}
+                          role="menuitem"
+                          onClick={() => {
+                            onSelectTab(category.tabId)
+                            setOpen(false)
+                            
+                            // Scroll to target element with highlight
+                            setTimeout(() => {
+                              const el = document.getElementById(item.id)
+                              if (el) {
+                                el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                                
+                                // Flash ring highlight effect
+                                el.classList.add('ring-2', 'ring-blue-500', 'ring-offset-2', 'transition-all', 'duration-500')
+                                setTimeout(() => {
+                                  el.classList.remove('ring-2', 'ring-blue-500', 'ring-offset-2')
+                                }, 2000)
+                              }
+                            }, 200)
+                          }}
+                          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[11px] text-left text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors cursor-pointer"
+                        >
+                          <span className="h-1 w-1 shrink-0 rounded-full bg-gray-300" />
+                          {item.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
 
             <p className="px-3.5 pt-2 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400 border-t border-gray-100">

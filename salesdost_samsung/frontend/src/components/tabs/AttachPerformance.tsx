@@ -296,7 +296,7 @@ export default function AttachPerformance({ filters }: { filters: FilterState })
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
         {/* MoM Attach Lift/Drop */}
-        <motion.div {...panelSpring()} className="rounded-xl bg-white border border-gray-100 p-4 shadow-sm">
+        <motion.div {...panelSpring()} id="month-on-month-attach-lift-or-drop" className="rounded-xl bg-white border border-gray-100 p-4 shadow-sm">
           <h3 className="text-sm font-semibold text-gray-900">Month-on-Month Attach % Lift or Drop</h3>
           <p className="text-[11px] text-gray-500 mt-0.5 mb-3">MoM change (bars) vs rolling attach % (line) · Dual axis</p>
           <Plot
@@ -337,7 +337,7 @@ export default function AttachPerformance({ filters }: { filters: FilterState })
         </motion.div>
 
         {/* Monthly Plan Units + Attach % */}
-        <motion.div {...panelSpring(0.05)} className="rounded-xl bg-white border border-gray-100 p-4 shadow-sm">
+        <motion.div {...panelSpring(0.05)} id="monthly-plan-units-attach-pct" className="rounded-xl bg-white border border-gray-100 p-4 shadow-sm">
           <h3 className="text-sm font-semibold text-gray-900">Monthly Plan Units + Attach %</h3>
           <p className="text-[11px] text-gray-500 mt-0.5 mb-3">Bars = plan units sold · Line = attach % on right axis</p>
           <Plot
@@ -383,7 +383,7 @@ export default function AttachPerformance({ filters }: { filters: FilterState })
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
         {/* State-level attach % bar chart */}
-        <motion.div {...panelSpring(0.1)} className="rounded-xl bg-white border border-gray-100 p-4 shadow-sm">
+        <motion.div {...panelSpring(0.1)} id="state-wise-attach-pct" className="rounded-xl bg-white border border-gray-100 p-4 shadow-sm">
           <h3 className="text-sm font-semibold text-gray-900">State-wise Attach %</h3>
           <p className="text-[11px] text-gray-500 mt-0.5 mb-3">Ranked by attach % for {primaryMonth} · Dashed line = 20% target</p>
           <Plot
@@ -420,7 +420,7 @@ export default function AttachPerformance({ filters }: { filters: FilterState })
         </motion.div>
 
         {/* Scatter: Plans vs Attach % */}
-        <motion.div {...panelSpring(0.1)} className="rounded-xl bg-white border border-gray-100 p-4 shadow-sm">
+        <motion.div {...panelSpring(0.1)} id="attach-pct-vs-plans-sold-scatter" className="rounded-xl bg-white border border-gray-100 p-4 shadow-sm">
           <h3 className="text-sm font-semibold text-gray-900">Attach % vs Plans Sold — Store Scatter</h3>
           <p className="text-[11px] text-gray-500 mt-0.5 mb-3">
             Each bubble = one store · Size = device units ·
@@ -452,7 +452,7 @@ export default function AttachPerformance({ filters }: { filters: FilterState })
       </div>
 
       {/* ── Row 3: Store Action Table ──────────────────────────────────────── */}
-      <motion.div {...panelSpring(0.2)} className="rounded-xl bg-white border border-gray-100 shadow-sm overflow-hidden">
+      <motion.div {...panelSpring(0.2)} id="store-attach-performance" className="rounded-xl bg-white border border-gray-100 shadow-sm overflow-hidden">
         <div className="px-4 py-3 border-b border-gray-100 flex flex-wrap items-center gap-3">
           <div>
             <h3 className="text-sm font-semibold text-gray-900">Store Attach Performance</h3>

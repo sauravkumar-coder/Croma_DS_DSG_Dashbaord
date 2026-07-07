@@ -1030,6 +1030,7 @@ export default function StateJourneyAnalysis({ filters }: Props) {
 
         {/* Network Store Journey Funnel */}
         <motion.div
+          id="network-store-journey-funnel"
           initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.12, duration: 0.4 }}
           className={card}
@@ -1046,6 +1047,7 @@ export default function StateJourneyAnalysis({ filters }: Props) {
 
         {/* Revenue Contribution by State / Store Revenue by State */}
         <motion.div
+          id="state-performance-leaderboard"
           initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.18, duration: 0.4 }}
           className={card}

@@ -801,6 +801,7 @@ export default function ExecutiveOverview({ filters }: Props) {
 
         {/* ── ROW 2: Daily Sales vs Required Pace ── */}
         <motion.div {...panelSpring(0.1)}
+          id="daily-performance-vs-required-pace"
           className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
           <h3 className="mb-0.5 text-sm font-semibold text-gray-800">Daily Performance vs Required Pace</h3>
           <p className="mb-3 text-[11px] text-gray-500">
@@ -862,6 +863,7 @@ export default function ExecutiveOverview({ filters }: Props) {
 
         {/* ── ROW 4: State Target Analysis ── */}
         <motion.div {...panelSpring(0.2)}
+          id="state-target-analysis"
           className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
           <div className="px-4 py-3 border-b border-gray-100">
             <h3 className="text-sm font-semibold text-gray-800">State Target Analysis</h3>
@@ -933,6 +935,7 @@ export default function ExecutiveOverview({ filters }: Props) {
 
         {/* ── ROW 5: Achievement Distribution ── */}
         <motion.div {...panelSpring(0.3)}
+          id="achievement-distribution"
           className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm p-5">
           
           {/* Card Header: Title on Left, State Dropdown on Right */}
@@ -1150,6 +1153,7 @@ export default function ExecutiveOverview({ filters }: Props) {
 
         {/* ── ROW 6: Store Command Center Table ── */}
         <motion.div {...panelSpring(0.4)}
+          id="store-command-center"
           className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
           <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
             <div>
