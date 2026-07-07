@@ -364,11 +364,55 @@ export default function ExecutiveOverview({ filters }: Props) {
     return list
   }, [fs, filterState, targetMonth])
 
+  const activeSalesMap = useMemo(() => {
+    const map = new Map<string, number>()
+    
+    const hasDailyBreakdown = trackerSalesRows.some(r => r.day > 0)
+    if (!hasDailyBreakdown) {
+      fs.forEach(s => {
+        const sales = s.monthly_sales[targetMonth] ?? 0
+        if (s.store_id) map.set(s.store_id.toLowerCase().trim(), sales)
+      })
+      return map
+    }
+    
+    for (const r of trackerSalesRows) {
+      if (r.day === 0 || r.day <= elapsed) {
+        const keyClean = r.store_key ? r.store_key.toLowerCase().trim() : ''
+        const nameClean = r.store_name ? r.store_name.toLowerCase().trim() : ''
+        
+        const matchedStore = fs.find(s => {
+          const sIdClean = s.store_id ? s.store_id.toLowerCase().trim() : ''
+          const sName = s.store_name?.toLowerCase() || ''
+          if (keyClean && sIdClean === keyClean) return true
+          if (keyClean && sName.includes(keyClean)) return true
+          if (nameClean && sName === nameClean) return true
+          if (nameClean && (sName.includes(nameClean) || nameClean.includes(sName))) return true
+          return false
+        })
+        
+        if (matchedStore && matchedStore.store_id) {
+          const sId = matchedStore.store_id.toLowerCase().trim()
+          map.set(sId, (map.get(sId) ?? 0) + r.sales)
+        }
+      }
+    }
+    return map
+  }, [trackerSalesRows, elapsed, fs, targetMonth])
+
   const storeCalcs = useMemo(() => {
     const remaining = Math.max(0, totalDays - elapsed)
     return targetStores.map(store => {
       const target = store.monthly_targets?.[targetMonth] ?? store.target ?? 0
-      const currentSales = store.monthly_sales[targetMonth] ?? 0
+      const sId = store.store_id ? store.store_id.toLowerCase().trim() : ''
+      
+      let currentSales = 0
+      if (trackerSalesRows.length > 0) {
+        currentSales = sId ? (activeSalesMap.get(sId) ?? 0) : 0
+      } else {
+        currentSales = store.monthly_sales[targetMonth] ?? 0
+      }
+      
       const achPct = target > 0 ? (currentSales / target) * 100 : 0
       const expectedPct = (elapsed / totalDays) * 100
       const gap = target - currentSales
@@ -394,7 +438,7 @@ export default function ExecutiveOverview({ filters }: Props) {
         status,
       }
     })
-  }, [targetStores, elapsed, totalDays, targetMonth])
+  }, [targetStores, elapsed, totalDays, targetMonth, trackerSalesRows, activeSalesMap])
 
   const national = useMemo(() => {
     const remaining = Math.max(0, totalDays - elapsed)

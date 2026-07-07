@@ -695,7 +695,10 @@ async def get_dashboard_data(retailer: str = ""):
                 {"$match": {
                     "$expr": {
                         "$and": [
-                            {"$eq": ["$storeId", "$$store_id"]},
+                            {"$or": [
+                                {"$eq": ["$storeId", "$$store_id"]},
+                                {"$eq": ["$storeId", {"$toString": "$$store_id"}]}
+                            ]},
                             {"$eq": ["$brandId", "brand_002"]}
                         ]
                     }
@@ -710,7 +713,10 @@ async def get_dashboard_data(retailer: str = ""):
                 {"$match": {
                     "$expr": {
                         "$and": [
-                            {"$eq": ["$storeId", "$$store_id"]},
+                            {"$or": [
+                                {"$eq": ["$storeId", "$$store_id"]},
+                                {"$eq": ["$storeId", {"$toString": "$$store_id"}]}
+                            ]},
                             {"$eq": ["$brandId", "brand_002"]}
                         ]
                     }
@@ -725,7 +731,10 @@ async def get_dashboard_data(retailer: str = ""):
                 {"$match": {
                     "$expr": {
                         "$and": [
-                            {"$eq": ["$storeId", "$$store_id"]},
+                            {"$or": [
+                                {"$eq": ["$storeId", "$$store_id"]},
+                                {"$eq": ["$storeId", {"$toString": "$$store_id"}]}
+                            ]},
                             {"$eq": ["$brandId", "brand_002"]}
                         ]
                     }
@@ -987,7 +996,10 @@ async def get_store_detail(store_id: str, retailer: str = ""):
                 {"$match": {
                     "$expr": {
                         "$and": [
-                            {"$eq": ["$storeId", "$$store_id"]},
+                            {"$or": [
+                                {"$eq": ["$storeId", "$$store_id"]},
+                                {"$eq": ["$storeId", {"$toString": "$$store_id"}]}
+                            ]},
                             {"$eq": ["$brandId", "brand_002"]}
                         ]
                     }
@@ -1002,7 +1014,10 @@ async def get_store_detail(store_id: str, retailer: str = ""):
                 {"$match": {
                     "$expr": {
                         "$and": [
-                            {"$eq": ["$storeId", "$$store_id"]},
+                            {"$or": [
+                                {"$eq": ["$storeId", "$$store_id"]},
+                                {"$eq": ["$storeId", {"$toString": "$$store_id"}]}
+                            ]},
                             {"$eq": ["$brandId", "brand_002"]}
                         ]
                     }
@@ -1017,7 +1032,10 @@ async def get_store_detail(store_id: str, retailer: str = ""):
                 {"$match": {
                     "$expr": {
                         "$and": [
-                            {"$eq": ["$storeId", "$$store_id"]},
+                            {"$or": [
+                                {"$eq": ["$storeId", "$$store_id"]},
+                                {"$eq": ["$storeId", {"$toString": "$$store_id"}]}
+                            ]},
                             {"$eq": ["$brandId", "brand_002"]}
                         ]
                     }
