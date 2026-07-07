@@ -288,13 +288,13 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
                 hole: 0.6,
                 labels: ['SP', 'ADLD', 'Combo', 'EW'],
                 values: [planAggs.sp, planAggs.adld, planAggs.combo, planAggs.ew],
-                customdata: [
-                  [fmtInr(planAggs.sp), planAggs.spPlans],
-                  [fmtInr(planAggs.adld), planAggs.adldPlans],
-                  [fmtInr(planAggs.combo), planAggs.comboPlans],
-                  [fmtInr(planAggs.ew), planAggs.ewPlans],
+                text: [
+                  `Sales: ${fmtInr(planAggs.sp)}<br>Plans Sold: ${planAggs.spPlans}`,
+                  `Sales: ${fmtInr(planAggs.adld)}<br>Plans Sold: ${planAggs.adldPlans}`,
+                  `Sales: ${fmtInr(planAggs.combo)}<br>Plans Sold: ${planAggs.comboPlans}`,
+                  `Sales: ${fmtInr(planAggs.ew)}<br>Plans Sold: ${planAggs.ewPlans}`,
                 ],
-                hovertemplate: '<b>%{label}</b><br>Sales: %{customdata[0]}<br>Plans Sold: %{customdata[1]}<br>Share: %{percent}<extra></extra>',
+                hovertemplate: '<b>%{label}</b><br>%{text}<br>Share: %{percent}<extra></extra>',
                 marker: { colors: ['#3b82f6', '#4f46e5', '#9333ea', '#db2777'] },
                 textinfo: 'label+percent',
               }]}
