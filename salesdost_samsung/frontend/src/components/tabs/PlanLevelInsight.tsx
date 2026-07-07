@@ -14,7 +14,7 @@ import { useDataContext } from '@/contexts/DataContext'
 import type { FilterState } from '@/hooks/useFilters'
 import { transformStoresByPlanCategory } from '@/lib/filterHelpers'
 import { cn } from '@/lib/utils'
-import { fmtInr, fmtPct, plotlyInrTickVals } from '@/lib/formatting'
+import { fmtInr, fmtPct, plotlyInrTickVals, plotlyInrLogTickVals } from '@/lib/formatting'
 import { kpiContainer, kpiItem, panelSpring } from '@/lib/animations'
 import { PLOTLY_BASE, PT_AXIS } from '@/lib/plotlyTheme'
 import type { StoreRecord } from '@/lib/api'
@@ -38,6 +38,7 @@ interface StorePlanRow {
 
 export default function PlanLevelInsight({ filters }: { filters: FilterState }) {
   const { stores, months } = useDataContext()
+  const [logScale, setLogScale] = useState(true)
 
   // 1. Filter Data
   const targetStores = useMemo(() => {
@@ -313,12 +314,25 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
           className="lg:col-span-2 rounded-xl bg-white border border-gray-100 p-4 shadow-sm flex flex-col h-[380px]"
           {...panelSpring(0.1)}
         >
-          <div className="flex items-center gap-2 mb-2">
-            <div className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600"><MapPin className="h-4 w-4" /></div>
-            <div>
-              <h3 className="text-sm font-semibold text-gray-900">Regional Performance</h3>
-              <p className="text-[11px] text-gray-500">Plan sales across top states for {primaryMonth}</p>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600"><MapPin className="h-4 w-4" /></div>
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">Regional Performance</h3>
+                <p className="text-[11px] text-gray-500">Plan sales across top states for {primaryMonth}</p>
+              </div>
             </div>
+            <button
+              onClick={() => setLogScale(s => !s)}
+              className={cn(
+                'text-[11px] px-2.5 py-1 rounded-full border transition-colors whitespace-nowrap cursor-pointer',
+                logScale
+                  ? 'bg-violet-600 text-white border-violet-600'
+                  : 'bg-white text-gray-500 border-gray-200 hover:text-gray-700 hover:border-gray-300'
+              )}
+            >
+              Log Scale
+            </button>
           </div>
           <div className="flex-1 relative -mx-4 -mb-4">
             <Plot
@@ -363,7 +377,8 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
                 xaxis: { ...PT_AXIS, tickangle: -45 },
                 yaxis: {
                   ...PT_AXIS,
-                  ...plotlyInrTickVals(maxStateVal * 1.1)
+                  type: logScale ? 'log' as const : 'linear' as const,
+                  ...(logScale ? plotlyInrLogTickVals(maxStateVal) : plotlyInrTickVals(maxStateVal * 1.1))
                 },
                 legend: { orientation: 'h', y: 1.1, x: 0.5, xanchor: 'center' },
               }}
