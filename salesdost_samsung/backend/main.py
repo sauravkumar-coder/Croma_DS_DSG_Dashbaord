@@ -78,7 +78,7 @@ import tracker as trk
 
 logger = logging.getLogger(__name__)
 
-def _normalize_store_name(name: str) -> str:
+def _normalize_store_name(name: str, keep_locations: bool = False) -> str:
     name = str(name).lower()
     # Replace common synonyms
     name = name.replace('rr nagar', 'rajarajeshwari nagar')
@@ -94,9 +94,10 @@ def _normalize_store_name(name: str) -> str:
     name = re.sub(r'\s+branch$', '', name)
     
     # Remove city/state noise words to make matching location-agnostic
-    noise_words = ['bangalore', 'blr', 'mumbai', 'mum', 'delhi', 'pune', 'hyderabad', 'hyd', 'chennai', 'ts', 'ap', 'up', 'haryana', 'cassette', 'tv', 'trading']
-    for word in noise_words:
-        name = name.replace(word, '')
+    if not keep_locations:
+        noise_words = ['bangalore', 'blr', 'mumbai', 'mum', 'delhi', 'pune', 'hyderabad', 'hyd', 'chennai', 'ts', 'ap', 'up', 'haryana', 'cassette', 'tv', 'trading']
+        for word in noise_words:
+            name = name.replace(word, '')
         
     name = re.sub(r'[^a-z0-9]', '', name)
     return name
@@ -166,7 +167,7 @@ def get_samsung_targets(retailer: str) -> dict[str, float]:
                         except (ValueError, TypeError):
                             val = 0.0
                         if branch and val > 0:
-                            vs_targets[_normalize_store_name(branch)] = val
+                            vs_targets[_normalize_store_name(branch, keep_locations=True)] = val
 
             _samsung_targets_cache = {"croma": croma_targets, "vijaysales": vs_targets}
             _samsung_targets_mtime = mtime
@@ -675,7 +676,7 @@ async def get_dashboard_data(retailer: str = ""):
         if r_lower == "croma":
             match_stage = {"storeName": {"$regex": "croma", "$options": "i"}}
         elif r_lower == "vijaysales":
-            match_stage = {"storeName": {"$regex": "^vs\\b|\\bvijay\\b", "$options": "i"}}
+            match_stage = {"storeName": {"$regex": "^vs\\b|^vijay\\s*sales\\b", "$options": "i"}}
         elif r_lower == "reliance":
             match_stage = {"storeName": {"$regex": "reliance", "$options": "i"}}
         elif r_lower == "hotspot":
@@ -897,14 +898,17 @@ async def get_dashboard_data(retailer: str = ""):
                 db_target += t.get("targetRevenue", 0) or 0
 
         # Normalise store target matching (spreadsheet backup)
-        norm_name = _normalize_store_name(store_name)
+        norm_name = _normalize_store_name(store_name, keep_locations=(retailer == "vijaysales"))
         excel_target = samsung_targets.get(norm_name)
+        if excel_target is None and store_id:
+            excel_target = samsung_targets.get(_normalize_store_name(store_id, keep_locations=(retailer == "vijaysales")))
         if excel_target is None:
             # try substring match
-            for k, v in samsung_targets.items():
-                if k and (k in norm_name or norm_name in k):
-                    excel_target = v
-                    break
+            if norm_name and len(norm_name) >= 3:
+                for k, v in samsung_targets.items():
+                    if k and len(k) >= 3 and (k in norm_name or norm_name in k):
+                        excel_target = v
+                        break
 
         if has_db_target:
             # DB record exists — always use it (even when 0) to respect what was pushed
@@ -1213,13 +1217,16 @@ async def get_store_detail(store_id: str, retailer: str = ""):
             retailer_inferred = "vijaysales"
             
     samsung_targets = get_samsung_targets(retailer_inferred) if retailer_inferred else {}
-    norm_name = _normalize_store_name(store_name)
+    norm_name = _normalize_store_name(store_name, keep_locations=(retailer_inferred == "vijaysales"))
     excel_target = samsung_targets.get(norm_name)
+    if excel_target is None and store_id:
+        excel_target = samsung_targets.get(_normalize_store_name(store_id, keep_locations=(retailer_inferred == "vijaysales")))
     if excel_target is None:
-        for k, v in samsung_targets.items():
-            if k and (k in norm_name or norm_name in k):
-                excel_target = v
-                break
+        if norm_name and len(norm_name) >= 3:
+            for k, v in samsung_targets.items():
+                if k and len(k) >= 3 and (k in norm_name or norm_name in k):
+                    excel_target = v
+                    break
 
     if has_db_target:
         # DB record exists — always use it (even when 0) to respect what was pushed
