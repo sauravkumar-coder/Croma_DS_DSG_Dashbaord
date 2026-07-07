@@ -878,9 +878,13 @@ async def get_dashboard_data(retailer: str = ""):
                     monthly_targets[m_label] = monthly_targets.get(m_label, 0.0) + (t.get("targetRevenue", 0) or 0)
 
         # Prioritize database targets for the active target month/year
+        # has_db_target = True means a StoreTarget record exists in MongoDB for this month/year
+        # (even if targetRevenue=0). In that case we do NOT fall back to the Excel backup.
         db_target = 0
+        has_db_target = False
         for t in doc.get("targets", []):
             if t.get("month") == target_month_num and t.get("year") == target_year:
+                has_db_target = True
                 db_target += t.get("targetRevenue", 0) or 0
 
         # Normalise store target matching (spreadsheet backup)
@@ -893,7 +897,8 @@ async def get_dashboard_data(retailer: str = ""):
                     excel_target = v
                     break
 
-        if db_target > 0:
+        if has_db_target:
+            # DB record exists — always use it (even when 0) to respect what was pushed
             target_val = db_target
         elif excel_target is not None:
             target_val = excel_target
@@ -1171,9 +1176,13 @@ async def get_store_detail(store_id: str, retailer: str = ""):
                 monthly_targets[m_label] = monthly_targets.get(m_label, 0.0) + (t.get("targetRevenue", 0) or 0)
 
     # Prioritize database targets for the active target month/year
+    # has_db_target = True means a StoreTarget record exists in MongoDB for this month/year
+    # (even if targetRevenue=0). In that case we do NOT fall back to the Excel backup.
     db_target = 0
+    has_db_target = False
     for t in doc.get("targets", []):
         if t.get("month") == target_month_num and t.get("year") == target_year:
+            has_db_target = True
             db_target += t.get("targetRevenue", 0) or 0
 
     # Normalise store target matching (infer retailer if not specified)
@@ -1194,7 +1203,8 @@ async def get_store_detail(store_id: str, retailer: str = ""):
                 excel_target = v
                 break
 
-    if db_target > 0:
+    if has_db_target:
+        # DB record exists — always use it (even when 0) to respect what was pushed
         target_val = db_target
     elif excel_target is not None:
         target_val = excel_target
