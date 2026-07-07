@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react'
 import { Routes, Route, Link } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Database, ExternalLink, RotateCcw, Target, X, Filter, PieChart } from 'lucide-react'
+import { Database, ExternalLink, RotateCcw, Target, X, Filter, PieChart, ChevronDown } from 'lucide-react'
 import { useDataContext } from './contexts/DataContext'
 import { useRetailerContext } from './contexts/RetailerContext'
 import { useFilters, type FilterState } from './hooks/useFilters'
@@ -253,6 +253,113 @@ function TabPlaceholder({ label, filters }: { label: string; filters: FilterStat
   )
 }
 
+function GlobalNavDropdown({
+  activeTab,
+  onSelectTab,
+  accentFrom,
+  accentTo,
+}: {
+  activeTab: TabId
+  onSelectTab: (id: TabId) => void
+  accentFrom: string
+  accentTo: string
+}) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    const handleEscape = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('keydown', handleEscape)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [open])
+
+  const currentLabel = TABS.find(t => t.id === activeTab)?.label ?? 'Navigate'
+
+  return (
+    <div className="relative" ref={containerRef}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className={cn(
+          'inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-semibold border transition-colors',
+          open
+            ? 'bg-blue-50 text-blue-600 border-blue-200'
+            : 'bg-white text-gray-600 border-gray-200 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200',
+        )}
+      >
+        <PieChart className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline max-w-[10rem] truncate">{currentLabel}</span>
+        <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', open && 'rotate-180')} />
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -4, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -4, scale: 0.98 }}
+            transition={{ duration: 0.15, ease: 'easeOut' }}
+            role="menu"
+            className="absolute right-0 top-full mt-2 w-64 rounded-xl border border-gray-200 bg-white shadow-lg overflow-hidden z-50"
+          >
+            <p className="px-3.5 pt-2.5 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+              Dashboard
+            </p>
+            <div className="px-1.5 pb-1.5">
+              {TABS.map(tab => {
+                const isActive = tab.id === activeTab
+                return (
+                  <button
+                    key={tab.id}
+                    role="menuitem"
+                    onClick={() => { onSelectTab(tab.id); setOpen(false) }}
+                    className={cn(
+                      'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-left transition-colors',
+                      isActive ? 'font-semibold bg-blue-50' : 'text-gray-700 hover:bg-gray-50',
+                    )}
+                    style={isActive ? { color: accentFrom } : {}}
+                  >
+                    <span
+                      className="h-1.5 w-1.5 shrink-0 rounded-full"
+                      style={isActive ? { background: `linear-gradient(to right, ${accentFrom}, ${accentTo})` } : { background: 'transparent' }}
+                    />
+                    {tab.label}
+                  </button>
+                )
+              })}
+            </div>
+
+            <p className="px-3.5 pt-2 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-400 border-t border-gray-100">
+              Tools
+            </p>
+            <div className="px-1.5 pb-1.5">
+              <Link
+                to="/target-tracker"
+                role="menuitem"
+                onClick={() => setOpen(false)}
+                className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                <Target className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                Target Tracker
+                <ExternalLink className="h-3 w-3 text-gray-300 ml-auto shrink-0" />
+              </Link>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
 // ── Main App ──────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -394,6 +501,14 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
+            {/* Global Navigation */}
+            <GlobalNavDropdown
+              activeTab={activeTab}
+              onSelectTab={setActiveTab}
+              accentFrom={retailerCfg.brandFrom}
+              accentTo={retailerCfg.brandTo}
+            />
+
             {/* Retailer Toggle */}
             <RetailerToggle />
 
