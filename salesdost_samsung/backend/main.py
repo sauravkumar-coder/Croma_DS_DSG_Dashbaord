@@ -233,6 +233,11 @@ _in_memory_hotspot: list[dict] | None = None
 _hotspot_session_meta: dict[str, Any] | None = None
 _in_memory_hotspot_raw: bytes | None = None
 
+# Kore
+_in_memory_kore: list[dict] | None = None
+_kore_session_meta: dict[str, Any] | None = None
+_in_memory_kore_raw: bytes | None = None
+
 # Used only by the generic /api/upload → /api/data/{sheet} flow
 _uploaded_file: str | None = None
 
@@ -321,6 +326,19 @@ def _parse_bytes_as_hotspot(content: bytes) -> list[dict]:
         tmp_path = tmp.name
     try:
         return parse_hotspot_sales(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+
+def _parse_bytes_as_kore(content: bytes) -> list[dict]:
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        try:
+            return parse_hotspot_sales(tmp_path)
+        except Exception:
+            return parse_sales(tmp_path)
     finally:
         os.unlink(tmp_path)
 
@@ -613,6 +631,58 @@ def get_hotspot_meta():
     }
 
 
+# ── Kore upload ───────────────────────────────────────────────────────────────
+
+
+@app.post("/api/upload/sales/kore")
+async def upload_kore_sales(file: UploadFile = File(...), force: bool = False):
+    """Parse Kore XLSX and hold it in memory."""
+    global _in_memory_kore, _kore_session_meta, _in_memory_kore_raw
+    _validate_excel(file)
+    if not force and _in_memory_kore is not None:
+        return {"needs_confirm": True, "existing": _kore_session_meta}
+    content = await file.read()
+    try:
+        stores = _parse_bytes_as_kore(content)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Kore parse error: {exc}") from exc
+    _in_memory_kore = stores
+    _in_memory_kore_raw = content
+    _kore_session_meta = {
+        "filename":     file.filename or "kore_upload.xlsx",
+        "uploaded_at":  datetime.now().isoformat(timespec="seconds"),
+        "file_size_kb": round(len(content) / 1024, 1),
+        "record_count": len(stores),
+    }
+    months = _extract_months(stores)
+    return {"ok": True, "stores": len(stores), "months": months, "needs_confirm": False}
+
+
+@app.delete("/api/storage/sales/kore")
+def delete_kore_sales():
+    return {"ok": True, "message": "Disabled. Strict read-only mode active."}
+
+@app.get("/api/sales/meta/kore")
+def get_kore_meta():
+    if _in_memory_kore is None or _kore_session_meta is None:
+        return {"loaded": False}
+    months = _extract_months(_in_memory_kore)
+    total_revenue = sum(sum(s.get("monthly_sales", {}).values()) for s in _in_memory_kore)
+    return {
+        "loaded": True,
+        "filename":      _kore_session_meta.get("filename", "unknown"),
+        "uploaded_at":   _kore_session_meta.get("uploaded_at", ""),
+        "file_size_kb":  _kore_session_meta.get("file_size_kb", 0),
+        "store_count":   len(_in_memory_kore),
+        "record_count":  len(_in_memory_kore),
+        "date_from":     months[0] if months else None,
+        "date_to":       months[-1] if months else None,
+        "month_count":   len(months),
+        "total_revenue": total_revenue,
+        "is_demo":       False,
+    }
+
+
 @app.post("/api/upload/targets")
 async def upload_targets(file: UploadFile = File(...)):
     """Save targets XLSX (legacy endpoint; month inferred from filename)."""
@@ -681,6 +751,8 @@ async def get_dashboard_data(retailer: str = ""):
             match_stage = {"storeName": {"$regex": "reliance", "$options": "i"}}
         elif r_lower == "hotspot":
             match_stage = {"storeName": {"$regex": "hotspot", "$options": "i"}}
+        elif r_lower == "kore":
+            match_stage = {"storeName": {"$regex": "kore", "$options": "i"}}
         else:
             match_stage = {"storeName": {"$regex": retailer, "$options": "i"}}
     
@@ -1292,6 +1364,7 @@ def get_storage_status():
     base["vijaysales"] = {"loaded": True, "meta": {"filename": "mongodb_zoppertrack"}}
     base["reliance"]   = {"loaded": True, "meta": {"filename": "mongodb_zoppertrack"}}
     base["hotspot"]    = {"loaded": True, "meta": {"filename": "mongodb_zoppertrack"}}
+    base["kore"]       = {"loaded": True, "meta": {"filename": "mongodb_zoppertrack"}}
     return base
 
 

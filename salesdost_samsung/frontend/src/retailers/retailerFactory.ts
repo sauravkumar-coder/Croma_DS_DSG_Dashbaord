@@ -55,7 +55,20 @@ import {
   HOTSPOT_UPLOAD_HINT,
 } from './hotspot/constants'
 
-export type RetailerId = 'croma' | 'vijaysales' | 'reliance' | 'hotspot'
+import {
+  KORE_RETAILER_ID,
+  KORE_LABEL,
+  KORE_SHORT,
+  KORE_BRAND_FROM,
+  KORE_BRAND_TO,
+  KORE_TAGLINE,
+  KORE_SUB,
+  KORE_FOOTER,
+  KORE_UPLOAD_LABEL,
+  KORE_UPLOAD_HINT,
+} from './kore/constants'
+
+export type RetailerId = 'croma' | 'vijaysales' | 'reliance' | 'hotspot' | 'kore'
 
 export interface RetailerConfig {
   id:            RetailerId
@@ -139,6 +152,22 @@ const REGISTRY: Record<RetailerId, RetailerConfig> = {
     apiDeletePath: '/api/storage/sales/hotspot',
     apiMetaPath:   '/api/sales/meta/hotspot',
   },
+  kore: {
+    id:            KORE_RETAILER_ID as RetailerId,
+    label:         KORE_LABEL,
+    short:         KORE_SHORT,
+    brandFrom:     KORE_BRAND_FROM,
+    brandTo:       KORE_BRAND_TO,
+    tagline:       KORE_TAGLINE,
+    sub:           KORE_SUB,
+    footer:        KORE_FOOTER,
+    uploadLabel:   KORE_UPLOAD_LABEL,
+    uploadHint:    KORE_UPLOAD_HINT,
+    apiRetailerId: 'kore',
+    apiUploadPath: '/api/upload/sales/kore',
+    apiDeletePath: '/api/storage/sales/kore',
+    apiMetaPath:   '/api/sales/meta/kore',
+  },
 }
 
 export const RETAILER_IDS: RetailerId[] = [
@@ -146,6 +175,7 @@ export const RETAILER_IDS: RetailerId[] = [
   VS_RETAILER_ID as RetailerId,
   RELIANCE_RETAILER_ID as RetailerId,
   HOTSPOT_RETAILER_ID as RetailerId,
+  KORE_RETAILER_ID as RetailerId,
 ]
 export const DEFAULT_RETAILER: RetailerId = 'croma'
 
@@ -154,5 +184,5 @@ export function getRetailerConfig(id: RetailerId): RetailerConfig {
 }
 
 export function isValidRetailerId(id: string): id is RetailerId {
-  return id === 'croma' || id === 'vijaysales' || id === 'reliance' || id === 'hotspot'
+  return id === 'croma' || id === 'vijaysales' || id === 'reliance' || id === 'hotspot' || id === 'kore'
 }

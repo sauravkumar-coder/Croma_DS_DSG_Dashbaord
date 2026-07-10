@@ -281,7 +281,7 @@ export default function StateJourneyAnalysis({ filters }: Props) {
 
   const getStoreCity = (storeName?: string) => {
     if (!storeName) return 'Unknown'
-    const clean = storeName.replace(/^(croma|vijay sales|vs|reliance|hotspot)\s+/i, '')
+    const clean = storeName.replace(/^(croma|vijay sales|vs|reliance|hotspot|kore)\s+/i, '')
     const firstWord = clean.split(/\s+/)[0]
     return firstWord || 'Unknown'
   }
