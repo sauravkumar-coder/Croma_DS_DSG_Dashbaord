@@ -43,6 +43,7 @@ Generic (file-explorer, kept for compatibility):
 """
 
 import io
+import json
 import logging
 import os
 import re
@@ -277,6 +278,39 @@ def _extract_months(stores: list[dict]) -> list[str]:
     if not stores:
         return []
     return _sort_months(list(stores[0].get("monthly_sales", {}).keys()))
+
+
+def _dedupe_sales(sales: list[dict]) -> list[dict]:
+    """Collapse exact-duplicate SalesRecord docs before revenue is summed.
+
+    The Store->SalesRecord $lookup matches storeId against both its native type
+    and its stringified form (to tolerate inconsistent typing upstream). If the
+    same store/year/plan/subcategory revenue was ever ingested twice under two
+    separate SalesRecord documents, both are legitimately matched by the lookup
+    and would otherwise be added together, inflating the store's total revenue.
+    Two records only collapse here if their revenue-bearing content is
+    byte-identical — anything with even slightly different numbers is treated
+    as a distinct, real record and kept.
+    """
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for sale in sales:
+        signature = json.dumps(
+            {
+                "year": sale.get("year"),
+                "planType": (sale.get("planType") or "").strip().lower(),
+                "productSubCategoryId": sale.get("productSubCategoryId"),
+                "monthlySales": sale.get("monthlySales"),
+                "dailySales": sale.get("dailySales"),
+            },
+            sort_keys=True,
+            default=str,
+        )
+        if signature in seen:
+            continue
+        seen.add(signature)
+        deduped.append(sale)
+    return deduped
 
 
 def _parse_bytes_as_sales(content: bytes) -> list[dict]:
@@ -864,7 +898,7 @@ async def get_dashboard_data(retailer: str = ""):
         monthly_attach = {}
         subcat_revenue = {}
 
-        for sale in doc.get("sales", []):
+        for sale in _dedupe_sales(doc.get("sales", [])):
             year = sale.get("year")
             plan_type = sale.get("planType") or ""
             plan_type_lower = plan_type.strip().lower()
@@ -1161,7 +1195,7 @@ async def get_store_detail(store_id: str, retailer: str = ""):
     monthly_attach = {}
     subcat_revenue = {}
 
-    for sale in doc.get("sales", []):
+    for sale in _dedupe_sales(doc.get("sales", [])):
         year = sale.get("year")
         plan_type = sale.get("planType") or ""
         plan_type_lower = plan_type.strip().lower()
