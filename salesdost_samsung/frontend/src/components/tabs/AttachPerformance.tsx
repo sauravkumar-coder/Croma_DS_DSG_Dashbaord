@@ -101,10 +101,16 @@ export default function AttachPerformance({ filters }: { filters: FilterState })
   const kpis = useMemo(() => {
     const totalPlans   = storeRows.reduce((a, r) => a + r.plans, 0)
     const totalDevices = storeRows.reduce((a, r) => a + r.devices, 0)
-    const overallAttach = totalDevices > 0 ? totalPlans / totalDevices : 0
+    // Attach % is only meaningful over stores that actually reported device
+    // volume this month — stores with plans but no device count would otherwise
+    // add "phantom" numerator with zero matching denominator, inflating the ratio.
+    const reportingRows  = storeRows.filter(r => r.devices > 0)
+    const attachPlans    = reportingRows.reduce((a, r) => a + r.plans, 0)
+    const attachDevices  = reportingRows.reduce((a, r) => a + r.devices, 0)
+    const overallAttach  = attachDevices > 0 ? attachPlans / attachDevices : 0
     const goodCount = storeRows.filter(r => r.attach >= ATTACH_GOOD).length
     const poorCount = storeRows.filter(r => r.attach < ATTACH_MED && r.devices > 0).length
-    return { totalPlans, totalDevices, overallAttach, goodCount, poorCount, total: storeRows.length }
+    return { totalPlans, totalDevices, overallAttach, goodCount, poorCount, total: storeRows.length, attachStoreCount: reportingRows.length }
   }, [storeRows])
 
   // ── MoM trend data ─────────────────────────────────────────────────────────
@@ -112,7 +118,11 @@ export default function AttachPerformance({ filters }: { filters: FilterState })
     return trendMonths.map(m => {
       const plans   = filteredStores.reduce((a, st) => a + (st.monthly_plans_count?.[m] || 0), 0)
       const devices = filteredStores.reduce((a, st) => a + (st.monthly_main_qty?.[m]   || 0), 0)
-      return { month: m, attach: devices > 0 ? plans / devices : 0, plans, devices }
+      // Same reporting-store gate as the KPI card — see note there.
+      const reporting = filteredStores.filter(st => (st.monthly_main_qty?.[m] || 0) > 0)
+      const attachPlans   = reporting.reduce((a, st) => a + (st.monthly_plans_count?.[m] || 0), 0)
+      const attachDevices = reporting.reduce((a, st) => a + (st.monthly_main_qty?.[m]   || 0), 0)
+      return { month: m, attach: attachDevices > 0 ? attachPlans / attachDevices : 0, plans, devices }
     })
   }, [filteredStores, trendMonths])
 
@@ -125,17 +135,22 @@ export default function AttachPerformance({ filters }: { filters: FilterState })
 
   // ── State-level aggregates ─────────────────────────────────────────────────
   const stateAggs = useMemo(() => {
-    const map: Record<string, { plans: number; devices: number }> = {}
+    const map: Record<string, { plans: number; devices: number; attachPlans: number; attachDevices: number }> = {}
     for (const r of storeRows) {
       const s = r.store.state || 'Unknown'
-      if (!map[s]) map[s] = { plans: 0, devices: 0 }
+      if (!map[s]) map[s] = { plans: 0, devices: 0, attachPlans: 0, attachDevices: 0 }
       map[s].plans   += r.plans
       map[s].devices += r.devices
+      // Same reporting-store gate as the KPI card — see note there.
+      if (r.devices > 0) {
+        map[s].attachPlans   += r.plans
+        map[s].attachDevices += r.devices
+      }
     }
     return Object.entries(map)
       .map(([state, d]) => ({
         state,
-        attach: d.devices > 0 ? d.plans / d.devices : 0,
+        attach: d.attachDevices > 0 ? d.attachPlans / d.attachDevices : 0,
         plans: d.plans,
         devices: d.devices,
       }))
@@ -245,9 +260,14 @@ export default function AttachPerformance({ filters }: { filters: FilterState })
             <p className="text-[10px] font-medium uppercase tracking-widest text-gray-500">Overall Attach %</p>
           </div>
           <p className={cn('text-2xl font-bold tabular-nums mt-1', kpis.overallAttach >= ATTACH_GOOD ? 'text-emerald-600' : kpis.overallAttach >= ATTACH_MED ? 'text-amber-600' : 'text-red-600')}>
-            {(kpis.overallAttach * 100).toFixed(1)}%
+            {kpis.attachStoreCount > 0 ? `${(kpis.overallAttach * 100).toFixed(1)}%` : '—'}
           </p>
           <p className="text-[10px] text-gray-400">{primaryMonth}</p>
+          {kpis.attachStoreCount < kpis.total && (
+            <p className="text-[9px] text-amber-500">
+              {kpis.attachStoreCount} of {kpis.total} stores reported device counts
+            </p>
+          )}
         </motion.div>
 
         {/* Plans Sold */}
