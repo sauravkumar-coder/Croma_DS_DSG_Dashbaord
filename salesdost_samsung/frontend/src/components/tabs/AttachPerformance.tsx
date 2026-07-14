@@ -18,7 +18,7 @@ import { useDataContext } from '@/contexts/DataContext'
 import { useRetailerContext } from '@/contexts/RetailerContext'
 import type { FilterState } from '@/hooks/useFilters'
 import { cn } from '@/lib/utils'
-import { fmtPct, plotlyInrTickVals } from '@/lib/formatting'
+import { fmtPct, plotlyInrTickVals, plotlyCountTickVals } from '@/lib/formatting'
 import { kpiContainer, kpiItem, panelSpring } from '@/lib/animations'
 import { PLOTLY_BASE, PT_AXIS, PT } from '@/lib/plotlyTheme'
 import { getAttachMeta, uploadAttachFile, type AttachFileMeta, type StoreRecord } from '@/lib/api'
@@ -457,7 +457,16 @@ export default function AttachPerformance({ filters }: { filters: FilterState })
                 x: trendData.map(d => d.month),
                 y: trendData.map(d => d.plans),
                 marker: { color: '#818cf8', opacity: 0.85 },
-                hovertemplate: '<b>%{x}</b><br>Plans: %{y}<extra></extra>',
+                customdata: trendData.map(d => [
+                  d.plans.toLocaleString('en-IN'),
+                  d.devices.toLocaleString('en-IN'),
+                  (d.attach * 100).toFixed(1),
+                ]),
+                hovertemplate:
+                  '<b>%{x}</b><br>' +
+                  'Plans Sold: %{customdata[0]} units<br>' +
+                  'Devices Sold: %{customdata[1]} units<br>' +
+                  'Attach Rate: %{customdata[2]}%<extra></extra>',
                 yaxis: 'y',
               },
               {
@@ -468,7 +477,16 @@ export default function AttachPerformance({ filters }: { filters: FilterState })
                 y: trendData.map(d => +(d.attach * 100).toFixed(1)),
                 line: { color: '#10b981', width: 2.5 },
                 marker: { size: 6, color: '#10b981' },
-                hovertemplate: '<b>%{x}</b><br>Attach: %{y:.1f}%<extra></extra>',
+                customdata: trendData.map(d => [
+                  d.plans.toLocaleString('en-IN'),
+                  d.devices.toLocaleString('en-IN'),
+                  (d.attach * 100).toFixed(1),
+                ]),
+                hovertemplate:
+                  '<b>%{x}</b><br>' +
+                  'Plans Sold: %{customdata[0]} units<br>' +
+                  'Devices Sold: %{customdata[1]} units<br>' +
+                  'Attach Rate: %{customdata[2]}%<extra></extra>',
                 yaxis: 'y2',
               },
             ]}
@@ -477,7 +495,7 @@ export default function AttachPerformance({ filters }: { filters: FilterState })
               height: 280,
               margin: { l: 50, r: 55, t: 8, b: 50 },
               xaxis: { ...PT_AXIS },
-              yaxis:  { ...PT_AXIS, title: { text: 'Plan Units' }, ...plotlyInrTickVals(Math.max(1, ...trendData.map(d => d.plans)) * 1.15, 5) },
+              yaxis:  { ...PT_AXIS, title: { text: 'Plan Units' }, ...plotlyCountTickVals(Math.max(1, ...trendData.map(d => d.plans)) * 1.15, 5) },
               yaxis2: { ...PT_AXIS, title: { text: 'Attach %' }, overlaying: 'y' as const, side: 'right' as const, ticksuffix: '%', showgrid: false },
               legend: { bgcolor: 'rgba(0,0,0,0)', font: { color: PT.font, size: 10 }, orientation: 'h' as const, y: -0.22 },
             }}

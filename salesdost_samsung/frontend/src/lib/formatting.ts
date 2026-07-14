@@ -66,6 +66,40 @@ export function plotlyInrTickVals(maxVal: number, count = 5): { tickvals: number
 }
 
 /** 
+ * Generate Plotly tickvals and ticktext for count/unit values (without INR currency symbol).
+ */
+export function plotlyCountTickVals(maxVal: number, count = 5): { tickvals: number[], ticktext: string[] } {
+  if (!maxVal || isNaN(maxVal) || maxVal <= 0) {
+    return {
+      tickvals: [0],
+      ticktext: ['0']
+    }
+  }
+
+  const roughStep = maxVal / count
+  const magnitude = Math.pow(10, Math.floor(Math.log10(roughStep)))
+  let step = Math.ceil(roughStep / magnitude) * magnitude
+  
+  const normalizedStep = step / magnitude
+  if (normalizedStep > 5) step = 10 * magnitude
+  else if (normalizedStep > 2) step = 5 * magnitude
+  else if (normalizedStep > 1) step = 2 * magnitude
+
+  const tickvals: number[] = []
+  const ticktext: string[] = []
+  
+  for (let i = 0; i <= Math.ceil(maxVal / step); i++) {
+    const val = i * step
+    tickvals.push(val)
+    if (val >= 1e5) ticktext.push(`${(val / 1e5).toFixed(1)}L`)
+    else if (val >= 1e3) ticktext.push(`${(val / 1e3).toFixed(0)}K`)
+    else ticktext.push(val.toString())
+  }
+  
+  return { tickvals, ticktext }
+}
+
+/** 
  * Generate Plotly tickvals and ticktext for a log scale using INR units.
  */
 export function plotlyInrLogTickVals(maxVal: number): { tickvals: number[], ticktext: string[] } {
