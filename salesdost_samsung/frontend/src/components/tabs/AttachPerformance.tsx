@@ -527,7 +527,7 @@ export default function AttachPerformance({ filters }: { filters: FilterState })
             layout={{
               ...PLOTLY_BASE,
               height: Math.max(280, stateAggs.length * 28 + 60),
-              margin: { l: 110, r: 20, t: 8, b: 40 },
+              margin: { l: 110, r: 20, t: 25, b: 40 },
               xaxis: { ...PT_AXIS, ticksuffix: '%', range: [0, Math.max(30, ...stateAggs.map(s => s.attach * 100)) * 1.15] },
               yaxis: { ...PT_AXIS },
               shapes: [{
