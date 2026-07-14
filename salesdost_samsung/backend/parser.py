@@ -83,18 +83,40 @@ _MONTH_FULL_TO_ABBR: dict[str, str] = {
 
 
 def detect_month_from_filename(filename: str) -> str | None:
-    """Return 'MMM-YYYY' if the filename contains a recognisable month + 4-digit year.
-
-    Example: 'OW Budget June 2026 store wise.xlsx' → 'Jun-2026'
+    """Return 'MMM-YYYY' if the filename contains a recognisable month + year.
+    Defaults to 2026 if year is not specified.
     """
     lower = filename.lower()
+    
+    # 1. Detect year (4-digit preferred, then 2-digit, default to 2026)
+    year = "2026"
     year_match = re.search(r"20\d{2}", lower)
-    if not year_match:
-        return None
-    year = year_match.group()
+    if year_match:
+        year = year_match.group()
+    else:
+        # Check if there is a 2-digit year (like '26' or '25')
+        two_digit_match = re.search(r"\b(24|25|26|27)\b", lower)
+        if two_digit_match:
+            year = f"20{two_digit_match.group()}"
+            
+    # 2. Detect month (full name first)
     for full, abbr in _MONTH_FULL_TO_ABBR.items():
         if full in lower:
             return f"{abbr}-{year}"
+            
+    # Detect month (abbreviation second)
+    for abbr in _MONTH_FULL_TO_ABBR.values():
+        abbr_lower = abbr.lower()
+        if re.search(rf"\b{abbr_lower}\b", lower) or abbr_lower in lower:
+            return f"{abbr}-{year}"
+            
+    # 3. Detect month by number (e.g. 07 or 7) if no month name found
+    num_match = re.search(r"(?:^|[^0-9])(0?[1-9]|1[0-2])(?:[^0-9]|$)", lower)
+    if num_match:
+        m_idx = int(num_match.group(1))
+        abbr_list = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        return f"{abbr_list[m_idx - 1]}-{year}"
+        
     return None
 
 
