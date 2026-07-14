@@ -85,6 +85,7 @@ export interface RetailerConfig {
   apiUploadPath: string        // POST /api/upload/sales/…
   apiDeletePath: string        // DELETE /api/storage/sales/…
   apiMetaPath:   string        // GET /api/sales/meta/…
+  hasAttachPerformance: boolean // whether the Attach Performance tab applies to this retailer
 }
 
 const REGISTRY: Record<RetailerId, RetailerConfig> = {
@@ -103,6 +104,7 @@ const REGISTRY: Record<RetailerId, RetailerConfig> = {
     apiUploadPath: '/api/upload/sales/croma',
     apiDeletePath: '/api/storage/sales/croma',
     apiMetaPath:   '/api/sales/meta/croma',
+    hasAttachPerformance: true,
   },
   vijaysales: {
     id:            VS_RETAILER_ID as RetailerId,
@@ -119,6 +121,7 @@ const REGISTRY: Record<RetailerId, RetailerConfig> = {
     apiUploadPath: '/api/upload/sales/vijaysales',
     apiDeletePath: '/api/storage/sales/vijaysales',
     apiMetaPath:   '/api/sales/meta/vijaysales',
+    hasAttachPerformance: true,
   },
   reliance: {
     id:            RELIANCE_RETAILER_ID as RetailerId,
@@ -135,6 +138,7 @@ const REGISTRY: Record<RetailerId, RetailerConfig> = {
     apiUploadPath: '/api/upload/sales/reliance',
     apiDeletePath: '/api/storage/sales/reliance',
     apiMetaPath:   '/api/sales/meta/reliance',
+    hasAttachPerformance: false,
   },
   hotspot: {
     id:            HOTSPOT_RETAILER_ID as RetailerId,
@@ -151,6 +155,7 @@ const REGISTRY: Record<RetailerId, RetailerConfig> = {
     apiUploadPath: '/api/upload/sales/hotspot',
     apiDeletePath: '/api/storage/sales/hotspot',
     apiMetaPath:   '/api/sales/meta/hotspot',
+    hasAttachPerformance: false,
   },
   kore: {
     id:            KORE_RETAILER_ID as RetailerId,
@@ -167,6 +172,7 @@ const REGISTRY: Record<RetailerId, RetailerConfig> = {
     apiUploadPath: '/api/upload/sales/kore',
     apiDeletePath: '/api/storage/sales/kore',
     apiMetaPath:   '/api/sales/meta/kore',
+    hasAttachPerformance: false,
   },
 }
 

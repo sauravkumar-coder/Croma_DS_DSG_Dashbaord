@@ -50,6 +50,7 @@ SALES_DIR    = os.path.join(DATA_DIR, "sales")
 MONTHLY_DIR  = os.path.join(SALES_DIR, "monthly")
 METADATA_DIR = os.path.join(DATA_DIR, "metadata")
 CACHE_DIR    = os.path.join(DATA_DIR, "cache")
+ATTACH_DIR   = os.path.join(DATA_DIR, "attach")
 
 TARGET_REGISTRY = os.path.join(METADATA_DIR, "target_registry.json")
 
@@ -69,7 +70,7 @@ _MONTH_LABEL_RE = re.compile(
 
 
 def _ensure_dirs() -> None:
-    for d in [TARGETS_DIR, MONTHLY_DIR, METADATA_DIR, CACHE_DIR]:
+    for d in [TARGETS_DIR, MONTHLY_DIR, METADATA_DIR, CACHE_DIR, ATTACH_DIR]:
         os.makedirs(d, exist_ok=True)
 
 
@@ -417,3 +418,86 @@ def storage_status() -> dict[str, Any]:
         "target_files":        list_target_files(),
         "tracker_sales":       list_tracker_sales(),
     }
+
+
+# ── Attach % file API (Croma / Vijay Sales monthly reconciliation) ─────────────
+#
+# One file per (retailer, month) — the authoritative attach % report, used to
+# derive device counts since SalesRecord's own device data is unreliable.
+
+
+def _attach_retailer_dir(retailer: str) -> str:
+    return os.path.join(ATTACH_DIR, retailer)
+
+
+def _attach_filename(month_label: str) -> str:
+    """'Jul-2026' → '2026-07_attach.xlsx'"""
+    parts = month_label.strip().split("-")
+    if len(parts) == 2:
+        name, year = parts
+        idx = _MONTH_IDX.get(name.lower(), 0)
+        return f"{year}-{idx:02d}_attach.xlsx"
+    return f"{month_label}_attach.xlsx"
+
+
+def _attach_filename_to_label(filename: str) -> str | None:
+    """'2026-07_attach.xlsx' → 'Jul-2026'"""
+    stem = filename.replace("_attach.xlsx", "")
+    try:
+        year_str, mon_str = stem.split("-")
+        mon_idx = int(mon_str)
+        return f"{_IDX_MONTH[mon_idx]}-{year_str}"
+    except Exception:
+        return None
+
+
+def attach_filepath(retailer: str, month_label: str) -> str:
+    return os.path.join(_attach_retailer_dir(retailer), _attach_filename(month_label))
+
+
+def attach_file_exists(retailer: str, month_label: str) -> bool:
+    return file_exists(attach_filepath(retailer, month_label))
+
+
+def save_attach_file(retailer: str, content: bytes, month_label: str) -> dict[str, Any]:
+    path = attach_filepath(retailer, month_label)
+    save_file(path, content)
+    return {
+        "retailer":     retailer,
+        "month":        month_label,
+        "filename":     os.path.basename(path),
+        "file_size_kb": _size_kb(path),
+        "uploaded_at":  _mtime(path),
+    }
+
+
+def load_attach_file(retailer: str, month_label: str) -> bytes | None:
+    return load_file(attach_filepath(retailer, month_label))
+
+
+def delete_attach_file(retailer: str, month_label: str) -> None:
+    delete_file(attach_filepath(retailer, month_label))
+
+
+def list_attach_files(retailer: str) -> list[dict[str, Any]]:
+    folder = _attach_retailer_dir(retailer)
+    results = []
+    for fname in list_files(folder, "_attach.xlsx"):
+        label = _attach_filename_to_label(fname)
+        if label is None:
+            continue
+        path = os.path.join(folder, fname)
+        results.append({
+            "retailer":     retailer,
+            "month":        label,
+            "filename":     fname,
+            "file_size_kb": _size_kb(path),
+            "uploaded_at":  _mtime(path),
+        })
+    return sorted(results, key=lambda x: _label_sort_key(x.get("month", "")), reverse=True)
+
+
+def get_month_attach(retailer: str, month_label: str) -> str | None:
+    """Return path to the attach file for (retailer, month), or None."""
+    path = attach_filepath(retailer, month_label)
+    return path if file_exists(path) else None

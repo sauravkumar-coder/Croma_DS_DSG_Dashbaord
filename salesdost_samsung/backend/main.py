@@ -72,6 +72,7 @@ from parser import (
     parse_reliance_sales,
     parse_hotspot_sales,
     parse_targets,
+    parse_attach_file,
     validate_store_match,
 )
 import storage as st
@@ -102,6 +103,71 @@ def _normalize_store_name(name: str, keep_locations: bool = False) -> str:
         
     name = re.sub(r'[^a-z0-9]', '', name)
     return name
+
+_ATTACH_RETAILERS = {"croma", "vijaysales"}
+_CROMA_STORE_CODE_RE = re.compile(r'-\s*(A\d+)\s*$', re.IGNORECASE)
+_attach_data_cache: dict[str, dict] = {}
+
+
+def _get_attach_lookup(retailer: str) -> dict[str, tuple[dict[str, float], dict[str, float]]]:
+    """Load & cache uploaded attach % files for a retailer.
+
+    Returns {month_label: (by_code, by_name)} where by_code/by_name map a
+    normalized store key to attach_pct (0-1). Cache is invalidated whenever
+    the set of uploaded files (or their upload timestamps) changes.
+    """
+    if retailer not in _ATTACH_RETAILERS:
+        return {}
+    files = st.list_attach_files(retailer)
+    cache_key = tuple(sorted((f["month"], f["uploaded_at"]) for f in files))
+    cached = _attach_data_cache.get(retailer)
+    if cached and cached.get("cache_key") == cache_key:
+        return cached["months"]
+
+    months: dict[str, tuple[dict[str, float], dict[str, float]]] = {}
+    for f in files:
+        month_label = f["month"]
+        path = st.get_month_attach(retailer, month_label)
+        if not path:
+            continue
+        try:
+            rows = parse_attach_file(path)
+        except Exception:
+            logger.exception("Failed to parse attach file for %s %s", retailer, month_label)
+            continue
+        by_code: dict[str, float] = {}
+        by_name: dict[str, float] = {}
+        for r in rows:
+            if r.get("store_code"):
+                by_code[str(r["store_code"]).strip().lower()] = r["attach_pct"]
+            if r.get("store_name"):
+                by_name[_normalize_store_name(r["store_name"], keep_locations=True)] = r["attach_pct"]
+        months[month_label] = (by_code, by_name)
+
+    _attach_data_cache[retailer] = {"cache_key": cache_key, "months": months}
+    return months
+
+
+def _match_attach_pct(store_name: str, by_code: dict[str, float], by_name: dict[str, float]) -> float | None:
+    """Match a Store doc's name against an attach file's rows.
+
+    Croma store names embed the attach file's StoreCode as a suffix
+    (e.g. "Croma-Agra-Church Road- A612" -> "A612"), so that's tried first
+    since it's an exact match; Vijay Sales has no such code, so normalized
+    name matching (same scheme as target-file matching) is the fallback.
+    """
+    m = _CROMA_STORE_CODE_RE.search(store_name or "")
+    if m and m.group(1).lower() in by_code:
+        return by_code[m.group(1).lower()]
+    norm = _normalize_store_name(store_name or "", keep_locations=True)
+    if norm in by_name:
+        return by_name[norm]
+    if norm and len(norm) >= 4:
+        for key, pct in by_name.items():
+            if key and len(key) >= 4 and (key in norm or norm in key):
+                return pct
+    return None
+
 
 _samsung_targets_cache = None
 _samsung_targets_mtime = 0
@@ -739,6 +805,56 @@ async def upload_targets(file: UploadFile = File(...)):
     return {"ok": True, "stores": len(targets), "target_month": target_month}
 
 
+# ── Attach % file upload (Croma / Vijay Sales only) ───────────────────────────
+#
+# SalesRecord's own device counts are unreliable (see get_dashboard_data), so
+# the Attach Performance tab derives devices from this separately-uploaded,
+# manually-reconciled monthly attach % report instead.
+
+_ATTACH_RETAILERS = {"croma", "vijaysales"}
+
+
+@app.post("/api/upload/attach/{retailer}")
+async def upload_attach_file(retailer: str, file: UploadFile = File(...), month: str = ""):
+    if retailer not in _ATTACH_RETAILERS:
+        raise HTTPException(status_code=400, detail="Attach % upload is only supported for croma and vijaysales.")
+    _validate_excel(file)
+    content = await file.read()
+
+    month_label = month.strip() or detect_month_from_filename(file.filename or "")
+    if not month_label:
+        raise HTTPException(status_code=400, detail="Could not detect month from filename; pass ?month=Jul-2026.")
+
+    meta = st.save_attach_file(retailer, content, month_label)
+
+    attach_path = st.get_month_attach(retailer, month_label)
+    try:
+        rows = parse_attach_file(attach_path)  # type: ignore[arg-type]
+    except Exception as exc:
+        st.delete_attach_file(retailer, month_label)
+        raise HTTPException(status_code=422, detail=f"Attach file parse error: {exc}") from exc
+    if not rows:
+        st.delete_attach_file(retailer, month_label)
+        raise HTTPException(status_code=422, detail="No attach % rows could be parsed from this file.")
+
+    return {"ok": True, "retailer": retailer, "month": month_label, "rows": len(rows), **meta}
+
+
+@app.get("/api/attach/meta/{retailer}")
+def get_attach_meta(retailer: str):
+    if retailer not in _ATTACH_RETAILERS:
+        return {"files": []}
+    return {"files": st.list_attach_files(retailer)}
+
+
+@app.delete("/api/storage/attach/{retailer}/{month}")
+def delete_attach(retailer: str, month: str):
+    if retailer not in _ATTACH_RETAILERS:
+        raise HTTPException(status_code=400, detail="Attach % storage is only supported for croma and vijaysales.")
+    st.delete_attach_file(retailer, month)
+    return {"ok": True}
+
+
 # ── Dashboard data ────────────────────────────────────────────────────────────
 
 
@@ -897,12 +1013,20 @@ async def get_dashboard_data(retailer: str = ""):
         monthly_main = {}
         monthly_attach = {}
         subcat_revenue = {}
+        # Plan counts split by source: SalesRecord carries both the real
+        # per-plan-type transactional records AND, for Croma/Vijay Sales, a
+        # redundant "planType: NA" monthly summary record that duplicates the
+        # same activity. Kept separate so the attach-file override below can
+        # use the de-duplicated count instead of double-summing both.
+        monthly_plans_granular = {}
+        monthly_plans_na = {}
 
         for sale in _dedupe_sales(doc.get("sales", [])):
             year = sale.get("year")
             plan_type = sale.get("planType") or ""
             plan_type_lower = plan_type.strip().lower()
-            
+            is_na_summary = plan_type_lower == "na"
+
             is_ds = plan_type_lower in ["sp", "device secure", "ds"]
             is_dsg = plan_type_lower in ["adld", "combo", "ew", "device secure gold", "dsg"]
             
@@ -947,6 +1071,10 @@ async def get_dashboard_data(retailer: str = ""):
                     monthly_sales[m] = monthly_sales.get(m, 0) + rev_val
                     monthly_plans[m] = monthly_plans.get(m, 0) + int(m_data.get("planSales", 0) or 0)
                     plans_val = int(m_data.get("planSales", 0) or 0)
+                    if is_na_summary:
+                        monthly_plans_na[m] = monthly_plans_na.get(m, 0) + plans_val
+                    else:
+                        monthly_plans_granular[m] = monthly_plans_granular.get(m, 0) + plans_val
                     if is_sp:
                         monthly_plans_sp[m] = monthly_plans_sp.get(m, 0) + plans_val
                     if is_adld:
@@ -981,6 +1109,21 @@ async def get_dashboard_data(retailer: str = ""):
                 monthly_attach[m] = round(plans / devices, 4)
             else:
                 monthly_attach[m] = 0.0
+
+        # Override with the reconciled attach % file where one has been uploaded
+        # for this retailer/month — SalesRecord's own device counts are missing
+        # for most stores/months, so devices are derived as plans ÷ attach_pct
+        # using the de-duplicated (granular-preferred) plan count instead.
+        if retailer.lower() in _ATTACH_RETAILERS:
+            for m_label, (by_code, by_name) in _get_attach_lookup(retailer.lower()).items():
+                pct = _match_attach_pct(store_name, by_code, by_name)
+                if pct is None:
+                    continue
+                deduped_plans = monthly_plans_granular.get(m_label, 0) or monthly_plans_na.get(m_label, 0)
+                monthly_plans[m_label] = deduped_plans
+                monthly_attach[m_label] = round(pct, 4)
+                monthly_main[m_label] = round(deduped_plans / pct) if pct > 0 else monthly_main.get(m_label, 0)
+                months_set.add(m_label)
 
         # Gather targets for all months dynamically from database StoreTarget lookup
         monthly_targets = {}
@@ -1194,23 +1337,27 @@ async def get_store_detail(store_id: str, retailer: str = ""):
     monthly_main = {}
     monthly_attach = {}
     subcat_revenue = {}
+    # See the matching comment in get_dashboard_data.
+    monthly_plans_granular = {}
+    monthly_plans_na = {}
 
     for sale in _dedupe_sales(doc.get("sales", [])):
         year = sale.get("year")
         plan_type = sale.get("planType") or ""
         plan_type_lower = plan_type.strip().lower()
-        
+        is_na_summary = plan_type_lower == "na"
+
         is_ds = plan_type_lower in ["sp", "device secure", "ds"]
         is_dsg = plan_type_lower in ["adld", "combo", "ew", "device secure gold", "dsg"]
-        
+
         is_sp = plan_type_lower in ["sp", "device secure", "ds"]
         is_adld = plan_type_lower in ["adld", "device secure gold", "dsg"]
         is_combo = plan_type_lower in ["combo"]
         is_ew = plan_type_lower in ["ew"]
-        
+
         subcat_id = sale.get("productSubCategoryId")
         subcat_name = psc_names.get(subcat_id) if subcat_id else None
-        
+
         monthly = sale.get("monthlySales", [])
         if (not monthly or len(monthly) == 0) and "dailySales" in sale:
             daily = sale.get("dailySales", {})
@@ -1237,12 +1384,16 @@ async def get_store_detail(store_id: str, retailer: str = ""):
                 m_abbr = _MONTH_MAP.get(int(month_num))
                 if not m_abbr: continue
                 m = f"{m_abbr}-{year}"
-                
+
                 rev_val = float(m_data.get("revenue", 0) or 0)
-                
+
                 monthly_sales[m] = monthly_sales.get(m, 0) + rev_val
                 monthly_plans[m] = monthly_plans.get(m, 0) + int(m_data.get("planSales", 0) or 0)
                 plans_val = int(m_data.get("planSales", 0) or 0)
+                if is_na_summary:
+                    monthly_plans_na[m] = monthly_plans_na.get(m, 0) + plans_val
+                else:
+                    monthly_plans_granular[m] = monthly_plans_granular.get(m, 0) + plans_val
                 if is_sp:
                     monthly_plans_sp[m] = monthly_plans_sp.get(m, 0) + plans_val
                 if is_adld:
@@ -1277,6 +1428,17 @@ async def get_store_detail(store_id: str, retailer: str = ""):
             monthly_attach[m] = round(plans / devices, 4)
         else:
             monthly_attach[m] = 0.0
+
+    # See the matching override in get_dashboard_data.
+    if retailer.lower() in _ATTACH_RETAILERS:
+        for m_label, (by_code, by_name) in _get_attach_lookup(retailer.lower()).items():
+            pct = _match_attach_pct(store_name, by_code, by_name)
+            if pct is None:
+                continue
+            deduped_plans = monthly_plans_granular.get(m_label, 0) or monthly_plans_na.get(m_label, 0)
+            monthly_plans[m_label] = deduped_plans
+            monthly_attach[m_label] = round(pct, 4)
+            monthly_main[m_label] = round(deduped_plans / pct) if pct > 0 else monthly_main.get(m_label, 0)
 
     # Determine target month dynamically from StoreTarget
     target_month_num = 6

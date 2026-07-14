@@ -845,6 +845,8 @@ def _parse_attach_flat(filepath: str, sheet_name: str) -> list[dict[str, Any]] |
             continue
         try:
             pct = float(r[attach_col])
+            if pct > 1.0:
+                pct /= 100.0
         except (TypeError, ValueError):
             continue
         name = r[name_col] if name_col is not None else None
@@ -885,6 +887,8 @@ def _parse_attach_grouped(filepath: str, sheet_name: str) -> list[dict[str, Any]
             continue
         try:
             pct = float(r[samsung_col])
+            if pct > 1.0:
+                pct /= 100.0
         except (TypeError, ValueError):
             continue
         rows.append({"store_code": None, "store_name": branch_s, "attach_pct": pct})

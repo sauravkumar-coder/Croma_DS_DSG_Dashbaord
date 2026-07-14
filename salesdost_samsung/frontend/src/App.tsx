@@ -309,14 +309,17 @@ function GlobalNavDropdown({
   onSelectTab,
   accentFrom,
   accentTo,
+  hasAttachPerformance,
 }: {
   activeTab: TabId
   onSelectTab: (id: TabId) => void
   accentFrom: string
   accentTo: string
+  hasAttachPerformance: boolean
 }) {
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
+  const visibleTopics = TOPICS.filter(t => t.tabId !== 'attach_perf' || hasAttachPerformance)
 
   useEffect(() => {
     if (!open) return
@@ -363,7 +366,7 @@ function GlobalNavDropdown({
             className="absolute right-0 top-full mt-2 w-80 rounded-xl border border-gray-200 bg-white shadow-lg overflow-hidden z-50"
           >
             <div className="max-h-[400px] overflow-y-auto divide-y divide-gray-100">
-              {TOPICS.map(category => (
+              {visibleTopics.map(category => (
                 <div key={category.tabId} className="p-1.5">
                   <p className="px-2.5 pt-1.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">
                     {category.tabLabel}
@@ -482,6 +485,16 @@ export default function App() {
   // Always light mode — remove dark class on mount
   useEffect(() => { document.documentElement.classList.remove('dark') }, [])
 
+  // Attach Performance only applies to Croma / Vijay Sales — bounce off it
+  // if the user switches to a retailer where it doesn't exist.
+  useEffect(() => {
+    if (activeTab === 'attach_perf' && !retailerCfg.hasAttachPerformance) {
+      setActiveTab('executive')
+    }
+  }, [activeTab, retailerCfg.hasAttachPerformance])
+
+  const visibleTabs = TABS.filter(t => t.id !== 'attach_perf' || retailerCfg.hasAttachPerformance)
+
   const { getFilters, setFilter, resetFilters, getActiveCount } = useFilters()
 
   const filters = getFilters(activeTab)
@@ -573,6 +586,7 @@ export default function App() {
               onSelectTab={setActiveTab}
               accentFrom={retailerCfg.brandFrom}
               accentTo={retailerCfg.brandTo}
+              hasAttachPerformance={retailerCfg.hasAttachPerformance}
             />
 
             {/* Retailer Toggle */}
@@ -605,7 +619,7 @@ export default function App() {
       {/* ── Tab Bar ── */}
       <div className="sticky top-16 z-40 border-b border-gray-200 bg-white/95 backdrop-blur-sm overflow-x-auto scrollbar-hide">
         <div className="flex items-center h-12 px-4 gap-0.5 min-w-max max-w-screen-2xl mx-auto">
-          {TABS.map(tab => (
+          {visibleTabs.map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}

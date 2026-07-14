@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   TrendingUp,
@@ -6,18 +6,22 @@ import {
   Target,
   Activity,
   AlertTriangle,
+  Upload,
+  CheckCircle2,
+  Loader2,
 } from 'lucide-react'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import createPlotlyComponent from 'react-plotly.js/factory'
 // @ts-ignore
 import Plotly from 'plotly.js-dist-min'
 import { useDataContext } from '@/contexts/DataContext'
+import { useRetailerContext } from '@/contexts/RetailerContext'
 import type { FilterState } from '@/hooks/useFilters'
 import { cn } from '@/lib/utils'
 import { fmtPct, plotlyInrTickVals } from '@/lib/formatting'
 import { kpiContainer, kpiItem, panelSpring } from '@/lib/animations'
 import { PLOTLY_BASE, PT_AXIS, PT } from '@/lib/plotlyTheme'
-import type { StoreRecord } from '@/lib/api'
+import { getAttachMeta, uploadAttachFile, type AttachFileMeta, type StoreRecord } from '@/lib/api'
 
 const Plot = createPlotlyComponent(Plotly)
 
@@ -43,9 +47,92 @@ function attachColor(pct: number): string {
   return '#ef4444'
 }
 
+// ── Attach % file upload widget ────────────────────────────────────────────────
+//
+// SalesRecord's own device counts are unreliable, so this tab's numbers come
+// from a separately-uploaded monthly reconciliation report instead. This
+// widget lets that report be kept current for the active retailer.
+type UploadPhase = { kind: 'idle' } | { kind: 'uploading' } | { kind: 'done'; month: string; rows: number } | { kind: 'error'; message: string }
+
+function AttachFileUpload({ retailer, onUploaded }: { retailer: string; onUploaded: () => void }) {
+  const [files, setFiles] = useState<AttachFileMeta[]>([])
+  const [phase, setPhase] = useState<UploadPhase>({ kind: 'idle' })
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const refresh = useCallback(async () => {
+    try {
+      const { data } = await getAttachMeta(retailer)
+      setFiles(data.files)
+    } catch {
+      // non-fatal — widget just shows no files
+    }
+  }, [retailer])
+
+  useEffect(() => { refresh() }, [refresh])
+
+  const handleFile = useCallback(async (file: File) => {
+    setPhase({ kind: 'uploading' })
+    try {
+      const { data } = await uploadAttachFile(retailer, file)
+      setPhase({ kind: 'done', month: data.month, rows: data.rows })
+      await refresh()
+      onUploaded()
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        ?? 'Upload failed. Check the file format.'
+      setPhase({ kind: 'error', message: msg })
+    }
+  }, [retailer, refresh, onUploaded])
+
+  return (
+    <motion.div {...panelSpring()} className="rounded-xl bg-white border border-gray-100 shadow-sm p-4 flex flex-wrap items-center gap-3">
+      <div className="p-2 rounded-lg bg-blue-50 text-blue-600 shrink-0"><Upload className="h-4 w-4" /></div>
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-gray-900">Monthly Attach % Report</p>
+        <p className="text-[11px] text-gray-500">
+          {files.length > 0
+            ? `Uploaded: ${files.map(f => f.month).join(', ')}`
+            : 'No attach % report uploaded yet for this retailer — device counts will be unavailable.'}
+        </p>
+      </div>
+
+      <div className="ml-auto flex items-center gap-2 shrink-0">
+        {phase.kind === 'done' && (
+          <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 font-medium">
+            <CheckCircle2 className="h-3.5 w-3.5" /> {phase.month} loaded ({phase.rows} stores)
+          </span>
+        )}
+        {phase.kind === 'error' && (
+          <span className="text-[11px] text-red-600 font-medium max-w-[220px] truncate" title={phase.message}>{phase.message}</span>
+        )}
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".xlsx,.xls"
+          className="hidden"
+          onChange={e => {
+            const f = e.target.files?.[0]
+            if (f) handleFile(f)
+            e.target.value = ''
+          }}
+        />
+        <button
+          onClick={() => inputRef.current?.click()}
+          disabled={phase.kind === 'uploading'}
+          className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-xs font-semibold border border-gray-200 bg-white text-gray-600 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors disabled:opacity-50"
+        >
+          {phase.kind === 'uploading' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+          {phase.kind === 'uploading' ? 'Uploading…' : 'Upload Report'}
+        </button>
+      </div>
+    </motion.div>
+  )
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function AttachPerformance({ filters }: { filters: FilterState }) {
-  const { stores, months } = useDataContext()
+  const { stores, months, refetchData } = useDataContext()
+  const { retailerCfg } = useRetailerContext()
 
   // ── Active months (respecting global from/to filters) ─────────────────────
   const fm = useMemo(() => {
@@ -244,6 +331,8 @@ export default function AttachPerformance({ filters }: { filters: FilterState })
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-5">
+
+      <AttachFileUpload retailer={retailerCfg.apiRetailerId} onUploaded={refetchData} />
 
       {/* ── KPI Row ────────────────────────────────────────────────────────── */}
       <motion.div

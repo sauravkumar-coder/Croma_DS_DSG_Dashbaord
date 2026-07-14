@@ -220,6 +220,46 @@ export const getTrackerData = (month: string) =>
 export const deleteTrackerSales = (month: string) =>
   api.delete<{ ok: boolean }>(`/api/tracker/sales/${encodeURIComponent(month)}`)
 
+// ── Attach % file upload (Croma / Vijay Sales only) ───────────────────────────
+//
+// SalesRecord's own device counts are unreliable, so the Attach Performance
+// tab derives devices from this separately-uploaded, reconciled monthly
+// attach % report instead of trying to compute them from Mongo alone.
+
+export interface AttachFileMeta {
+  retailer:     string
+  month:        string
+  filename:     string
+  file_size_kb: number
+  uploaded_at:  string
+}
+
+export interface AttachUploadResult extends AttachFileMeta {
+  ok:   boolean
+  rows: number
+}
+
+export const uploadAttachFile = (
+  retailer: string,
+  file: File,
+  month?: string,
+  onProgress?: (pct: number) => void,
+) => {
+  const form = new FormData()
+  form.append('file', file)
+  const qs = month ? `?month=${encodeURIComponent(month)}` : ''
+  return api.post<AttachUploadResult>(`/api/upload/attach/${encodeURIComponent(retailer)}${qs}`, form, {
+    onUploadProgress: e =>
+      onProgress?.(Math.round((e.loaded * 100) / (e.total ?? 1))),
+  })
+}
+
+export const getAttachMeta = (retailer: string) =>
+  api.get<{ files: AttachFileMeta[] }>(`/api/attach/meta/${encodeURIComponent(retailer)}`)
+
+export const deleteAttachFile = (retailer: string, month: string) =>
+  api.delete<{ ok: boolean }>(`/api/storage/attach/${encodeURIComponent(retailer)}/${encodeURIComponent(month)}`)
+
 // ── Generic file-explorer (compatibility) ─────────────────────────────────────
 
 export const uploadFile = (file: File) => {
