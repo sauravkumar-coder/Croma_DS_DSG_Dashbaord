@@ -366,18 +366,103 @@ def _is_croma_format(df: pd.DataFrame) -> bool:
     return "branch_ code" in cols and "store branch" in cols and "plan_category" in cols
 
 
-def _parse_croma(df: pd.DataFrame) -> list[dict[str, Any]]:
-    """Parse Croma RAW sheet → StoreRecord-compatible dicts.
+def _parse_croma(df: pd.DataFrame, filepath: str = "") -> list[dict[str, Any]]:
+    """Parse Croma RAW sheet or summary/attach sheet -> StoreRecord-compatible dicts.
 
-    Branch_ Code  → store_id
-    Store Branch  → store_name
-    State         → state (first State column)
-    Category      → category  (A+ / A / B / C / D)
-    Plan_Category → SP (primary/DS bucket) or ADLD/Combo (secondary/DSG bucket)
-    Amount        → sale value
-    Month         → 'Jan','Feb',… (year inferred from Date column)
-    Quantity / Samsung Qty / Main Qty → Samsung main-unit volume (for attach %)
+    RAW format:
+      Branch_ Code  → store_id
+      Store Branch  → store_name
+      State         → state
+      Category      → category
+      Plan_Category → SP or ADLD/Combo
+      Amount        → sale value
+      Month         → 'Jan','Feb',…
+
+    Summary/Attach format:
+      StoreCode     → store_id
+      Store Name    → store_name
+      Samsung Plan Qty → plans count
+      Attach / Overall attach → attach percentage
     """
+    # Detect summary format columns
+    c_plan_qty = (
+        _find_col(df, "samsung plan qty")
+        or _find_col(df, "plan qty")
+        or _find_col(df, "samsung plan count")
+        or _find_col(df, "plan count")
+        or _find_col(df, "plans count")
+    )
+    c_attach = (
+        _find_col(df, "samsung plan attach")
+        or _find_col(df, "overall attach on samsung phones")
+        or _find_col(df, "overall attach on samsung smartphones")
+        or _find_col(df, "samsung attach")
+        or _find_col(df, "attach %")
+        or _find_col(df, "attach_pct")
+        or _find_col(df, "attach")
+        or _find_col(df, "samsung mp")
+    )
+
+    is_summary = c_plan_qty is not None or c_attach is not None
+
+    if is_summary:
+        logger.info("Parsing Croma file in summary/attach format")
+        c_id = _find_col(df, "storecode") or _find_col(df, "branch_ code") or _find_col(df, "store_id") or _find_col(df, "branch")
+        c_name = _find_col(df, "store name") or _find_col(df, "store branch")
+        c_state = _find_col(df, "regionnew") or _find_col(df, "state") or _find_col(df, "region")
+        c_cat = _find_col(df, "device category") or _find_col(df, "category")
+
+        if c_id is None:
+            raise ValueError("Croma summary file missing store code/branch identifier column")
+
+        # Determine month from filename or fallback to default
+        month_label = "Jul-2026"
+        if filepath:
+            from pathlib import Path
+            detected = detect_month_from_filename(Path(filepath).name)
+            if detected:
+                month_label = detected
+
+        df = df.copy()
+        df[c_id] = df[c_id].astype(str).str.strip()
+
+        records: list[dict[str, Any]] = []
+        for _, row in df.iterrows():
+            sid = str(row[c_id])
+            if not sid or sid.lower() in ("nan", ""):
+                continue
+
+            plans = float(row[c_plan_qty]) if c_plan_qty and pd.notna(row[c_plan_qty]) else 0.0
+            attach_pct = float(row[c_attach]) if c_attach and pd.notna(row[c_attach]) else 0.0
+
+            # Normalize attach percentage if it's stored as 0-100 instead of 0-1
+            if attach_pct > 1.0:
+                attach_pct = attach_pct / 100.0
+
+            main_qty = round(plans / attach_pct) if attach_pct > 0 else 0.0
+
+            c_amt = _find_col(df, "amount") or _find_col(df, "plan selling price") or _find_col(df, "value")
+            if c_amt and pd.notna(row[c_amt]):
+                total_sales = float(row[c_amt])
+            else:
+                total_sales = plans * 3000.0  # Estimated revenue fallback
+
+            records.append({
+                "store_id":              sid,
+                "store_name":            _str(row, c_name) if c_name else sid,
+                "state":                 _str(row, c_state) if c_state else "",
+                "category":              _clean_category(_str(row, c_cat)) if c_cat else "",
+                "monthly_sales":         {month_label: total_sales},
+                "monthly_sales_ds":      {month_label: total_sales},
+                "monthly_sales_dsg":     {month_label: 0.0},
+                "monthly_plans_count":   {month_label: int(plans)},
+                "monthly_main_qty":      {month_label: float(main_qty)},
+                "monthly_attach_pct":    {month_label: float(attach_pct)},
+                "total_sales":           total_sales,
+            })
+        return records
+
+    # ── RAW transactional parser (legacy) ───────────────────────────────────────
     c_id   = _find_col(df, "branch_ code")
     c_name = _find_col(df, "store branch")
     c_state: str | None = None
@@ -390,8 +475,7 @@ def _parse_croma(df: pd.DataFrame) -> list[dict[str, Any]]:
     c_amt   = _find_col(df, "amount")
     c_month = _find_col(df, "month")
     c_date  = _find_col(df, "date")
-    # Main quantity — try several common column names
-    c_qty = (
+    c_qty   = (
         _find_col(df, "main qty")
         or _find_col(df, "main_qty")
         or _find_col(df, "samsung qty")
@@ -430,8 +514,6 @@ def _parse_croma(df: pd.DataFrame) -> list[dict[str, Any]]:
     grp = df.groupby([c_id, "_month_label", c_plan], observed=True)[c_amt].sum().reset_index()
     grp_cnt = df.groupby([c_id, "_month_label", c_plan], observed=True).size().reset_index(name="_cnt")
 
-    # Aggregate main quantity per (store, month) — take max across rows since it's
-    # typically a repeated store-level value for each plan row in the same month
     main_qty_map: dict[tuple[str, str], float] = {}
     if c_qty:
         grp_qty = df.groupby([c_id, "_month_label"], observed=True)[c_qty].max().reset_index()
@@ -492,7 +574,7 @@ def parse_croma_sales(filepath: str) -> list[dict[str, Any]]:
         df = pd.read_excel(filepath, sheet_name="RAW")
     except Exception:
         df = pd.read_excel(filepath)
-    return _parse_croma(_strip_column_names(df))
+    return _parse_croma(_strip_column_names(df), filepath)
 
 
 # ── Vijay Sales RAW parser ────────────────────────────────────────────────────
@@ -502,16 +584,101 @@ def _is_vs_format(df: pd.DataFrame) -> bool:
     return "spoc state name" in cols and "branch" in cols and "plan_category" in cols
 
 
-def _parse_vijaysales(df: pd.DataFrame) -> list[dict[str, Any]]:
-    """Parse Vijay Sales RAW sheet → StoreRecord-compatible dicts.
+def _parse_vijaysales(df: pd.DataFrame, filepath: str = "") -> list[dict[str, Any]]:
+    """Parse Vijay Sales RAW sheet or summary/attach sheet -> StoreRecord-compatible dicts.
 
-    Branch          → store_id AND store_name
-    Spoc State Name → state
-    Plan_Category   → SP (primary) or ADLD/Combo/EW (secondary)
-    Amount          → sale value
-    Month           → 'Jan','Feb',… (year inferred from Date)
-    Quantity / Samsung Qty / Main Qty → Samsung main-unit volume (for attach %)
+    RAW format:
+      Branch          → store_id AND store_name
+      Spoc State Name → state
+      Plan_Category   → SP or ADLD/Combo
+      Amount          → sale value
+      Month           → 'Jan','Feb',…
+
+    Summary/Attach format:
+      StoreCode     → store_id
+      Store Name    → store_name
+      Samsung Plan Qty → plans count
+      Samsung Plan Attach / Overall Attach → attach percentage
     """
+    # Detect summary format columns
+    c_plan_qty = (
+        _find_col(df, "samsung plan qty")
+        or _find_col(df, "plan qty")
+        or _find_col(df, "samsung plan count")
+        or _find_col(df, "plan count")
+        or _find_col(df, "plans count")
+    )
+    c_attach = (
+        _find_col(df, "samsung plan attach")
+        or _find_col(df, "overall attach on samsung phones")
+        or _find_col(df, "overall attach on samsung smartphones")
+        or _find_col(df, "samsung attach")
+        or _find_col(df, "attach %")
+        or _find_col(df, "attach_pct")
+        or _find_col(df, "attach")
+        or _find_col(df, "samsung mp")
+    )
+
+    is_summary = c_plan_qty is not None or c_attach is not None
+
+    if is_summary:
+        logger.info("Parsing Vijay Sales file in summary/attach format")
+        c_id = _find_col(df, "storecode") or _find_col(df, "branch_ code") or _find_col(df, "store_id") or _find_col(df, "branch")
+        c_name = _find_col(df, "store name") or _find_col(df, "store branch")
+        c_state = _find_col(df, "regionnew") or _find_col(df, "state") or _find_col(df, "spoc state name") or _find_col(df, "region")
+        c_cat = _find_col(df, "device category") or _find_col(df, "category")
+
+        if c_id is None:
+            raise ValueError("Vijay Sales summary file missing store code/branch identifier column")
+
+        # Determine month from filename or fallback to default
+        month_label = "Jul-2026"
+        if filepath:
+            from pathlib import Path
+            detected = detect_month_from_filename(Path(filepath).name)
+            if detected:
+                month_label = detected
+
+        df = df.copy()
+        df[c_id] = df[c_id].astype(str).str.strip()
+
+        records: list[dict[str, Any]] = []
+        for _, row in df.iterrows():
+            sid = str(row[c_id])
+            if not sid or sid.lower() in ("nan", ""):
+                continue
+
+            plans = float(row[c_plan_qty]) if c_plan_qty and pd.notna(row[c_plan_qty]) else 0.0
+            attach_pct = float(row[c_attach]) if c_attach and pd.notna(row[c_attach]) else 0.0
+
+            # Normalize attach percentage if it's stored as 0-100 instead of 0-1
+            if attach_pct > 1.0:
+                attach_pct = attach_pct / 100.0
+
+            main_qty = round(plans / attach_pct) if attach_pct > 0 else 0.0
+
+            c_amt = _find_col(df, "amount") or _find_col(df, "plan selling price") or _find_col(df, "value")
+            if c_amt and pd.notna(row[c_amt]):
+                total_sales = float(row[c_amt])
+            else:
+                total_sales = plans * 3000.0  # Estimated revenue fallback
+
+            records.append({
+                "store_id":              sid,
+                "store_name":            _str(row, c_name) if c_name else sid,
+                "state":                 _str(row, c_state) if c_state else "",
+                "category":              _clean_category(_str(row, c_cat)) if c_cat else "",
+                "monthly_sales":         {month_label: total_sales},
+                "monthly_sales_ds":      {month_label: total_sales},
+                "monthly_sales_dsg":     {month_label: 0.0},
+                "monthly_plans_count":   {month_label: int(plans)},
+                "monthly_main_qty":      {month_label: float(main_qty)},
+                "monthly_attach_pct":    {month_label: float(attach_pct)},
+                "total_sales":           total_sales,
+            })
+        return records
+
+    # ── RAW transactional parser (legacy) ───────────────────────────────────────
     c_id    = _find_col(df, "branch")
     c_state = _find_col(df, "spoc state name")
     c_cat   = _find_col(df, "device category") or _find_col(df, "category")
@@ -519,8 +686,7 @@ def _parse_vijaysales(df: pd.DataFrame) -> list[dict[str, Any]]:
     c_amt   = _find_col(df, "amount")
     c_month = _find_col(df, "month")
     c_date  = _find_col(df, "date")
-    # Main quantity — try several common column names
-    c_qty = (
+    c_qty   = (
         _find_col(df, "main qty")
         or _find_col(df, "main_qty")
         or _find_col(df, "samsung qty")
@@ -559,7 +725,6 @@ def _parse_vijaysales(df: pd.DataFrame) -> list[dict[str, Any]]:
     grp = df.groupby([c_id, "_month_label", c_plan], observed=True)[c_amt].sum().reset_index()
     grp_cnt = df.groupby([c_id, "_month_label", c_plan], observed=True).size().reset_index(name="_cnt")
 
-    # Aggregate main quantity per (store, month)
     main_qty_map: dict[tuple[str, str], float] = {}
     if c_qty:
         grp_qty = df.groupby([c_id, "_month_label"], observed=True)[c_qty].max().reset_index()
@@ -620,7 +785,129 @@ def parse_vs_sales(filepath: str) -> list[dict[str, Any]]:
         df = pd.read_excel(filepath, sheet_name="RAW")
     except Exception:
         df = pd.read_excel(filepath)
-    return _parse_vijaysales(_strip_column_names(df))
+    return _parse_vijaysales(_strip_column_names(df), filepath)
+
+
+# ── Monthly Attach % report parser (Croma / Vijay Sales) ──────────────────────
+#
+# These are separate, manually-reconciled monthly reports (not the RAW sales
+# feed) — one attach % per branch, used as the authoritative source for the
+# Attach Performance tab (device counts in SalesRecord are unreliable).
+#
+# Two known layouts, either of which may appear in any given month's file:
+#   • "Flat/Export": StoreCode | Zone | RegionNew | City | Store Name |
+#                    <qty col> | Attach | Overall Attach... (single header row)
+#   • "Grouped":     REGION | BRANCH | <BRAND> (two header rows; the brand
+#                    group's "%" sub-column holds the attach rate). Multiple
+#                    brand groups (e.g. HITACHI + SAMSUNG MP) may be present —
+#                    only the Samsung group's % column is used.
+#
+# Each month's file typically has several sheets (progressive snapshots
+# through the month, e.g. "till 15th mar", then a final "MARCH 2026" sheet).
+# We try sheets from last to first and use the first one that actually
+# parses, since the very last sheet is sometimes a supplementary breakdown
+# (e.g. VS June's "Plan Split") rather than the summary.
+
+def _flat_attach_column(columns: list) -> Any | None:
+    """Pick the Samsung-specific attach % column, excluding 'Overall ...' variants."""
+    candidates = [
+        c for c in columns
+        if "attach" in str(c).lower() and not str(c).lower().strip().startswith("overall")
+    ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: (str(c).lower().strip() != "attach", len(str(c))))
+    return candidates[0]
+
+
+def _parse_attach_flat(filepath: str, sheet_name: str) -> list[dict[str, Any]] | None:
+    try:
+        df = pd.read_excel(filepath, sheet_name=sheet_name)
+    except Exception:
+        return None
+    df.columns = [str(c).strip() for c in df.columns]
+
+    code_col = next((c for c in df.columns if c.lower().replace(" ", "") == "storecode"), None)
+    name_col = next((c for c in df.columns if "store name" in c.lower()), None)
+    attach_col = _flat_attach_column(df.columns.tolist())
+    if code_col is None or attach_col is None:
+        return None
+
+    rows: list[dict[str, Any]] = []
+    for _, r in df.iterrows():
+        code = r[code_col]
+        if pd.isna(code):
+            continue
+        code_s = str(code).strip()
+        if not code_s or code_s.lower() in ("total", "grand total"):
+            continue
+        if pd.isna(r[attach_col]):
+            continue
+        try:
+            pct = float(r[attach_col])
+        except (TypeError, ValueError):
+            continue
+        name = r[name_col] if name_col is not None else None
+        rows.append({
+            "store_code": code_s,
+            "store_name": str(name).strip() if name is not None and not pd.isna(name) else None,
+            "attach_pct": pct,
+        })
+    return rows or None
+
+
+def _parse_attach_grouped(filepath: str, sheet_name: str) -> list[dict[str, Any]] | None:
+    try:
+        df = pd.read_excel(filepath, sheet_name=sheet_name, header=[0, 1])
+    except Exception:
+        return None
+
+    branch_col = None
+    samsung_col = None
+    for col in df.columns:
+        top, sub = str(col[0]), str(col[1])
+        if sub.strip().upper() == "BRANCH":
+            branch_col = col
+        if "samsung" in top.lower() and "%" in sub:
+            samsung_col = col
+    if branch_col is None or samsung_col is None:
+        return None
+
+    rows: list[dict[str, Any]] = []
+    for _, r in df.iterrows():
+        branch = r[branch_col]
+        if pd.isna(branch):
+            continue
+        branch_s = str(branch).strip()
+        if not branch_s or "total" in branch_s.lower():
+            continue
+        if pd.isna(r[samsung_col]):
+            continue
+        try:
+            pct = float(r[samsung_col])
+        except (TypeError, ValueError):
+            continue
+        rows.append({"store_code": None, "store_name": branch_s, "attach_pct": pct})
+    return rows or None
+
+
+def parse_attach_file(filepath: str) -> list[dict[str, Any]]:
+    """Parse a Croma/Vijay Sales monthly Attach % report into per-branch rows.
+
+    Returns a list of {"store_code": str|None, "store_name": str|None, "attach_pct": float}.
+    attach_pct is a 0-1 fraction. Callers match each row to a Store by code
+    first, then by normalized store name, since layouts don't consistently
+    provide both.
+    """
+    xl = pd.ExcelFile(filepath)
+    for sheet_name in reversed(xl.sheet_names):
+        rows = _parse_attach_flat(filepath, sheet_name)
+        if rows:
+            return rows
+        rows = _parse_attach_grouped(filepath, sheet_name)
+        if rows:
+            return rows
+    return []
 
 
 # ── Reliance RAW parser ────────────────────────────────────────────────────────
