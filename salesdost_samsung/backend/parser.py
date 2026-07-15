@@ -831,7 +831,12 @@ def parse_vs_sales(filepath: str) -> list[dict[str, Any]]:
 # (e.g. VS June's "Plan Split") rather than the summary.
 
 def _flat_attach_column(columns: list) -> Any | None:
-    """Pick the Samsung-specific attach % column, excluding 'Overall ...' variants."""
+    """Pick the Samsung-specific attach % column, prioritizing 'overall attach ... samsung' variants."""
+    for c in columns:
+        c_lower = str(c).lower().strip()
+        if "overall" in c_lower and "attach" in c_lower and "samsung" in c_lower:
+            return c
+            
     candidates = [
         c for c in columns
         if "attach" in str(c).lower() and not str(c).lower().strip().startswith("overall")
