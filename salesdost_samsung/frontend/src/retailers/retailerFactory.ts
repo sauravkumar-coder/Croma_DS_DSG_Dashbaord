@@ -86,6 +86,7 @@ export interface RetailerConfig {
   apiDeletePath: string        // DELETE /api/storage/sales/…
   apiMetaPath:   string        // GET /api/sales/meta/…
   hasAttachPerformance: boolean // whether the Attach Performance tab applies to this retailer
+  logoPath:      string        // path to the retailer's logo
 }
 
 const REGISTRY: Record<RetailerId, RetailerConfig> = {
@@ -105,6 +106,7 @@ const REGISTRY: Record<RetailerId, RetailerConfig> = {
     apiDeletePath: '/api/storage/sales/croma',
     apiMetaPath:   '/api/sales/meta/croma',
     hasAttachPerformance: true,
+    logoPath:      '/croma.png',
   },
   vijaysales: {
     id:            VS_RETAILER_ID as RetailerId,
@@ -122,6 +124,7 @@ const REGISTRY: Record<RetailerId, RetailerConfig> = {
     apiDeletePath: '/api/storage/sales/vijaysales',
     apiMetaPath:   '/api/sales/meta/vijaysales',
     hasAttachPerformance: true,
+    logoPath:      '/vijaysales.png',
   },
   reliance: {
     id:            RELIANCE_RETAILER_ID as RetailerId,
@@ -139,6 +142,7 @@ const REGISTRY: Record<RetailerId, RetailerConfig> = {
     apiDeletePath: '/api/storage/sales/reliance',
     apiMetaPath:   '/api/sales/meta/reliance',
     hasAttachPerformance: false,
+    logoPath:      '/reliance.png',
   },
   hotspot: {
     id:            HOTSPOT_RETAILER_ID as RetailerId,
@@ -156,6 +160,7 @@ const REGISTRY: Record<RetailerId, RetailerConfig> = {
     apiDeletePath: '/api/storage/sales/hotspot',
     apiMetaPath:   '/api/sales/meta/hotspot',
     hasAttachPerformance: false,
+    logoPath:      '/hotspot.png',
   },
   kore: {
     id:            KORE_RETAILER_ID as RetailerId,
@@ -173,6 +178,7 @@ const REGISTRY: Record<RetailerId, RetailerConfig> = {
     apiDeletePath: '/api/storage/sales/kore',
     apiMetaPath:   '/api/sales/meta/kore',
     hasAttachPerformance: false,
+    logoPath:      '/kore.png',
   },
 }
 

@@ -563,12 +563,20 @@ export default function App() {
       <header className="sticky top-0 z-50 h-16 border-b border-gray-200 bg-white/95 backdrop-blur-sm">
         <div className="flex items-center justify-between h-full px-4 max-w-screen-2xl mx-auto gap-4">
           <div className="flex items-center gap-3 min-w-0">
-            <span
-              className="shrink-0 inline-flex items-center justify-center px-3 h-8 rounded-full text-white text-sm font-bold tracking-wide select-none shadow-sm"
-              style={{ background: `linear-gradient(to right, ${retailerCfg.brandFrom}, ${retailerCfg.brandTo})` }}
-            >
-              {retailerCfg.short}
-            </span>
+            {retailerCfg.logoPath ? (
+              <img
+                src={retailerCfg.logoPath}
+                alt={`${retailerCfg.label} Logo`}
+                className="h-9 w-auto max-w-[140px] object-contain shrink-0 rounded"
+              />
+            ) : (
+              <span
+                className="shrink-0 inline-flex items-center justify-center px-3 h-8 rounded-full text-white text-sm font-bold tracking-wide select-none shadow-sm"
+                style={{ background: `linear-gradient(to right, ${retailerCfg.brandFrom}, ${retailerCfg.brandTo})` }}
+              >
+                {retailerCfg.short}
+              </span>
+            )}
             <div className="min-w-0">
               <p className="text-base font-bold text-gray-900 leading-none truncate">
                 {retailerCfg.tagline}
