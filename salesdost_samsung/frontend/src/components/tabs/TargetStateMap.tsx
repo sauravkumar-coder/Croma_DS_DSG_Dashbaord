@@ -196,7 +196,7 @@ export default function TargetStateMap({ data, targetMonth, effectiveDay, totalD
       + `<br><span style="color:#cbd5e1">Actual Sales: ${fmtInr(d.achieved)}</span>`
       + `<br><span style="color:#94a3b8">Expected Sales: ${fmtInr(d.expected)}</span>`
       + `<br>${gapLine}`
-      + `<br><span style="color:#64748b">${d.storeCount} store${d.storeCount !== 1 ? 's' : ''} ┬╖ ${d.status}</span>`
+      + `<br><span style="color:#64748b">${d.storeCount} store${d.storeCount !== 1 ? 's' : ''} · ${d.status}</span>`
     )
   }
 
@@ -336,10 +336,10 @@ export default function TargetStateMap({ data, targetMonth, effectiveDay, totalD
             <MapIcon className="h-4 w-4" />
           </span>
           <div>
-            <h3 className="text-sm font-semibold text-slate-800">Geographic Performance <span className="text-slate-400 font-normal">┬╖ India</span></h3>
+            <h3 className="text-sm font-semibold text-slate-800">Geographic Performance <span className="text-slate-400 font-normal">· India</span></h3>
             <p className="text-[11px] text-slate-400 mt-0.5 max-w-xl">
-              States shaded by achievement % ┬╖ bubble size Γê¥ {bubbleMetric === 'sales' ? 'actual sales' : 'target'} volume ┬╖
-              {' '}{targetMonth || 'ΓÇö'} ┬╖ Day {effectiveDay} of {totalDays}
+              States shaded by achievement % · bubble size ∝ {bubbleMetric === 'sales' ? 'actual sales' : 'target'} volume ·
+              {' '}{targetMonth || '—'} · Day {effectiveDay} of {totalDays}
             </p>
           </div>
         </div>
@@ -371,7 +371,7 @@ export default function TargetStateMap({ data, targetMonth, effectiveDay, totalD
       <div className="px-5 py-2 border-b border-slate-100 flex items-center gap-1.5 bg-slate-50/50">
         <span className="h-1.5 w-1.5 rounded-full shrink-0 bg-blue-400" />
         <p className="text-[10.5px] text-slate-400">
-          Hover a state or bubble for target, sales, achievement and gap details ┬╖ click a state to spotlight it
+          Hover a state or bubble for target, sales, achievement and gap details · click a state to spotlight it
         </p>
       </div>
 
@@ -380,12 +380,12 @@ export default function TargetStateMap({ data, targetMonth, effectiveDay, totalD
         {geoLoading && (
           <div className="flex items-center justify-center h-[460px] gap-3 text-slate-400 text-sm">
             <div className="h-5 w-5 rounded-full border-2 border-slate-200 border-t-blue-500 animate-spin" />
-            Loading India mapΓÇª
+            Loading India map...
           </div>
         )}
         {geoError && (
           <div className="flex items-center justify-center h-[460px] text-red-500 text-sm">
-            {geoError} ΓÇö check your network connection.
+            {geoError} — check your network connection.
           </div>
         )}
         {!geoLoading && !geoError && !hasData && (
@@ -431,7 +431,7 @@ export default function TargetStateMap({ data, targetMonth, effectiveDay, totalD
           <span className="text-slate-400">Target: <span className="font-medium text-slate-700">{fmtInr(selected.target)}</span></span>
           <span className="text-slate-400">Sales: <span className="font-medium text-slate-700">{fmtInr(selected.achieved)}</span></span>
           <span className="text-slate-400">{selected.gap > 0 ? <>Gap: <span className="font-medium text-red-600">{fmtInr(selected.gap)}</span></> : <>Exceeded: <span className="font-medium text-emerald-600">{fmtInr(-selected.gap)}</span></>}</span>
-          <button onClick={() => setSelectedState(null)} className="ml-auto text-slate-400 hover:text-slate-600 transition-colors">Γ£ò Clear</button>
+          <button onClick={() => setSelectedState(null)} className="ml-auto text-slate-400 hover:text-slate-600 transition-colors">✕ Clear</button>
         </div>
       )}
 
@@ -440,7 +440,7 @@ export default function TargetStateMap({ data, targetMonth, effectiveDay, totalD
         <div className="flex items-center justify-between text-[10px] font-medium text-slate-400 mb-1.5">
           <span>Below target</span>
           <span>75%</span>
-          <span>100% ┬╖ On target</span>
+          <span>100% · On target</span>
           <span>Exceeded</span>
         </div>
         <div
