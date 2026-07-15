@@ -999,11 +999,7 @@ export default function TargetCommandCenter() {
           sub={gapPositive ? 'still to be sold' : `by ${fmtInr(-national.gap)}`}
           valueClass={gapPositive ? 'text-red-600' : 'text-emerald-600'}
           icon={gapPositive ? <AlertCircle className="h-4 w-4 text-red-500" /> : <TrendingUp className="h-4 w-4 text-emerald-500" />} />
-        <KPICard label="Remaining Target"
-          value={national.remaining_target > 0 ? fmtInr(national.remaining_target) : '—'}
-          sub={`${national.remaining} days left`}
-          valueClass={national.remaining_target > 0 ? 'text-amber-600' : 'text-gray-400'}
-          icon={<Minus className="h-4 w-4 text-amber-500" />} />
+
         <KPICard label="Req. Daily Run Rate"
           value={national.reqDRR > 0 ? fmtInr(national.reqDRR) : '—'}
           sub="per day to close gap"

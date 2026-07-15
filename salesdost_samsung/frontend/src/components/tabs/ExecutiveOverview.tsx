@@ -751,13 +751,7 @@ export default function ExecutiveOverview({ filters }: Props) {
             danger={gapPositive}
             icon={gapPositive ? <AlertCircle className="h-4 w-4 text-red-500" /> : <TrendingUp className="h-4 w-4 text-emerald-500" />}
           />
-          <KPICard
-            label="Remaining Target"
-            value={national.remaining_target}
-            formattedValue={fmtInr(national.remaining_target)}
-            sub={`${national.remaining} days left`}
-            icon={<Minus className="h-4 w-4 text-amber-500" />}
-          />
+
           <KPICard
             label="Req. Daily Run Rate"
             value={national.reqDRR}
