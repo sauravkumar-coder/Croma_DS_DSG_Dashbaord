@@ -890,38 +890,47 @@ async def get_dashboard_data(retailer: str = ""):
     }
     target_month_str = f"{_MONTH_MAP.get(target_month_num, 'Jun')}-{target_year}"
 
-    match_stage = {}
+    # Start from StoreBrand to match only Samsung store-brand mappings first
+    # This filters the working dataset down to Samsung brand stores only (uses StoreBrand index)
+    pipeline = [
+        {"$match": {"brandId": "brand_002"}}
+    ]
+
+    # Look up Store details
+    pipeline.append({"$lookup": {
+        "from": "Store",
+        "localField": "storeId",
+        "foreignField": "_id",
+        "as": "store_info"
+    }})
+    pipeline.append({"$match": {"store_info.0": {"$exists": True}}})
+
     if retailer:
         r_lower = retailer.lower()
         if r_lower == "croma":
-            match_stage = {"storeName": {"$regex": "croma", "$options": "i"}}
+            pipeline.append({"$match": {"store_info.storeName": {"$regex": "croma", "$options": "i"}}})
         elif r_lower == "vijaysales":
-            match_stage = {"storeName": {"$regex": "^vs\\b|^vijay\\s*sales\\b", "$options": "i"}}
+            pipeline.append({"$match": {"store_info.storeName": {"$regex": "^vs\\b|^vijay\\s*sales\\b", "$options": "i"}}})
         elif r_lower == "reliance":
-            match_stage = {"storeName": {"$regex": "reliance", "$options": "i"}}
+            pipeline.append({"$match": {"store_info.storeName": {"$regex": "reliance", "$options": "i"}}})
         elif r_lower == "hotspot":
-            match_stage = {"storeName": {"$regex": "hotspot", "$options": "i"}}
+            pipeline.append({"$match": {"store_info.storeName": {"$regex": "hotspot", "$options": "i"}}})
         elif r_lower == "kore":
-            match_stage = {"storeName": {"$regex": "kore", "$options": "i"}}
+            pipeline.append({"$match": {"store_info.storeName": {"$regex": "kore", "$options": "i"}}})
         else:
-            match_stage = {"storeName": {"$regex": retailer, "$options": "i"}}
-    
-    pipeline = []
-    if match_stage:
-        pipeline.append({"$match": match_stage})
+            pipeline.append({"$match": {"store_info.storeName": {"$regex": retailer, "$options": "i"}}})
 
+    # Add lookups for SalesRecord and StoreTarget
+    # Simplified to raw equality checks since both fields are strings (fully index-supported)
     pipeline.extend([
         {"$lookup": {
             "from": "SalesRecord",
-            "let": {"store_id": "$_id"},
+            "let": {"store_id": "$storeId"},
             "pipeline": [
                 {"$match": {
                     "$expr": {
                         "$and": [
-                            {"$or": [
-                                {"$eq": ["$storeId", "$$store_id"]},
-                                {"$eq": ["$storeId", {"$toString": "$$store_id"}]}
-                            ]},
+                            {"$eq": ["$storeId", "$$store_id"]},
                             {"$eq": ["$brandId", "brand_002"]}
                         ]
                     }
@@ -931,15 +940,12 @@ async def get_dashboard_data(retailer: str = ""):
         }},
         {"$lookup": {
             "from": "StoreTarget",
-            "let": {"store_id": "$_id"},
+            "let": {"store_id": "$storeId"},
             "pipeline": [
                 {"$match": {
                     "$expr": {
                         "$and": [
-                            {"$or": [
-                                {"$eq": ["$storeId", "$$store_id"]},
-                                {"$eq": ["$storeId", {"$toString": "$$store_id"}]}
-                            ]},
+                            {"$eq": ["$storeId", "$$store_id"]},
                             {"$eq": ["$brandId", "brand_002"]}
                         ]
                     }
@@ -947,27 +953,26 @@ async def get_dashboard_data(retailer: str = ""):
             ],
             "as": "targets"
         }},
-        {"$lookup": {
-            "from": "StoreBrand",
-            "let": {"store_id": "$_id"},
-            "pipeline": [
-                {"$match": {
-                    "$expr": {
-                        "$and": [
-                            {"$or": [
-                                {"$eq": ["$storeId", "$$store_id"]},
-                                {"$eq": ["$storeId", {"$toString": "$$store_id"}]}
-                            ]},
-                            {"$eq": ["$brandId", "brand_002"]}
-                        ]
-                    }
-                }}
-            ],
-            "as": "brand_info"
+        # Reshape document into the original expected Store structure
+        {"$project": {
+            "_id": "$storeId",
+            "storeName": {"$arrayElemAt": ["$store_info.storeName", 0]},
+            "state": {"$arrayElemAt": ["$store_info.state", 0]},
+            "storeCategory": {"$arrayElemAt": ["$store_info.storeCategory", 0]},
+            "storeChannel": {"$arrayElemAt": ["$store_info.storeChannel", 0]},
+            "city": {"$arrayElemAt": ["$store_info.city", 0]},
+            "fullAddress": {"$arrayElemAt": ["$store_info.fullAddress", 0]},
+            "latitude": {"$arrayElemAt": ["$store_info.latitude", 0]},
+            "longitude": {"$arrayElemAt": ["$store_info.longitude", 0]},
+            "cityTier": {"$arrayElemAt": ["$store_info.cityTier", 0]},
+            "priority": {"$arrayElemAt": ["$store_info.priority", 0]},
+            "brand_info": [{"storeBrandId": "$storeBrandId", "brandId": "$brandId", "storeId": "$storeId"}],
+            "sales": "$sales",
+            "targets": "$targets"
         }}
     ])
 
-    cursor = db["Store"].aggregate(pipeline)
+    cursor = db["StoreBrand"].aggregate(pipeline)
     stores_docs = await cursor.to_list(None)
 
     # Load ProductSubCategory mappings
