@@ -4,20 +4,27 @@ import pandas as pd
 from pymongo import MongoClient, UpdateOne
 
 def main():
+    # Default URI based on whether we are on the deployment server (Linux) or local machine (Windows)
+    default_uri = os.getenv("MONGO_URI")
+    if not default_uri:
+        if os.name == "posix":
+            # On deployment server host (Linux), connect directly to local MongoDB on port 27017
+            default_uri = "mongodb://test_admin:Solvytech1029@127.0.0.1:27017/zoppertrack?authSource=admin&directConnection=true"
+        else:
+            # On local developer machine (Windows), connect via local SSH tunnel on port 27018
+            default_uri = "mongodb://admin:Solvytech%401029@127.0.0.1:27018/zoppertrack?authSource=admin&directConnection=true"
+
     parser = argparse.ArgumentParser(description="Push July 2026 store targets to MongoDB.")
     parser.add_argument(
         "--mongo",
-        default=os.getenv(
-            "MONGO_URI",
-            "mongodb://admin:Solvytech%401029@127.0.0.1:27018/zoppertrack?authSource=admin&directConnection=true"
-        ),
+        default=default_uri,
         help="MongoDB Connection URI"
     )
     args = parser.parse_args()
 
     # If running inside Docker on the server, default might need to fall back to the production URI
     mongo_uri = args.mongo
-    if "127.0.0.1" in mongo_uri and os.path.exists("/.dockerenv"):
+    if "127.0.0.1" in mongo_uri and (os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")):
         # We are inside a container, resolve to bridge IP or env details
         mongo_uri = "mongodb://saurav:saurav12@172.17.0.1:27017/zoppertrack?authSource=zoppertrack&directConnection=true"
 
