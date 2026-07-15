@@ -10,7 +10,8 @@ COPY . .
 
 # Empty VITE_API_URL so axios uses relative paths (/api/...) which nginx proxies
 ENV VITE_API_URL=""
-RUN npm run build
+ENV NODE_OPTIONS="--max-old-space-size=1024"
+RUN npx vite build
 
 # ── Stage 2: Serve ────────────────────────────────────────────────────────────
 FROM nginx:alpine
