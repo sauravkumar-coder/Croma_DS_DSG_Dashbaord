@@ -565,7 +565,7 @@ export default function App() {
           <div className="flex items-center gap-3 min-w-0">
             {retailerCfg.logoPath ? (
               <img
-                src={retailerCfg.logoPath}
+                src={`${import.meta.env.BASE_URL}${retailerCfg.logoPath.replace(/^\//, '')}`}
                 alt={`${retailerCfg.label} Logo`}
                 className="h-9 w-auto max-w-[140px] object-contain shrink-0 rounded"
               />
