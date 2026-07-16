@@ -84,6 +84,7 @@ function FilterBar({
   onFilterChange,
   onReset,
   activeCount,
+  showEW,
 }: {
   states: string[]
   categories: string[]
@@ -92,6 +93,7 @@ function FilterBar({
   onFilterChange: (key: keyof FilterState, value: string) => void
   onReset: () => void
   activeCount: number
+  showEW: boolean
 }) {
   return (
     <div className="flex items-center gap-2 flex-wrap">
@@ -124,7 +126,7 @@ function FilterBar({
           <SelectItem value="SP">SP</SelectItem>
           <SelectItem value="ADLD">ADLD</SelectItem>
           <SelectItem value="Combo">Combo</SelectItem>
-          <SelectItem value="EW">EW</SelectItem>
+          {showEW && <SelectItem value="EW">EW</SelectItem>}
         </SelectContent>
       </Select>
 
@@ -687,6 +689,7 @@ export default function App() {
                 onFilterChange={handleFilterChange}
                 onReset={handleReset}
                 activeCount={activeCount}
+                showEW={retailer !== 'croma'}
               />
             </div>
           </motion.div>

@@ -11,6 +11,7 @@ import createPlotlyComponent from 'react-plotly.js/factory'
 // @ts-ignore
 import Plotly from 'plotly.js-dist-min'
 import { useDataContext } from '@/contexts/DataContext'
+import { useRetailerContext } from '@/contexts/RetailerContext'
 import type { FilterState } from '@/hooks/useFilters'
 import { transformStoresByPlanCategory } from '@/lib/filterHelpers'
 import { cn } from '@/lib/utils'
@@ -45,6 +46,8 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
     totalDays,
     loadTrackerForMonth,
   } = useDataContext()
+  const { retailer } = useRetailerContext()
+  const showEW = retailer !== 'croma'
   const [logScale, setLogScale] = useState(true)
 
   // 1. Filter Data
@@ -345,16 +348,16 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
               data={[{
                 type: 'pie',
                 hole: 0.6,
-                labels: ['SP', 'ADLD', 'Combo', 'EW'],
-                values: [planAggs.sp, planAggs.adld, planAggs.combo, planAggs.ew],
+                labels: showEW ? ['SP', 'ADLD', 'Combo', 'EW'] : ['SP', 'ADLD', 'Combo'],
+                values: showEW ? [planAggs.sp, planAggs.adld, planAggs.combo, planAggs.ew] : [planAggs.sp, planAggs.adld, planAggs.combo],
                 text: [
                   `Sales: ${fmtInr(planAggs.sp)}<br>Plans Sold: ${planAggs.spPlans}`,
                   `Sales: ${fmtInr(planAggs.adld)}<br>Plans Sold: ${planAggs.adldPlans}`,
                   `Sales: ${fmtInr(planAggs.combo)}<br>Plans Sold: ${planAggs.comboPlans}`,
-                  `Sales: ${fmtInr(planAggs.ew)}<br>Plans Sold: ${planAggs.ewPlans}`,
+                  ...(showEW ? [`Sales: ${fmtInr(planAggs.ew)}<br>Plans Sold: ${planAggs.ewPlans}`] : []),
                 ],
                 hovertemplate: '<b>%{label}</b><br>%{text}<br>Share: %{percent}<extra></extra>',
-                marker: { colors: ['#3b82f6', '#4f46e5', '#9333ea', '#db2777'] },
+                marker: { colors: showEW ? ['#3b82f6', '#4f46e5', '#9333ea', '#db2777'] : ['#3b82f6', '#4f46e5', '#9333ea'] },
                 textinfo: 'label+percent',
               }]}
               layout={{
@@ -422,14 +425,14 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
                   hovertemplate: '<b>%{x} (Combo)</b><br>Sales: %{customdata[0]}<br>Plans Sold: %{customdata[1]}<extra></extra>',
                   marker: { color: '#9333ea' } 
                 },
-                { 
-                  type: 'bar', name: 'EW', 
+                ...(showEW ? [{ 
+                  type: 'bar' as const, name: 'EW', 
                   x: stateAggs.map(s => s.state), 
                   y: stateAggs.map(s => s.ew), 
                   customdata: stateAggs.map(s => [fmtInr(s.ew), s.ewPlans]),
                   hovertemplate: '<b>%{x} (EW)</b><br>Sales: %{customdata[0]}<br>Plans Sold: %{customdata[1]}<extra></extra>',
                   marker: { color: '#db2777' } 
-                },
+                }] : []),
               ]}
               layout={{
                 ...PLOTLY_BASE,
@@ -488,13 +491,13 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
                 hovertemplate: '<b>%{x} (Combo)</b><br>Sales: %{customdata[0]}<br>Plans Sold: %{customdata[1]}<extra></extra>',
                 line: { color: '#9333ea', width: 3 }, marker: { size: 6 } 
               },
-              { 
-                type: 'scatter', mode: 'lines+markers', name: 'EW', 
+              ...(showEW ? [{ 
+                type: 'scatter' as const, mode: 'lines+markers' as const, name: 'EW', 
                 x: trendData.months, y: trendData.ew, 
                 customdata: trendData.ew.map((val, idx) => [fmtInr(val), trendData.ewPlans[idx]]),
                 hovertemplate: '<b>%{x} (EW)</b><br>Sales: %{customdata[0]}<br>Plans Sold: %{customdata[1]}<extra></extra>',
                 line: { color: '#db2777', width: 3 }, marker: { size: 6 } 
-              },
+              }] : []),
             ]}
             layout={{
               ...PLOTLY_BASE,
@@ -546,7 +549,7 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
                   { col: 'sp', label: 'SP' },
                   { col: 'adld', label: 'ADLD' },
                   { col: 'combo', label: 'Combo' },
-                  { col: 'ew', label: 'EW' },
+                  ...(showEW ? [{ col: 'ew', label: 'EW' }] : []),
                 ].map(h => (
                   <th key={h.col} className="px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-50 select-none transition-colors" onClick={() => handleSort(h.col as TableSortKey)}>
                     <div className="flex items-center gap-1">
@@ -573,7 +576,7 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
                     <td className="px-3 py-2.5 text-blue-600 font-medium tabular-nums text-xs whitespace-nowrap">{row.spSales > 0 ? fmtInr(row.spSales) : '—'}</td>
                     <td className="px-3 py-2.5 text-indigo-600 font-medium tabular-nums text-xs whitespace-nowrap">{row.adldSales > 0 ? fmtInr(row.adldSales) : '—'}</td>
                     <td className="px-3 py-2.5 text-purple-600 font-medium tabular-nums text-xs whitespace-nowrap">{row.comboSales > 0 ? fmtInr(row.comboSales) : '—'}</td>
-                    <td className="px-3 py-2.5 text-pink-600 font-medium tabular-nums text-xs whitespace-nowrap">{row.ewSales > 0 ? fmtInr(row.ewSales) : '—'}</td>
+                    {showEW && <td className="px-3 py-2.5 text-pink-600 font-medium tabular-nums text-xs whitespace-nowrap">{row.ewSales > 0 ? fmtInr(row.ewSales) : '—'}</td>}
                   </tr>
                 )
               })}
