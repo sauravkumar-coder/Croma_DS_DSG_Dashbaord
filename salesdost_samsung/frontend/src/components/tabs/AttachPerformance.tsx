@@ -176,10 +176,10 @@ export default function AttachPerformance({ filters }: { filters: FilterState })
     return filteredStores.map(st => {
       const plans   = st.monthly_plans_count?.[primaryMonth] || 0
       const devices = st.monthly_main_qty?.[primaryMonth]   || 0
-      const attach  = devices > 0 ? plans / devices : 0
+      const attach  = st.monthly_attach_pct?.[primaryMonth] ?? (devices > 0 ? plans / devices : 0)
       const pPlans   = st.monthly_plans_count?.[prevMonth ?? ''] || 0
       const pDevices = st.monthly_main_qty?.[prevMonth ?? '']   || 0
-      const prevAttach = pDevices > 0 ? pPlans / pDevices : 0
+      const prevAttach = st.monthly_attach_pct?.[prevMonth ?? ''] ?? (pDevices > 0 ? pPlans / pDevices : 0)
       return { store: st, attach, plans, devices, prevAttach, mom: attach - prevAttach }
     })
   }, [filteredStores, primaryMonth, prevMonth])
@@ -334,6 +334,13 @@ export default function AttachPerformance({ filters }: { filters: FilterState })
 
       {/* <AttachFileUpload retailer={retailerCfg.apiRetailerId} onUploaded={refetchData} /> */}
 
+      {retailerCfg.apiRetailerId === 'vijaysales' && primaryMonth === 'Jul-2026' && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-3.5 text-xs flex items-center gap-2.5 shadow-sm">
+          <AlertTriangle className="h-4 w-4 text-amber-600 flex-shrink-0" />
+          <span>Vijay Sales attach % data for July 2026 is available up to <strong>12th July 2026</strong>.</span>
+        </div>
+      )}
+
       {/* ── KPI Row ────────────────────────────────────────────────────────── */}
       <motion.div
         variants={kpiContainer}
@@ -351,7 +358,9 @@ export default function AttachPerformance({ filters }: { filters: FilterState })
           <p className={cn('text-2xl font-bold tabular-nums mt-1', kpis.overallAttach >= ATTACH_GOOD ? 'text-emerald-600' : kpis.overallAttach >= ATTACH_MED ? 'text-amber-600' : 'text-red-600')}>
             {kpis.attachStoreCount > 0 ? `${(kpis.overallAttach * 100).toFixed(1)}%` : '—'}
           </p>
-          <p className="text-[10px] text-gray-400">{primaryMonth}</p>
+          <p className="text-[10px] text-gray-400">
+            {retailerCfg.apiRetailerId === 'vijaysales' && primaryMonth === 'Jul-2026' ? 'Jul-2026 (Upto 12th July)' : primaryMonth}
+          </p>
           {kpis.attachStoreCount < kpis.total && (
             <p className="text-[9px] text-amber-500">
               {kpis.attachStoreCount} of {kpis.total} stores reported device counts

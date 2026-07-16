@@ -1030,6 +1030,7 @@ async def get_dashboard_data(retailer: str = ""):
         # use the de-duplicated count instead of double-summing both.
         monthly_plans_granular = {}
         monthly_plans_na = {}
+        monthly_attach_na = {}
 
         for sale in _dedupe_sales(doc.get("sales", [])):
             year = sale.get("year")
@@ -1083,6 +1084,8 @@ async def get_dashboard_data(retailer: str = ""):
                     plans_val = int(m_data.get("planSales", 0) or 0)
                     if is_na_summary:
                         monthly_plans_na[m] = monthly_plans_na.get(m, 0) + plans_val
+                        if "attachPct" in m_data:
+                            monthly_attach_na[m] = float(m_data.get("attachPct") or 0.0)
                     else:
                         monthly_plans_granular[m] = monthly_plans_granular.get(m, 0) + plans_val
                     if is_sp:
@@ -1116,14 +1119,16 @@ async def get_dashboard_data(retailer: str = ""):
         for m in monthly_sales.keys():
             if is_croma_or_vs:
                 plans = monthly_plans_na.get(m, 0)
+                if m in monthly_attach_na:
+                    monthly_attach[m] = monthly_attach_na[m]
+                else:
+                    devices = monthly_main.get(m, 0)
+                    monthly_attach[m] = round(plans / devices, 4) if devices > 0 else 0.0
             else:
                 plans = monthly_plans_na.get(m, 0) or monthly_plans_granular.get(m, 0)
+                devices = monthly_main.get(m, 0)
+                monthly_attach[m] = round(plans / devices, 4) if devices > 0 else 0.0
             monthly_plans[m] = plans
-            devices = monthly_main.get(m, 0)
-            if devices > 0:
-                monthly_attach[m] = round(plans / devices, 4)
-            else:
-                monthly_attach[m] = 0.0
 
         # Override with the reconciled attach % file logic has been removed/disabled.
         # Previously loaded files from data/attach/ to override db records.
