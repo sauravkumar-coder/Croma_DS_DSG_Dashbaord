@@ -225,6 +225,7 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
   const kpis = useMemo(() => {
     const subcatPlans: Record<string, number> = {}
     const modelPlans: Record<string, number> = {}
+    const planBreakdown: Record<string, { plans: number; revenue: number }> = {}
     let totalPlans = 0
     let totalRevenue = 0
 
@@ -234,6 +235,9 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
       subcatPlans[r.subcat] = (subcatPlans[r.subcat] || 0) + r.plans_sold
       const abbr = abbreviateModel(r.model)
       modelPlans[abbr] = (modelPlans[abbr] || 0) + r.plans_sold
+      if (!planBreakdown[r.plan]) planBreakdown[r.plan] = { plans: 0, revenue: 0 }
+      planBreakdown[r.plan].plans += r.plans_sold
+      planBreakdown[r.plan].revenue += r.revenue
     }
 
     const sortedSubcats = Object.entries(subcatPlans).sort((a, b) => b[1] - a[1])
@@ -248,7 +252,7 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
     const worstModel = nonZeroModels[nonZeroModels.length - 1]?.[0] ?? '—'
     const worstModelQty = nonZeroModels[nonZeroModels.length - 1]?.[1] ?? 0
 
-    return { totalPlans, totalRevenue, topSubcat, topSubcatQty, topModel, topModelQty, worstModel, worstModelQty }
+    return { totalPlans, totalRevenue, topSubcat, topSubcatQty, topModel, topModelQty, worstModel, worstModelQty, planBreakdown }
   }, [filteredRecords])
 
   // 5. 6 Months Trend Graph data (uses last 6 months, respects plan + state filters only)
@@ -272,47 +276,31 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
     })
   }, [data, months, subcats, activePlan, effectiveState])
 
-  // 6. Radar Graph — theta = product subcategories, traces = plan types
-  const RADAR_PLAN_TYPES = ['SP', 'ADLD', 'COMBO', 'EW']
-  const radarTraces = useMemo(() => {
-    // For each plan type, compute how many plans were sold in each subcategory
-    const matrix: Record<string, Record<string, number>> = {}
-    for (const p of RADAR_PLAN_TYPES) {
-      matrix[p] = {}
-      for (const s of subcats) matrix[p][s] = 0
-    }
+  // 6. Pie Chart — Plans sold per plan type (with revenue for hover)
+  const PIE_PLAN_TYPES = ['SP', 'ADLD', 'COMBO', 'EW']
+  const PIE_PLAN_COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b']
+
+  const pieData = useMemo(() => {
+    const planPlans: Record<string, number> = {}
+    const planRevenue: Record<string, number> = {}
+    for (const p of PIE_PLAN_TYPES) { planPlans[p] = 0; planRevenue[p] = 0 }
 
     for (const r of data) {
       if (activeMonth && activeMonth !== 'all' && r.month !== activeMonth) continue
       if (effectiveState && r.state !== effectiveState) continue
-      if (matrix[r.plan] && r.subcat in matrix[r.plan]) {
-        matrix[r.plan][r.subcat] += r.plans_sold
+      if (PIE_PLAN_TYPES.includes(r.plan)) {
+        planPlans[r.plan] += r.plans_sold
+        planRevenue[r.plan] += r.revenue
       }
     }
 
-    const planColors: Record<string, string> = {
-      SP:    '#3b82f6',
-      ADLD:  '#8b5cf6',
-      COMBO: '#10b981',
-      EW:    '#f59e0b',
-    }
+    const labels = PIE_PLAN_TYPES.filter(p => planPlans[p] > 0)
+    const values = labels.map(p => planPlans[p])
+    const revenues = labels.map(p => planRevenue[p])
+    const colors = labels.map(p => PIE_PLAN_COLORS[PIE_PLAN_TYPES.indexOf(p)])
 
-    return RADAR_PLAN_TYPES.map(p => {
-      const rValues = subcats.map(s => matrix[p][s] ?? 0)
-      const closedR = [...rValues, rValues[0]]
-      const closedTheta = [...subcats, subcats[0]]
-      return {
-        type: 'scatterpolar',
-        r: closedR,
-        theta: closedTheta,
-        fill: 'toself',
-        name: p,
-        line: { color: planColors[p] ?? '#64748b', width: 2 },
-        marker: { size: 4 },
-        opacity: 0.65,
-      }
-    })
-  }, [data, subcats, activeMonth, effectiveState])
+    return { labels, values, revenues, colors }
+  }, [data, activeMonth, effectiveState])
 
   // 7. Heatmap State Metrics
   const geoStateNames = useMemo<string[]>(() => {
@@ -337,12 +325,21 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
     const hoverTexts: string[] = []
     const matchedStates = new Set<string>()
 
+    // Also sum revenue per state
+    const stateRevenue: Record<string, number> = {}
+    for (const r of filteredRecords) {
+      stateRevenue[r.state] = (stateRevenue[r.state] || 0) + r.revenue
+    }
+
     for (const [ourState, qty] of Object.entries(statePlans)) {
       const geoName = matchGeoName(ourState, geoStateNames)
       if (geoName) {
         locations.push(geoName)
         zValues.push(qty)
-        hoverTexts.push(`<b>${ourState}</b><br>Plans Sold: ${qty.toLocaleString()} units<br>Click to filter table`)
+        const rev = stateRevenue[ourState] ?? 0
+        hoverTexts.push(
+          `<b>${ourState}</b><br>Plans Sold: ${qty.toLocaleString()}<br>Revenue: ₹${rev.toLocaleString('en-IN')}<br><i>Click to filter table</i>`
+        )
         matchedStates.add(geoName)
       }
     }
@@ -578,13 +575,27 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
               </div>
             ) : (
               <Plot
-                data={subcats.map((s, idx) => ({
-                  type: 'bar',
-                  name: s,
-                  x: trendData.map(d => d.month),
-                  y: trendData.map(d => d[s] ?? 0),
-                  marker: { color: CHART_COLORS[idx % CHART_COLORS.length] },
-                }))}
+                data={subcats.map((s, idx) => {
+                  // Build revenue array in parallel for hover
+                  const revByMonth: Record<string, number> = {}
+                  for (const r of data) {
+                    if (months.slice(-6).includes(r.month) && r.subcat === s) {
+                      if (activePlan && r.plan !== activePlan) continue
+                      if (effectiveState && r.state !== effectiveState) continue
+                      revByMonth[r.month] = (revByMonth[r.month] || 0) + r.revenue
+                    }
+                  }
+                  return {
+                    type: 'bar',
+                    name: s,
+                    x: trendData.map(d => d.month),
+                    y: trendData.map(d => d[s] ?? 0),
+                    marker: { color: CHART_COLORS[idx % CHART_COLORS.length] },
+                    customdata: trendData.map(d => (revByMonth[d.month] ?? 0)),
+                    hovertemplate:
+                      `<b>${s}</b><br>Month: %{x}<br>Plans Sold: <b>%{y:,}</b><br>Revenue: <b>₹%{customdata:,.0f}</b><extra></extra>`,
+                  }
+                })}
                 layout={{
                   barmode: 'stack',
                   paper_bgcolor: 'rgba(0,0,0,0)',
@@ -593,8 +604,9 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
                   margin: { l: 40, r: 10, t: 10, b: 40 },
                   height: 340,
                   xaxis: { gridcolor: '#f1f5f9', tickfont: { size: 9 } },
-                  yaxis: { gridcolor: '#f1f5f9', tickfont: { size: 9 } },
+                  yaxis: { gridcolor: '#f1f5f9', tickfont: { size: 9 }, title: { text: 'Plans Sold', font: { size: 9 } } },
                   legend: { orientation: 'h', y: -0.18, font: { size: 9 } },
+                  hoverlabel: { bgcolor: '#1e293b', bordercolor: '#1e293b', font: { color: '#f8fafc', size: 11 } },
                 } as any}
                 config={{ displayModeBar: false, responsive: true }}
                 style={{ width: '100%', height: '100%' }}
@@ -603,31 +615,48 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
           </div>
         </div>
 
-        {/* Radar Graph — Plan Types across Subcategories */}
+        {/* Pie Chart — Plan Type Distribution */}
         <div className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm">
           <div className="border-b border-gray-50 pb-3 mb-4">
-            <h3 className="text-sm font-bold text-gray-900">Subcategory Distribution by Plan Type</h3>
-            <p className="text-[10px] text-gray-400 mt-0.5">How each plan type (SP, ADLD, COMBO, EW) distributes across product subcategories.</p>
+            <h3 className="text-sm font-bold text-gray-900">Plan Type Distribution</h3>
+            <p className="text-[10px] text-gray-400 mt-0.5">Share of total plans sold across SP, ADLD, COMBO and EW plan types.</p>
           </div>
           <div className="h-[340px]">
-            {radarTraces.length === 0 || subcats.length === 0 ? (
+            {pieData.labels.length === 0 ? (
               <div className="flex items-center justify-center h-full text-xs text-gray-400">
                 No data available for filters.
               </div>
             ) : (
               <Plot
-                data={radarTraces as any}
+                data={[{
+                  type: 'pie',
+                  labels: pieData.labels,
+                  values: pieData.values,
+                  hole: 0.45,
+                  marker: {
+                    colors: pieData.colors,
+                    line: { color: '#ffffff', width: 2 },
+                  },
+                  textinfo: 'label+percent',
+                  textfont: { size: 11, family: 'Inter, sans-serif' },
+                  customdata: pieData.revenues,
+                  hovertemplate:
+                    '<b>%{label}</b><br>' +
+                    'Plans Sold: <b>%{value:,}</b><br>' +
+                    'Share: <b>%{percent}</b><br>' +
+                    'Revenue: <b>₹%{customdata:,.0f}</b>' +
+                    '<extra></extra>',
+                  pull: pieData.labels.map(() => 0.02),
+                }]}
                 layout={{
                   paper_bgcolor: 'rgba(0,0,0,0)',
                   plot_bgcolor: 'rgba(0,0,0,0)',
                   font: { family: 'Inter, sans-serif', size: 10 },
-                  polar: {
-                    radialaxis: { visible: true, showticklabels: true, tickfont: { size: 8 } },
-                    angularaxis: { tickfont: { size: 9, color: '#64748b' } },
-                  },
-                  margin: { l: 40, r: 40, t: 20, b: 40 },
+                  margin: { l: 10, r: 10, t: 10, b: 10 },
                   height: 340,
-                  legend: { orientation: 'h', y: -0.12, font: { size: 9 } },
+                  showlegend: true,
+                  legend: { orientation: 'h', y: -0.08, font: { size: 10 } },
+                  hoverlabel: { bgcolor: '#1e293b', bordercolor: '#1e293b', font: { color: '#f8fafc', size: 11 } },
                 } as any}
                 config={{ displayModeBar: false, responsive: true }}
                 style={{ width: '100%', height: '100%' }}

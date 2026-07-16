@@ -866,15 +866,16 @@ def delete_attach(retailer: str, month: str):
 @app.get("/api/model-insights")
 async def get_model_insights(retailer: str = ""):
     """Return aggregated model and product subcategory sales for Samsung brand.
-    
-    Filters by Croma, Vijay Sales, or other retailer channels if specified.
+
+    Uses a MongoDB aggregation pipeline ($unwind + $group) for all heavy lifting,
+    instead of fetching raw documents and looping in Python.
     """
     db = get_db()
     if db is None:
         return []
-        
-    # 1. Determine matching stores for the retailer
-    store_filter = {}
+
+    # 1. Resolve store IDs + metadata (small Store collection query)
+    store_filter: dict = {}
     if retailer:
         r_lower = retailer.lower()
         if r_lower == "croma":
@@ -889,86 +890,113 @@ async def get_model_insights(retailer: str = ""):
             store_filter["storeName"] = {"$regex": "kore", "$options": "i"}
         else:
             store_filter["storeName"] = {"$regex": retailer, "$options": "i"}
-            
+
     stores_cursor = db["Store"].find(store_filter, {"_id": 1, "state": 1, "city": 1, "storeName": 1})
     stores_list = await stores_cursor.to_list(None)
-    store_state_map = {str(s["_id"]): s.get("state", "Unknown") for s in stores_list}
-    store_city_map = {str(s["_id"]): s.get("city", "") for s in stores_list}
-    store_name_map = {str(s["_id"]): s.get("storeName", "") for s in stores_list}
-    store_ids = list(store_state_map.keys())
-    
+    store_meta: dict = {
+        str(s["_id"]): {
+            "state": s.get("state", "Unknown"),
+            "city":  s.get("city", ""),
+            "store": s.get("storeName", ""),
+        }
+        for s in stores_list
+    }
+    store_ids = list(store_meta.keys())
+
     if not store_ids:
         return []
-        
-    # 2. Get ProductSubCategory names mapping
-    psc_cursor = db["ProductSubCategory"].find()
+
+    # 2. Resolve ProductSubCategory id → name (small collection, fast)
+    psc_cursor = db["ProductSubCategory"].find({}, {"_id": 1, "name": 1})
     psc_docs = await psc_cursor.to_list(None)
     psc_names = {str(psc["_id"]): psc["name"] for psc in psc_docs}
-    
-    # 3. Retrieve Samsung brand granular sales records
-    sales_cursor = db["SalesRecord"].find({
-        "storeId": {"$in": store_ids},
-        "brandId": "brand_002"
-    })
-    sales_docs = await sales_cursor.to_list(None)
-    
+
     _MONTH_MAP = {
         1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
         7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
     }
-    
-    # 4. Group metrics in Python
-    aggregated = {}
-    for d in sales_docs:
-        store_id = str(d.get("storeId", ""))
-        state = store_state_map.get(store_id, "Unknown")
-        city  = store_city_map.get(store_id, "")
-        store = store_name_map.get(store_id, "")
-        subcat_id = d.get("productSubCategoryId")
-        subcat = psc_names.get(subcat_id, "Unknown") if subcat_id else "Unknown"
-        model = d.get("modelName") or "Unknown"
-        plan = d.get("planType") or "Unknown"
-        
-        # Skip monthly summary NA records from model analysis
-        if plan.upper() == "NA":
-            continue
-            
-        year = d.get("year", 2026)
-        
-        monthly = d.get("monthlySales", [])
-        for m_data in monthly:
-            month_num = m_data.get("month")
-            if not month_num:
-                continue
-            m_abbr = _MONTH_MAP.get(int(month_num))
-            if not m_abbr:
-                continue
-            month_label = f"{m_abbr}-{year}"
-            
-            plans_sold = int(m_data.get("planSales", 0) or 0)
-            revenue = float(m_data.get("revenue", 0) or 0)
-            
-            if plans_sold > 0 or revenue > 0:
-                key = (month_label, state, city, store, subcat, model, plan.strip().upper())
-                if key not in aggregated:
-                    aggregated[key] = {"plans_sold": 0, "revenue": 0.0}
-                aggregated[key]["plans_sold"] += plans_sold
-                aggregated[key]["revenue"] += revenue
-                
+
+    # 3. Aggregation pipeline — all grouping/summing done inside MongoDB.
+    #    $project removes large dailySales arrays from the wire transfer.
+    pipeline = [
+        # Filter at DB level — only Samsung brand, these stores, skip NA plan summaries
+        {
+            "$match": {
+                "storeId": {"$in": store_ids},
+                "brandId": "brand_002",
+                "planType": {"$nin": ["NA", "na", "N/A", ""]},
+            }
+        },
+        # Strict projection: only fetch what we need (avoids transferring dailySales)
+        {
+            "$project": {
+                "storeId":              1,
+                "productSubCategoryId": 1,
+                "modelName":            1,
+                "planType":             1,
+                "year":                 1,
+                "monthlySales":         1,
+            }
+        },
+        # Flatten monthlySales array into one document per month entry
+        {"$unwind": "$monthlySales"},
+        # Skip zero-activity months before grouping
+        {
+            "$match": {
+                "$or": [
+                    {"monthlySales.planSales": {"$gt": 0}},
+                    {"monthlySales.revenue":   {"$gt": 0}},
+                ]
+            }
+        },
+        # Group and sum — all work done in MongoDB
+        {
+            "$group": {
+                "_id": {
+                    "storeId":  "$storeId",
+                    "pscId":    "$productSubCategoryId",
+                    "model":    "$modelName",
+                    "plan":     {"$toUpper": "$planType"},
+                    "year":     "$year",
+                    "monthNum": "$monthlySales.month",
+                },
+                "plans_sold": {"$sum": {"$ifNull": ["$monthlySales.planSales", 0]}},
+                "revenue":    {"$sum": {"$ifNull": ["$monthlySales.revenue",   0]}},
+            }
+        },
+        {"$sort": {"_id.year": 1, "_id.monthNum": 1}},
+    ]
+
+    agg_cursor = db["SalesRecord"].aggregate(pipeline, allowDiskUse=True)
+    agg_docs = await agg_cursor.to_list(None)
+
+    # 4. Light post-processing: O(n) dict lookups to resolve names
     response_data = []
-    for (month, state, city, store, subcat, model, plan), metrics in aggregated.items():
+    for doc in agg_docs:
+        gid = doc["_id"]
+        sid = str(gid.get("storeId", ""))
+        meta = store_meta.get(sid, {"state": "Unknown", "city": "", "store": ""})
+        psc_id = gid.get("pscId")
+        subcat = psc_names.get(str(psc_id), "Unknown") if psc_id else "Unknown"
+        year = gid.get("year", 2026)
+        month_num = gid.get("monthNum")
+        if not month_num:
+            continue
+        m_abbr = _MONTH_MAP.get(int(month_num))
+        if not m_abbr:
+            continue
         response_data.append({
-            "month": month,
-            "state": state,
-            "city": city,
-            "store": store,
-            "subcat": subcat,
-            "model": model,
-            "plan": plan,
-            "plans_sold": metrics["plans_sold"],
-            "revenue": metrics["revenue"]
+            "month":      f"{m_abbr}-{year}",
+            "state":      meta["state"],
+            "city":       meta["city"],
+            "store":      meta["store"],
+            "subcat":     subcat,
+            "model":      gid.get("model") or "Unknown",
+            "plan":       gid.get("plan") or "Unknown",
+            "plans_sold": int(doc.get("plans_sold", 0)),
+            "revenue":    float(doc.get("revenue", 0)),
         })
-        
+
     return response_data
 
 
