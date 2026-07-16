@@ -302,7 +302,7 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
 
       {/* ── KPI Row ── */}
       <motion.div
-        className="grid grid-cols-2 gap-3 sm:grid-cols-5"
+        className={cn('grid grid-cols-2 gap-3', showEW ? 'sm:grid-cols-5' : 'sm:grid-cols-4')}
         variants={kpiContainer}
         initial="hidden"
         animate="show"
@@ -312,7 +312,7 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
           { label: 'SP Sales', value: planAggs.sp, color: 'text-blue-600', bg: 'bg-blue-100' },
           { label: 'ADLD Sales', value: planAggs.adld, color: 'text-indigo-600', bg: 'bg-indigo-100' },
           { label: 'Combo Sales', value: planAggs.combo, color: 'text-purple-600', bg: 'bg-purple-100' },
-          { label: 'EW Sales', value: planAggs.ew, color: 'text-pink-600', bg: 'bg-pink-100' },
+          ...(showEW ? [{ label: 'EW Sales', value: planAggs.ew, color: 'text-pink-600', bg: 'bg-pink-100' }] : []),
         ].map((kpi, i) => (
           <motion.div
             key={kpi.label}
@@ -327,6 +327,7 @@ export default function PlanLevelInsight({ filters }: { filters: FilterState }) 
           </motion.div>
         ))}
       </motion.div>
+
 
       {/* ── Charts Row 1 ── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
