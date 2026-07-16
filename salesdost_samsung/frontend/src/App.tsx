@@ -456,11 +456,11 @@ export default function App() {
     }
   }, [refetchData])
 
-  // Auto-refresh every 5 minutes so live DB pushes surface automatically
-  useEffect(() => {
-    const interval = setInterval(() => { refetchData() }, 5 * 60 * 1000)
-    return () => clearInterval(interval)
-  }, [refetchData])
+  // Auto-refresh has been disabled to prevent background refetches from disrupting the UI with skeleton states.
+  // useEffect(() => {
+  //   const interval = setInterval(() => { refetchData() }, 5 * 60 * 1000)
+  //   return () => clearInterval(interval)
+  // }, [refetchData])
   const [journeyPrefilter, setJourneyPrefilter] = useState<StoreCategory | null>(null)
 
   const handleNavigateToStore = useCallback((storeId: string) => {
