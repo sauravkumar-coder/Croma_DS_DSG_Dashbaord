@@ -148,7 +148,7 @@ def _get_attach_lookup(retailer: str) -> dict[str, tuple[dict[str, float], dict[
     return months
 
 
-def _match_attach_pct(store_name: str, by_code: dict[str, float], by_name: dict[str, float]) -> float | None:
+def _match_attach_pct(store_name: str, by_code: dict[str, float], by_name: dict[str, float], store_id: str = None) -> float | None:
     """Match a Store doc's name against an attach file's rows.
 
     Croma store names embed the attach file's StoreCode as a suffix
@@ -156,6 +156,11 @@ def _match_attach_pct(store_name: str, by_code: dict[str, float], by_name: dict[
     since it's an exact match; Vijay Sales has no such code, so normalized
     name matching (same scheme as target-file matching) is the fallback.
     """
+    if store_id:
+        store_id_lower = str(store_id).strip().lower()
+        if store_id_lower in by_code:
+            return by_code[store_id_lower]
+
     m = _CROMA_STORE_CODE_RE.search(store_name or "")
     if m and m.group(1).lower() in by_code:
         return by_code[m.group(1).lower()]
@@ -1122,7 +1127,7 @@ async def get_dashboard_data(retailer: str = ""):
         # using the de-duplicated (granular-preferred) plan count instead.
         if retailer.lower() in _ATTACH_RETAILERS:
             for m_label, (by_code, by_name) in _get_attach_lookup(retailer.lower()).items():
-                pct = _match_attach_pct(store_name, by_code, by_name)
+                pct = _match_attach_pct(store_name, by_code, by_name, store_brand_id)
                 if pct is None:
                     continue
                 deduped_plans = monthly_plans_granular.get(m_label, 0) or monthly_plans_na.get(m_label, 0)
@@ -1439,7 +1444,7 @@ async def get_store_detail(store_id: str, retailer: str = ""):
     # See the matching override in get_dashboard_data.
     if retailer.lower() in _ATTACH_RETAILERS:
         for m_label, (by_code, by_name) in _get_attach_lookup(retailer.lower()).items():
-            pct = _match_attach_pct(store_name, by_code, by_name)
+            pct = _match_attach_pct(store_name, by_code, by_name, store_brand_id)
             if pct is None:
                 continue
             deduped_plans = monthly_plans_granular.get(m_label, 0) or monthly_plans_na.get(m_label, 0)

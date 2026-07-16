@@ -922,6 +922,134 @@ def _parse_attach_grouped(filepath: str, sheet_name: str) -> list[dict[str, Any]
     return rows or None
 
 
+def _parse_month_cell(val) -> str | None:
+    if pd.isna(val):
+        return None
+    from datetime import datetime
+    if isinstance(val, (datetime, pd.Timestamp)):
+        abbr_list = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        return f"{abbr_list[val.month - 1]}-{val.year}"
+    val_s = str(val).strip()
+    m_date = re.match(r"^(\d{2})[-/](\d{2})[-/](\d{4})$", val_s)
+    if m_date:
+        day, month, year = m_date.groups()
+        abbr_list = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        return f"{abbr_list[int(month) - 1]}-{year}"
+    m_date2 = re.match(r"^(\d{4})[-/](\d{2})[-/](\d{2})$", val_s)
+    if m_date2:
+        year, month, day = m_date2.groups()
+        abbr_list = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        return f"{abbr_list[int(month) - 1]}-{year}"
+    
+    # Fallback to filename-based month detection logic
+    lower = val_s.lower()
+    year_match = re.search(r"20\d{2}", lower)
+    year = year_match.group() if year_match else "2026"
+    
+    _MONTH_FULL_TO_ABBR = {
+        "january": "Jan", "february": "Feb", "march": "Mar", "april": "Apr",
+        "may": "May", "june": "Jun", "july": "Jul", "august": "Aug",
+        "september": "Sep", "october": "Oct", "november": "Nov", "december": "Dec",
+    }
+    for full, abbr in _MONTH_FULL_TO_ABBR.items():
+        if full in lower:
+            return f"{abbr}-{year}"
+    for abbr in _MONTH_FULL_TO_ABBR.values():
+        abbr_lower = abbr.lower()
+        if re.search(rf"\b{abbr_lower}\b", lower) or abbr_lower in lower:
+            return f"{abbr}-{year}"
+    return None
+
+
+def _month_sort_key(label: str):
+    if not label or "-" not in label:
+        return (0, 0)
+    parts = label.split("-")
+    if len(parts) == 2:
+        m_abbr, y_str = parts
+        try:
+            year = int(y_str)
+            abbr_list = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+            month_idx = abbr_list.index(m_abbr.capitalize()) + 1
+            return (year, month_idx)
+        except ValueError:
+            pass
+    return (0, 0)
+
+
+def _parse_attach_multimonth(filepath: str, sheet_name: str, target_month: str = None) -> list[dict[str, Any]] | None:
+    try:
+        df = pd.read_excel(filepath, sheet_name=sheet_name, header=None)
+    except Exception:
+        return None
+        
+    if df.shape[0] < 2 or df.shape[1] < 2:
+        return None
+        
+    first_cell = str(df.iloc[0, 0]).strip().lower()
+    if "storebrand_id" not in first_cell and "storebrand" not in first_cell:
+        return None
+        
+    # Build column indices mapping by month
+    month_indices = {}
+    current_month = None
+    for col_idx in range(df.shape[1]):
+        val = df.iloc[0, col_idx]
+        parsed_m = _parse_month_cell(val)
+        if parsed_m:
+            current_month = parsed_m
+        if current_month:
+            month_indices.setdefault(current_month, []).append(col_idx)
+            
+    if not target_month:
+        # Find the latest month
+        detected_months = list(month_indices.keys())
+        if not detected_months:
+            return None
+        detected_months.sort(key=_month_sort_key, reverse=True)
+        target_month = detected_months[0]
+        
+    if target_month not in month_indices:
+        return None
+        
+    attach_col_idx = None
+    for col_idx in month_indices[target_month]:
+        metric_name = str(df.iloc[1, col_idx]).strip().lower()
+        if "attach" in metric_name:
+            attach_col_idx = col_idx
+            break
+            
+    if attach_col_idx is None:
+        return None
+        
+    rows = []
+    for r_idx in range(2, df.shape[0]):
+        store_code = df.iloc[r_idx, 0]
+        if pd.isna(store_code):
+            continue
+        store_code_s = str(store_code).strip()
+        if not store_code_s or store_code_s.lower() in ("total", "grand total", "storebrand_id"):
+            continue
+            
+        attach_val = df.iloc[r_idx, attach_col_idx]
+        if pd.isna(attach_val):
+            continue
+            
+        try:
+            pct = float(attach_val)
+            if pct > 1.0:
+                pct /= 100.0
+        except (TypeError, ValueError):
+            continue
+            
+        rows.append({
+            "store_code": store_code_s,
+            "store_name": None,
+            "attach_pct": pct
+        })
+    return rows or None
+
+
 def parse_attach_file(filepath: str) -> list[dict[str, Any]]:
     """Parse a Croma/Vijay Sales monthly Attach % report into per-branch rows.
 
@@ -930,8 +1058,13 @@ def parse_attach_file(filepath: str) -> list[dict[str, Any]]:
     first, then by normalized store name, since layouts don't consistently
     provide both.
     """
+    import os
+    target_month = detect_month_from_filename(os.path.basename(filepath))
     xl = pd.ExcelFile(filepath)
     for sheet_name in reversed(xl.sheet_names):
+        rows = _parse_attach_multimonth(filepath, sheet_name, target_month)
+        if rows:
+            return rows
         rows = _parse_attach_flat(filepath, sheet_name)
         if rows:
             return rows
