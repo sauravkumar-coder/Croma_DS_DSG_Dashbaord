@@ -1113,7 +1113,7 @@ async def get_dashboard_data(retailer: str = ""):
                         subcat_revenue[subcat_name] = subcat_revenue.get(subcat_name, 0.0) + rev_val
         
         for m in monthly_sales.keys():
-            plans = monthly_plans_granular.get(m, 0) or monthly_plans_na.get(m, 0)
+            plans = monthly_plans_na.get(m, 0) or monthly_plans_granular.get(m, 0)
             monthly_plans[m] = plans
             devices = monthly_main.get(m, 0)
             if devices > 0:
