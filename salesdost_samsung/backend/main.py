@@ -1121,20 +1121,18 @@ async def get_dashboard_data(retailer: str = ""):
             else:
                 monthly_attach[m] = 0.0
 
-        # Override with the reconciled attach % file where one has been uploaded
-        # for this retailer/month — SalesRecord's own device counts are missing
-        # for most stores/months, so devices are derived as plans ÷ attach_pct
-        # using the de-duplicated (granular-preferred) plan count instead.
-        if retailer.lower() in _ATTACH_RETAILERS:
-            for m_label, (by_code, by_name) in _get_attach_lookup(retailer.lower()).items():
-                pct = _match_attach_pct(store_name, by_code, by_name, store_brand_id)
-                if pct is None:
-                    continue
-                deduped_plans = monthly_plans_granular.get(m_label, 0) or monthly_plans_na.get(m_label, 0)
-                monthly_plans[m_label] = deduped_plans
-                monthly_attach[m_label] = round(pct, 4)
-                monthly_main[m_label] = round(deduped_plans / pct) if pct > 0 else monthly_main.get(m_label, 0)
-                months_set.add(m_label)
+        # Override with the reconciled attach % file logic has been removed/disabled.
+        # Previously loaded files from data/attach/ to override db records.
+        # if retailer.lower() in _ATTACH_RETAILERS:
+        #     for m_label, (by_code, by_name) in _get_attach_lookup(retailer.lower()).items():
+        #         pct = _match_attach_pct(store_name, by_code, by_name, store_brand_id)
+        #         if pct is None:
+        #             continue
+        #         deduped_plans = monthly_plans_granular.get(m_label, 0) or monthly_plans_na.get(m_label, 0)
+        #         monthly_plans[m_label] = deduped_plans
+        #         monthly_attach[m_label] = round(pct, 4)
+        #         monthly_main[m_label] = round(deduped_plans / pct) if pct > 0 else monthly_main.get(m_label, 0)
+        #         months_set.add(m_label)
 
         # Gather targets for all months dynamically from database StoreTarget lookup
         monthly_targets = {}

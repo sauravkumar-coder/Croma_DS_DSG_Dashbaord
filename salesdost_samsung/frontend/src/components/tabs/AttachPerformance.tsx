@@ -332,7 +332,7 @@ export default function AttachPerformance({ filters }: { filters: FilterState })
   return (
     <div className="space-y-5">
 
-      <AttachFileUpload retailer={retailerCfg.apiRetailerId} onUploaded={refetchData} />
+      {/* <AttachFileUpload retailer={retailerCfg.apiRetailerId} onUploaded={refetchData} /> */}
 
       {/* ── KPI Row ────────────────────────────────────────────────────────── */}
       <motion.div
