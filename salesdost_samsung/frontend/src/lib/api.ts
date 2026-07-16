@@ -290,6 +290,8 @@ export const getAnalysis = (sheet: string) =>
 export interface ModelInsightRecord {
   month: string
   state: string
+  city?: string
+  store?: string
   subcat: string
   model: string
   plan: string

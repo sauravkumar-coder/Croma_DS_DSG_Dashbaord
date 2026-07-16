@@ -890,9 +890,11 @@ async def get_model_insights(retailer: str = ""):
         else:
             store_filter["storeName"] = {"$regex": retailer, "$options": "i"}
             
-    stores_cursor = db["Store"].find(store_filter, {"_id": 1, "state": 1})
+    stores_cursor = db["Store"].find(store_filter, {"_id": 1, "state": 1, "city": 1, "storeName": 1})
     stores_list = await stores_cursor.to_list(None)
     store_state_map = {str(s["_id"]): s.get("state", "Unknown") for s in stores_list}
+    store_city_map = {str(s["_id"]): s.get("city", "") for s in stores_list}
+    store_name_map = {str(s["_id"]): s.get("storeName", "") for s in stores_list}
     store_ids = list(store_state_map.keys())
     
     if not store_ids:
@@ -920,6 +922,8 @@ async def get_model_insights(retailer: str = ""):
     for d in sales_docs:
         store_id = str(d.get("storeId", ""))
         state = store_state_map.get(store_id, "Unknown")
+        city  = store_city_map.get(store_id, "")
+        store = store_name_map.get(store_id, "")
         subcat_id = d.get("productSubCategoryId")
         subcat = psc_names.get(subcat_id, "Unknown") if subcat_id else "Unknown"
         model = d.get("modelName") or "Unknown"
@@ -945,17 +949,19 @@ async def get_model_insights(retailer: str = ""):
             revenue = float(m_data.get("revenue", 0) or 0)
             
             if plans_sold > 0 or revenue > 0:
-                key = (month_label, state, subcat, model, plan.strip().upper())
+                key = (month_label, state, city, store, subcat, model, plan.strip().upper())
                 if key not in aggregated:
                     aggregated[key] = {"plans_sold": 0, "revenue": 0.0}
                 aggregated[key]["plans_sold"] += plans_sold
                 aggregated[key]["revenue"] += revenue
                 
     response_data = []
-    for (month, state, subcat, model, plan), metrics in aggregated.items():
+    for (month, state, city, store, subcat, model, plan), metrics in aggregated.items():
         response_data.append({
             "month": month,
             "state": state,
+            "city": city,
+            "store": store,
             "subcat": subcat,
             "model": model,
             "plan": plan,

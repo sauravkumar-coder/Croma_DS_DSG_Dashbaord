@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import createPlotlyComponent from 'react-plotly.js/factory'
 // @ts-ignore — plotly.js-dist-min does not ship its own .d.ts
@@ -8,20 +8,10 @@ import { getModelInsights, ModelInsightRecord } from '@/lib/api'
 import { fmtInr } from '@/lib/formatting'
 import { cn } from '@/lib/utils'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '../ui/select'
-import {
   Activity,
   TrendingUp,
   AlertTriangle,
   Search,
-  Filter,
-  Calendar,
-  Layers,
   MapPin
 } from 'lucide-react'
 
@@ -105,6 +95,24 @@ function matchGeoName(ourName: string, geoNames: string[]): string | null {
   )
 }
 
+/**
+ * Abbreviate a model name: keep base model token only.
+ * e.g. "S26 Violet Jetblack" → "S26"
+ *      "S26 Ultra White"     → "S26 Ultra"
+ *      "Fold 7 GB Silver"    → "Fold 7"
+ *      "A17 BLUE N"          → "A17"
+ */
+function abbreviateModel(name: string): string {
+  if (!name) return name
+  // Well-known two-word prefixes that should be kept together
+  const twoWordPrefixes = ['S26 Ultra', 'S25 Ultra', 'S24 Ultra', 'S23 Ultra', 'Fold 7', 'Fold 6', 'Flip 7', 'Flip 6']
+  for (const prefix of twoWordPrefixes) {
+    if (name.toUpperCase().startsWith(prefix.toUpperCase())) return prefix
+  }
+  // Otherwise return first token
+  return name.split(' ')[0]
+}
+
 // Framer motion variants for premium load animations
 const container = {
   hidden: { opacity: 0 },
@@ -126,20 +134,17 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
   const [data, setData] = useState<ModelInsightRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  
-  // Local filters
-  const [selectedMonth, setSelectedMonth] = useState<string>('all')
-  const [selectedPlan, setSelectedPlan] = useState<string>('all')
-  const [selectedSubcat, setSelectedSubcat] = useState<string>('all')
+
+  // Local state: only map click state (all other filtering via global filters)
   const [selectedState, setSelectedState] = useState<string | null>(null)
-  
+
   // GeoJSON state
   const [geojson, setGeojson] = useState<any>(null)
   const [geoLoading, setGeoLoading] = useState(true)
-  
-  // Search input for model list
+
+  // Table search / sort
   const [searchQuery, setSearchQuery] = useState('')
-  const [sortKey, setSortKey] = useState<'model' | 'subcat' | 'plan' | 'plans_sold' | 'revenue'>('plans_sold')
+  const [sortKey, setSortKey] = useState<'state' | 'city' | 'store' | 'model' | 'subcat' | 'plans_sold'>('plans_sold')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [page, setPage] = useState(1)
   const PAGE_SIZE = 12
@@ -174,7 +179,7 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
       })
   }, [])
 
-  // 3. Extract unique dropdown items chronologically
+  // 3. Extract unique values for derivation
   const months = useMemo(() => {
     const set = new Set(data.map(d => d.month))
     const list = Array.from(set)
@@ -192,34 +197,32 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
     return Array.from(set).filter(Boolean).sort()
   }, [data])
 
-  const plans = useMemo(() => {
-    const set = new Set(data.map(d => d.plan))
-    return Array.from(set).filter(Boolean).sort()
-  }, [data])
+  // ── Derive active filter values from globalFilters ──────────────────────────
+  const activeMonth: string = useMemo(() => {
+    if (globalFilters?.targetMonth) return globalFilters.targetMonth
+    return months.length > 0 ? months[months.length - 1] : 'all'
+  }, [globalFilters, months])
 
-  // Set default month when data loads
-  useEffect(() => {
-    if (months.length > 0 && selectedMonth === 'all') {
-      setSelectedMonth(months[months.length - 1]) // Default to latest month
-    }
-  }, [months, selectedMonth])
+  const activePlan: string = globalFilters?.planCategory ?? ''
+  const activeSubcat: string = globalFilters?.productSubcategory ?? ''
+  const activeGlobalState: string = globalFilters?.state ?? ''
 
-  // ── Data aggregations ──────────────────────────────────────────────────────
-  
-  // Filter records based on UI controls
+  // Combined state filter: global state OR map-click state
+  const effectiveState = activeGlobalState || selectedState || ''
+
+  // ── Filter records based on active global + map filters ────────────────────
   const filteredRecords = useMemo(() => {
     return data.filter(d => {
-      if (selectedMonth !== 'all' && d.month !== selectedMonth) return false
-      if (selectedPlan !== 'all' && d.plan !== selectedPlan) return false
-      if (selectedSubcat !== 'all' && d.subcat !== selectedSubcat) return false
-      if (selectedState && d.state !== selectedState) return false
+      if (activeMonth && activeMonth !== 'all' && d.month !== activeMonth) return false
+      if (activePlan && d.plan !== activePlan) return false
+      if (activeSubcat && d.subcat.toLowerCase() !== activeSubcat.toLowerCase()) return false
+      if (effectiveState && d.state !== effectiveState) return false
       return true
     })
-  }, [data, selectedMonth, selectedPlan, selectedSubcat, selectedState])
+  }, [data, activeMonth, activePlan, activeSubcat, effectiveState])
 
   // 4. KPI Card metrics
   const kpis = useMemo(() => {
-    // Sum plans by subcat
     const subcatPlans: Record<string, number> = {}
     const modelPlans: Record<string, number> = {}
     let totalPlans = 0
@@ -228,9 +231,9 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
     for (const r of filteredRecords) {
       totalPlans += r.plans_sold
       totalRevenue += r.revenue
-      
       subcatPlans[r.subcat] = (subcatPlans[r.subcat] || 0) + r.plans_sold
-      modelPlans[r.model] = (modelPlans[r.model] || 0) + r.plans_sold
+      const abbr = abbreviateModel(r.model)
+      modelPlans[abbr] = (modelPlans[abbr] || 0) + r.plans_sold
     }
 
     const sortedSubcats = Object.entries(subcatPlans).sort((a, b) => b[1] - a[1])
@@ -240,127 +243,98 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
     const topSubcatQty = sortedSubcats[0]?.[1] ?? 0
     const topModel = sortedModels[0]?.[0] ?? '—'
     const topModelQty = sortedModels[0]?.[1] ?? 0
-    
-    // Worst model (least plans sold, excluding 0)
+
     const nonZeroModels = sortedModels.filter(m => m[1] > 0)
     const worstModel = nonZeroModels[nonZeroModels.length - 1]?.[0] ?? '—'
     const worstModelQty = nonZeroModels[nonZeroModels.length - 1]?.[1] ?? 0
 
-    return {
-      totalPlans,
-      totalRevenue,
-      topSubcat,
-      topSubcatQty,
-      topModel,
-      topModelQty,
-      worstModel,
-      worstModelQty
-    }
+    return { totalPlans, totalRevenue, topSubcat, topSubcatQty, topModel, topModelQty, worstModel, worstModelQty }
   }, [filteredRecords])
 
-  // 5. 6 Months Trend Graph data
+  // 5. 6 Months Trend Graph data (uses last 6 months, respects plan + state filters only)
   const trendData = useMemo(() => {
-    // Get last 6 months list
     const last6Months = months.slice(-6)
-    
-    // Group plans by month and subcategory
     const matrix: Record<string, Record<string, number>> = {}
     for (const m of last6Months) {
       matrix[m] = {}
-      for (const s of subcats) {
-        matrix[m][s] = 0
-      }
+      for (const s of subcats) matrix[m][s] = 0
     }
-
     for (const r of data) {
-      if (last6Months.includes(r.month)) {
-        if (selectedPlan !== 'all' && r.plan !== selectedPlan) continue
-        if (selectedState && r.state !== selectedState) continue
-        matrix[r.month][r.subcat] = (matrix[r.month][r.subcat] || 0) + r.plans_sold
-      }
+      if (!last6Months.includes(r.month)) continue
+      if (activePlan && r.plan !== activePlan) continue
+      if (effectiveState && r.state !== effectiveState) continue
+      matrix[r.month][r.subcat] = (matrix[r.month][r.subcat] || 0) + r.plans_sold
     }
-
     return last6Months.map(m => {
       const row: Record<string, any> = { month: m }
-      for (const s of subcats) {
-        row[s] = matrix[m][s]
-      }
+      for (const s of subcats) row[s] = matrix[m][s]
       return row
     })
-  }, [data, months, subcats, selectedPlan, selectedState])
+  }, [data, months, subcats, activePlan, effectiveState])
 
-  // 6. Radar Graph data (Plan Type distribution by Subcategory)
+  // 6. Radar Graph — theta = product subcategories, traces = plan types
+  const RADAR_PLAN_TYPES = ['SP', 'ADLD', 'COMBO', 'EW']
   const radarTraces = useMemo(() => {
-    const radarPlanTypes = ['SP', 'ADLD', 'COMBO', 'EW']
-    
-    // Group plans by subcat and planType
+    // For each plan type, compute how many plans were sold in each subcategory
     const matrix: Record<string, Record<string, number>> = {}
-    for (const s of subcats) {
-      matrix[s] = {}
-      for (const p of radarPlanTypes) {
-        matrix[s][p] = 0
-      }
+    for (const p of RADAR_PLAN_TYPES) {
+      matrix[p] = {}
+      for (const s of subcats) matrix[p][s] = 0
     }
 
-    // Accumulate filtered by month/state
     for (const r of data) {
-      if (selectedMonth !== 'all' && r.month !== selectedMonth) continue
-      if (selectedState && r.state !== selectedState) continue
-      if (matrix[r.subcat] && r.plan in matrix[r.subcat]) {
-        matrix[r.subcat][r.plan] += r.plans_sold
+      if (activeMonth && activeMonth !== 'all' && r.month !== activeMonth) continue
+      if (effectiveState && r.state !== effectiveState) continue
+      if (matrix[r.plan] && r.subcat in matrix[r.plan]) {
+        matrix[r.plan][r.subcat] += r.plans_sold
       }
     }
 
-    return subcats.map((s, idx) => {
-      const rValues = radarPlanTypes.map(p => matrix[s][p])
-      // Plotly polar graphs require closed loop
-      const closedR = [...rValues, rValues[0]]
-      const closedTheta = [...radarPlanTypes, radarPlanTypes[0]]
+    const planColors: Record<string, string> = {
+      SP:    '#3b82f6',
+      ADLD:  '#8b5cf6',
+      COMBO: '#10b981',
+      EW:    '#f59e0b',
+    }
 
-      const colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ec4899']
-      
+    return RADAR_PLAN_TYPES.map(p => {
+      const rValues = subcats.map(s => matrix[p][s] ?? 0)
+      const closedR = [...rValues, rValues[0]]
+      const closedTheta = [...subcats, subcats[0]]
       return {
         type: 'scatterpolar',
         r: closedR,
         theta: closedTheta,
         fill: 'toself',
-        name: s,
-        line: { color: colors[idx % colors.length], width: 1.5 },
+        name: p,
+        line: { color: planColors[p] ?? '#64748b', width: 2 },
         marker: { size: 4 },
-        opacity: 0.6
+        opacity: 0.65,
       }
     })
-  }, [data, subcats, selectedMonth, selectedState])
+  }, [data, subcats, activeMonth, effectiveState])
 
   // 7. Heatmap State Metrics
   const geoStateNames = useMemo<string[]>(() => {
     if (!geojson) return []
-    // Detect feature ID key dynamically
     let pk = 'NAME_1'
     const props = geojson.features?.[0]?.properties ?? {}
     for (const k of ['NAME_1', 'ST_NM', 'name', 'Name', 'STATE', 'statename']) {
-      if (props[k] !== undefined) {
-        pk = k
-        break
-      }
+      if (props[k] !== undefined) { pk = k; break }
     }
     return geojson.features.map((f: any) => f.properties[pk] as string).filter(Boolean)
   }, [geojson])
 
   const heatmapTraces = useMemo(() => {
     if (!geojson) return []
-
-    // Sum plans by state
     const statePlans: Record<string, number> = {}
     for (const r of filteredRecords) {
       statePlans[r.state] = (statePlans[r.state] || 0) + r.plans_sold
     }
 
-    // Map database states to GeoJSON states
     const locations: string[] = []
     const zValues: number[] = []
     const hoverTexts: string[] = []
-
     const matchedStates = new Set<string>()
 
     for (const [ourState, qty] of Object.entries(statePlans)) {
@@ -373,9 +347,7 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
       }
     }
 
-    // Add unmapped states as light gray background
     const unmatched = geoStateNames.filter(n => !matchedStates.has(n))
-
     const bgTrace = {
       type: 'choropleth',
       geojson,
@@ -385,9 +357,8 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
       colorscale: [[0, '#f1f5f9'], [1, '#f1f5f9']],
       showscale: false,
       hovertemplate: '<b>%{location}</b><br>No active sales<extra></extra>',
-      marker: { line: { color: '#ffffff', width: 0.8 } }
+      marker: { line: { color: '#ffffff', width: 0.8 } },
     }
-
     const valueTrace = {
       type: 'choropleth',
       geojson,
@@ -397,23 +368,17 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
       text: hoverTexts,
       hovertemplate: '%{text}<extra></extra>',
       colorscale: [
-        [0, '#eff6ff'],
+        [0,   '#eff6ff'],
         [0.2, '#bfdbfe'],
         [0.4, '#60a5fa'],
         [0.6, '#3b82f6'],
         [0.8, '#1d4ed8'],
-        [1.0, '#1e3a8a']
+        [1.0, '#1e3a8a'],
       ],
-      colorbar: {
-        thickness: 10,
-        len: 0.5,
-        tickfont: { size: 9, color: '#64748b' },
-        bgcolor: 'rgba(0,0,0,0)'
-      },
-      marker: { line: { color: '#ffffff', width: 0.8 } }
+      colorbar: { thickness: 10, len: 0.5, tickfont: { size: 9, color: '#64748b' }, bgcolor: 'rgba(0,0,0,0)' },
+      marker: { line: { color: '#ffffff', width: 0.8 } },
     }
 
-    // Optional ring for currently selected state
     let ringTrace = null
     if (selectedState) {
       const geoSel = matchGeoName(selectedState, geoStateNames)
@@ -427,7 +392,7 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
           colorscale: [[0, 'rgba(0,0,0,0)'], [1, 'rgba(0,0,0,0)']],
           showscale: false,
           hoverinfo: 'skip',
-          marker: { line: { color: '#ef4444', width: 2 } }
+          marker: { line: { color: '#ef4444', width: 2 } },
         }
       }
     }
@@ -435,21 +400,23 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
     return ringTrace ? [bgTrace, valueTrace, ringTrace] : [bgTrace, valueTrace]
   }, [geojson, geoStateNames, filteredRecords, selectedState])
 
-  // 8. Detailed Table data
+  // 8. Detailed Table — State | City | Store | Plans | Model | Subcategory
   const tableRows = useMemo(() => {
-    // Aggregate by model/subcat/plan
-    const aggs: Record<string, { model: string; subcat: string; plan: string; plans_sold: number; revenue: number }> = {}
-    
+    // Aggregate by (state, city, store, model, subcat)
+    const aggs: Record<string, {
+      state: string; city: string; store: string;
+      model: string; subcat: string;
+      plans_sold: number; revenue: number
+    }> = {}
+
     for (const r of filteredRecords) {
-      const key = `${r.model}|||${r.subcat}|||${r.plan}`
+      const abbr = abbreviateModel(r.model)
+      // city & store fields: API may not provide them; gracefully fallback
+      const city = (r as any).city ?? ''
+      const store = (r as any).store ?? ''
+      const key = `${r.state}|||${city}|||${store}|||${abbr}|||${r.subcat}`
       if (!aggs[key]) {
-        aggs[key] = {
-          model: r.model,
-          subcat: r.subcat,
-          plan: r.plan,
-          plans_sold: 0,
-          revenue: 0.0
-        }
+        aggs[key] = { state: r.state, city, store, model: abbr, subcat: r.subcat, plans_sold: 0, revenue: 0 }
       }
       aggs[key].plans_sold += r.plans_sold
       aggs[key].revenue += r.revenue
@@ -457,25 +424,24 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
 
     let rows = Object.values(aggs)
 
-    // Search query filter
     const q = searchQuery.toLowerCase().trim()
     if (q) {
-      rows = rows.filter(r => 
-        r.model.toLowerCase().includes(q) || 
-        r.subcat.toLowerCase().includes(q)
+      rows = rows.filter(r =>
+        r.model.toLowerCase().includes(q) ||
+        r.subcat.toLowerCase().includes(q) ||
+        r.state.toLowerCase().includes(q) ||
+        r.city.toLowerCase().includes(q) ||
+        r.store.toLowerCase().includes(q)
       )
     }
 
-    // Sorting
     rows.sort((a, b) => {
-      let valA = a[sortKey]
-      let valB = b[sortKey]
-      
+      const valA = (a as any)[sortKey]
+      const valB = (b as any)[sortKey]
       if (typeof valA === 'string') {
-        return sortDir === 'asc' ? valA.localeCompare(valB as string) : (valB as string).localeCompare(valA)
-      } else {
-        return sortDir === 'asc' ? (valA as number) - (valB as number) : (valB as number) - (valA as number)
+        return sortDir === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA)
       }
+      return sortDir === 'asc' ? valA - valB : valB - valA
     })
 
     return rows
@@ -488,7 +454,7 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
 
   const totalPages = Math.ceil(tableRows.length / PAGE_SIZE) || 1
 
-  const handleSort = (key: any) => {
+  const handleSort = (key: typeof sortKey) => {
     if (sortKey === key) {
       setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     } else {
@@ -498,7 +464,6 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
     setPage(1)
   }
 
-  // Handle heatmap click to filter table/state
   const handleMapClick = (evt: any) => {
     const pt = evt?.points?.[0]
     if (!pt) return
@@ -527,70 +492,23 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
     )
   }
 
+  const CHART_COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ec4899', '#06b6d4', '#f97316', '#84cc16', '#a855f7']
+
   return (
     <div className="space-y-6">
-      
-      {/* Filters Toolbar */}
-      <div className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm flex flex-wrap gap-4 items-center justify-between">
-        <div className="flex items-center gap-2 text-xs font-semibold text-gray-700">
-          <Filter className="h-3.5 w-3.5 text-gray-500" />
-          <span>INSIGHT FILTERS</span>
+
+      {/* Active Filter Badge (map click state) */}
+      {selectedState && (
+        <div className="flex items-center gap-2 text-xs">
+          <MapPin className="h-3.5 w-3.5 text-blue-500" />
+          <span className="text-gray-600 font-medium">Filtered by state:</span>
+          <span className="bg-blue-50 border border-blue-200 text-blue-700 px-2.5 py-0.5 rounded-full font-semibold">{selectedState}</span>
+          <button
+            onClick={() => setSelectedState(null)}
+            className="text-gray-400 hover:text-red-500 transition-colors text-[11px]"
+          >✕ Clear</button>
         </div>
-        
-        <div className="flex items-center gap-3 flex-wrap">
-          
-          {/* Month */}
-          <div className="flex items-center gap-1.5">
-            <Calendar className="h-3.5 w-3.5 text-gray-400" />
-            <Select value={selectedMonth} onValueChange={v => { setSelectedMonth(v); setPage(1); }}>
-              <SelectTrigger className="h-8 w-36 text-xs bg-gray-50 font-medium">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Months</SelectItem>
-                {months.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Subcat */}
-          <div className="flex items-center gap-1.5">
-            <Layers className="h-3.5 w-3.5 text-gray-400" />
-            <Select value={selectedSubcat} onValueChange={v => { setSelectedSubcat(v); setPage(1); }}>
-              <SelectTrigger className="h-8 w-44 text-xs bg-gray-50 font-medium">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Subcategories</SelectItem>
-                {subcats.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Plan Type */}
-          <div className="flex items-center gap-1.5">
-            <Activity className="h-3.5 w-3.5 text-gray-400" />
-            <Select value={selectedPlan} onValueChange={v => { setSelectedPlan(v); setPage(1); }}>
-              <SelectTrigger className="h-8 w-36 text-xs bg-gray-50 font-medium">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Plan Types</SelectItem>
-                {plans.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* State Filter Indicator */}
-          {selectedState && (
-            <div className="flex items-center gap-1 bg-blue-50 text-blue-700 text-xs px-2.5 py-1 rounded-full border border-blue-200">
-              <MapPin className="h-3 w-3 shrink-0" />
-              <span>{selectedState}</span>
-              <button onClick={() => setSelectedState(null)} className="ml-1 text-[10px] text-blue-500 hover:text-blue-700">✕</button>
-            </div>
-          )}
-        </div>
-      </div>
+      )}
 
       {/* KPI Row */}
       <motion.div
@@ -606,14 +524,14 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
           </div>
           <div className="mt-3">
             <h3 className="text-2xl font-bold text-gray-900">{kpis.totalPlans.toLocaleString()}</h3>
-            <p className="text-[10px] text-gray-400 mt-1">{selectedMonth === 'all' ? 'Across all months' : `For ${selectedMonth}`}</p>
+            <p className="text-[10px] text-gray-400 mt-1">{activeMonth && activeMonth !== 'all' ? `For ${activeMonth}` : 'Across all months'}</p>
           </div>
         </motion.div>
 
         <motion.div variants={cardItem} className="rounded-xl bg-white border border-gray-100 shadow-sm p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <p className="text-[10px] font-semibold tracking-wider text-gray-500 uppercase">Top Subcategory</p>
-            <Layers className="h-4 w-4 text-emerald-500" />
+            <Activity className="h-4 w-4 text-emerald-500" />
           </div>
           <div className="mt-3">
             <h3 className="text-lg font-bold text-gray-900 truncate">{kpis.topSubcat}</h3>
@@ -644,59 +562,55 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
         </motion.div>
       </motion.div>
 
-      {/* Visualizations Row 1: Heatmap + Radar */}
+      {/* ── Row 1: Trend (left) + Radar (right) ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        
-        {/* Heatmap */}
+
+        {/* Past 6 Months Trend */}
         <div className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm">
-          <div className="flex items-center justify-between border-b border-gray-50 pb-3 mb-4">
-            <div>
-              <h3 className="text-sm font-bold text-gray-900">Geographical Performance Heatmap</h3>
-              <p className="text-[10px] text-gray-400 mt-0.5">Plan units sold state-wise. Click a state to filter down metrics.</p>
-            </div>
-            {selectedState && (
-              <button
-                onClick={() => setSelectedState(null)}
-                className="text-[10px] font-medium px-2 py-0.5 rounded bg-blue-50 text-blue-600 hover:bg-blue-100"
-              >
-                Clear State filter
-              </button>
-            )}
+          <div className="border-b border-gray-50 pb-3 mb-4">
+            <h3 className="text-sm font-bold text-gray-900">Past 6 Months Trend — Plan Category Sales</h3>
+            <p className="text-[10px] text-gray-400 mt-0.5">Plan sales volume trend split by product subcategories.</p>
           </div>
-          
-          <div className="h-[420px] flex items-center justify-center relative">
-            {geoLoading ? (
-              <div className="text-xs text-gray-400">Loading map...</div>
-            ) : heatmapTraces.length === 0 ? (
-              <div className="text-xs text-gray-400">No geographical matches for filters.</div>
+          <div className="h-[340px]">
+            {trendData.length === 0 ? (
+              <div className="flex items-center justify-center h-full text-xs text-gray-400">
+                No historical data in scope.
+              </div>
             ) : (
               <Plot
-                data={heatmapTraces as any}
+                data={subcats.map((s, idx) => ({
+                  type: 'bar',
+                  name: s,
+                  x: trendData.map(d => d.month),
+                  y: trendData.map(d => d[s] ?? 0),
+                  marker: { color: CHART_COLORS[idx % CHART_COLORS.length] },
+                }))}
                 layout={{
+                  barmode: 'stack',
                   paper_bgcolor: 'rgba(0,0,0,0)',
-                  plot_bgcolor:  'rgba(0,0,0,0)',
+                  plot_bgcolor: 'rgba(0,0,0,0)',
                   font: { family: 'Inter, sans-serif', size: 10 },
-                  geo: GEO_LAYOUT,
-                  margin: { l: 0, r: 0, t: 0, b: 0 },
-                  height: 420
+                  margin: { l: 40, r: 10, t: 10, b: 40 },
+                  height: 340,
+                  xaxis: { gridcolor: '#f1f5f9', tickfont: { size: 9 } },
+                  yaxis: { gridcolor: '#f1f5f9', tickfont: { size: 9 } },
+                  legend: { orientation: 'h', y: -0.18, font: { size: 9 } },
                 } as any}
                 config={{ displayModeBar: false, responsive: true }}
-                onClick={handleMapClick}
                 style={{ width: '100%', height: '100%' }}
               />
             )}
           </div>
         </div>
 
-        {/* Radar Graph */}
+        {/* Radar Graph — Plan Types across Subcategories */}
         <div className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm">
           <div className="border-b border-gray-50 pb-3 mb-4">
-            <h3 className="text-sm font-bold text-gray-900">Plan Type Radar Distribution</h3>
-            <p className="text-[10px] text-gray-400 mt-0.5">Compares distribution of plan types sold under each subcategory.</p>
+            <h3 className="text-sm font-bold text-gray-900">Subcategory Distribution by Plan Type</h3>
+            <p className="text-[10px] text-gray-400 mt-0.5">How each plan type (SP, ADLD, COMBO, EW) distributes across product subcategories.</p>
           </div>
-          
-          <div className="h-[420px]">
-            {radarTraces.length === 0 ? (
+          <div className="h-[340px]">
+            {radarTraces.length === 0 || subcats.length === 0 ? (
               <div className="flex items-center justify-center h-full text-xs text-gray-400">
                 No data available for filters.
               </div>
@@ -705,15 +619,15 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
                 data={radarTraces as any}
                 layout={{
                   paper_bgcolor: 'rgba(0,0,0,0)',
-                  plot_bgcolor:  'rgba(0,0,0,0)',
+                  plot_bgcolor: 'rgba(0,0,0,0)',
                   font: { family: 'Inter, sans-serif', size: 10 },
                   polar: {
                     radialaxis: { visible: true, showticklabels: true, tickfont: { size: 8 } },
-                    angularaxis: { tickfont: { size: 9, color: '#64748b' } }
+                    angularaxis: { tickfont: { size: 9, color: '#64748b' } },
                   },
                   margin: { l: 40, r: 40, t: 20, b: 40 },
-                  height: 420,
-                  legend: { orientation: 'h', y: -0.1 }
+                  height: 340,
+                  legend: { orientation: 'h', y: -0.12, font: { size: 9 } },
                 } as any}
                 config={{ displayModeBar: false, responsive: true }}
                 style={{ width: '100%', height: '100%' }}
@@ -723,66 +637,63 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
         </div>
       </div>
 
-      {/* Visualizations Row 2: 6 Months Trend */}
+      {/* ── Row 2: Indian Heatmap (full width) ── */}
       <div className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm">
-        <div className="border-b border-gray-50 pb-3 mb-4">
-          <h3 className="text-sm font-bold text-gray-900">Past 6 Months Trend — Plan Category Sales</h3>
-          <p className="text-[10px] text-gray-400 mt-0.5">Plan Sales volume trend split by product subcategories.</p>
+        <div className="flex items-center justify-between border-b border-gray-50 pb-3 mb-4">
+          <div>
+            <h3 className="text-sm font-bold text-gray-900">Geographical Performance Heatmap</h3>
+            <p className="text-[10px] text-gray-400 mt-0.5">Plan units sold state-wise. Click a state to filter the table below.</p>
+          </div>
+          {selectedState && (
+            <button
+              onClick={() => setSelectedState(null)}
+              className="text-[10px] font-medium px-2 py-0.5 rounded bg-blue-50 text-blue-600 hover:bg-blue-100"
+            >
+              Clear State filter
+            </button>
+          )}
         </div>
-
-        <div className="h-[300px]">
-          {trendData.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-xs text-gray-400">
-              No historical data in scope.
-            </div>
+        <div className="h-[480px] flex items-center justify-center relative">
+          {geoLoading ? (
+            <div className="text-xs text-gray-400">Loading map...</div>
+          ) : heatmapTraces.length === 0 ? (
+            <div className="text-xs text-gray-400">No geographical matches for filters.</div>
           ) : (
             <Plot
-              data={subcats.map((s, idx) => {
-                const colors = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ec4899']
-                return {
-                  type: 'bar',
-                  name: s,
-                  x: trendData.map(d => d.month),
-                  y: trendData.map(d => d[s] ?? 0),
-                  marker: { color: colors[idx % colors.length] }
-                }
-              })}
+              data={heatmapTraces as any}
               layout={{
-                barmode: 'stack',
                 paper_bgcolor: 'rgba(0,0,0,0)',
-                plot_bgcolor:  'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(0,0,0,0)',
                 font: { family: 'Inter, sans-serif', size: 10 },
-                margin: { l: 40, r: 20, t: 10, b: 40 },
-                height: 300,
-                xaxis: { gridcolor: '#f1f5f9', tickfont: { size: 9 } },
-                yaxis: { gridcolor: '#f1f5f9', tickfont: { size: 9 } },
-                legend: { orientation: 'h', y: -0.15 }
+                geo: GEO_LAYOUT,
+                margin: { l: 0, r: 0, t: 0, b: 0 },
+                height: 480,
               } as any}
               config={{ displayModeBar: false, responsive: true }}
+              onClick={handleMapClick}
               style={{ width: '100%', height: '100%' }}
             />
           )}
         </div>
       </div>
 
-      {/* Model List Table */}
+      {/* ── Row 3: Drilldown Table ── */}
       <div className="bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden">
-        
+
         {/* Table Header & Search */}
         <div className="px-5 py-4 border-b border-gray-50 flex flex-wrap gap-4 items-center justify-between bg-gray-50/50">
           <div>
-            <h3 className="text-sm font-bold text-gray-900">Detailed Sales Performance List</h3>
-            <p className="text-[10px] text-gray-500 mt-0.5">Granular model performance under the active filters.</p>
+            <h3 className="text-sm font-bold text-gray-900">Detailed Sales Drilldown</h3>
+            <p className="text-[10px] text-gray-500 mt-0.5">State → City → Store → Plans → Model → Subcategory. Click column headers to sort.</p>
           </div>
-          
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-gray-400" />
             <input
               type="text"
-              placeholder="Search model name..."
+              placeholder="Search state, model, subcat..."
               value={searchQuery}
-              onChange={e => { setSearchQuery(e.target.value); setPage(1); }}
-              className="pl-8 pr-4 py-1.5 text-xs bg-white border border-gray-200 rounded-lg w-56 focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+              onChange={e => { setSearchQuery(e.target.value); setPage(1) }}
+              className="pl-8 pr-4 py-1.5 text-xs bg-white border border-gray-200 rounded-lg w-64 focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
             />
           </div>
         </div>
@@ -792,83 +703,69 @@ export default function ModelInsights({ filters: globalFilters }: { filters: any
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50 text-[10px] font-bold text-gray-500 uppercase tracking-wider">
-                <th className="px-6 py-3 cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('model')}>
-                  Model {sortKey === 'model' && (sortDir === 'asc' ? '▲' : '▼')}
+                <th className="px-5 py-3 cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('state')}>
+                  State {sortKey === 'state' && (sortDir === 'asc' ? '▲' : '▼')}
                 </th>
-                <th className="px-6 py-3 cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('subcat')}>
-                  Subcategory {sortKey === 'subcat' && (sortDir === 'asc' ? '▲' : '▼')}
+                <th className="px-5 py-3 cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('city')}>
+                  City {sortKey === 'city' && (sortDir === 'asc' ? '▲' : '▼')}
                 </th>
-                <th className="px-6 py-3 cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('plan')}>
-                  Plan Type {sortKey === 'plan' && (sortDir === 'asc' ? '▲' : '▼')}
+                <th className="px-5 py-3 cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('store')}>
+                  Store {sortKey === 'store' && (sortDir === 'asc' ? '▲' : '▼')}
                 </th>
-                <th className="px-6 py-3 text-right cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('plans_sold')}>
-                  Plans Sold {sortKey === 'plans_sold' && (sortDir === 'asc' ? '▲' : '▼')}
+                <th className="px-5 py-3 text-right cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('plans_sold')}>
+                  Plans {sortKey === 'plans_sold' && (sortDir === 'asc' ? '▲' : '▼')}
                 </th>
-                <th className="px-6 py-3 text-right cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('revenue')}>
-                  Revenue {sortKey === 'revenue' && (sortDir === 'asc' ? '▲' : '▼')}
+                <th className="px-5 py-3 cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('model')}>
+                  Model Name {sortKey === 'model' && (sortDir === 'asc' ? '▲' : '▼')}
                 </th>
-                <th className="px-6 py-3 text-right font-bold uppercase">Avg ticket price</th>
+                <th className="px-5 py-3 cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('subcat')}>
+                  Product Subcategory {sortKey === 'subcat' && (sortDir === 'asc' ? '▲' : '▼')}
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 text-xs text-gray-700">
               {paginatedRows.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-10 text-center text-gray-400">
-                    No models found matching the search query or filters.
+                    No records match the current filters.
                   </td>
                 </tr>
               ) : (
-                paginatedRows.map((r, idx) => {
-                  const avgPrice = r.plans_sold > 0 ? r.revenue / r.plans_sold : 0
-                  return (
-                    <tr key={idx} className="hover:bg-gray-50/70 transition-colors font-medium">
-                      <td className="px-6 py-3.5 text-gray-900 font-semibold">{r.model}</td>
-                      <td className="px-6 py-3.5 text-gray-500">{r.subcat}</td>
-                      <td className="px-6 py-3.5">
-                        <span className={cn(
-                          "px-2 py-0.5 rounded text-[9px] font-bold border",
-                          r.plan === 'SP' && "bg-blue-50 text-blue-700 border-blue-200",
-                          r.plan === 'ADLD' && "bg-purple-50 text-purple-700 border-purple-200",
-                          r.plan === 'COMBO' && "bg-emerald-50 text-emerald-700 border-emerald-200",
-                          r.plan === 'EW' && "bg-amber-50 text-amber-700 border-amber-200"
-                        )}>
-                          {r.plan}
-                        </span>
-                      </td>
-                      <td className="px-6 py-3.5 text-right font-bold text-gray-900">{r.plans_sold.toLocaleString()}</td>
-                      <td className="px-6 py-3.5 text-right text-gray-800 font-semibold">{fmtInr(r.revenue)}</td>
-                      <td className="px-6 py-3.5 text-right text-gray-500 font-semibold">{fmtInr(avgPrice)}</td>
-                    </tr>
-                  )
-                })
+                paginatedRows.map((r, idx) => (
+                  <tr key={idx} className="hover:bg-gray-50/70 transition-colors font-medium">
+                    <td className="px-5 py-3.5 text-gray-700 font-semibold">{r.state || '—'}</td>
+                    <td className="px-5 py-3.5 text-gray-500">{r.city || '—'}</td>
+                    <td className="px-5 py-3.5 text-gray-500 max-w-[160px] truncate" title={r.store}>{r.store || '—'}</td>
+                    <td className="px-5 py-3.5 text-right font-bold text-gray-900">{r.plans_sold.toLocaleString()}</td>
+                    <td className="px-5 py-3.5 text-gray-900 font-semibold">{r.model}</td>
+                    <td className="px-5 py-3.5">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-100">
+                        {r.subcat}
+                      </span>
+                    </td>
+                  </tr>
+                ))
               )}
             </tbody>
           </table>
         </div>
 
-        {/* Table Pagination */}
+        {/* Pagination */}
         {totalPages > 1 && (
           <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500 bg-gray-50/50">
             <span>Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, tableRows.length)} of {tableRows.length} entries</span>
-            
             <div className="flex items-center gap-1">
               <button
                 disabled={page === 1}
                 onClick={() => setPage(p => p - 1)}
                 className="px-2.5 py-1 rounded border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                Previous
-              </button>
-              <span className="px-3 py-1 font-semibold text-gray-700 bg-gray-100 rounded">
-                {page} / {totalPages}
-              </span>
+              >Previous</button>
+              <span className="px-3 py-1 font-semibold text-gray-700 bg-gray-100 rounded">{page} / {totalPages}</span>
               <button
                 disabled={page === totalPages}
                 onClick={() => setPage(p => p + 1)}
                 className="px-2.5 py-1 rounded border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                Next
-              </button>
+              >Next</button>
             </div>
           </div>
         )}
