@@ -863,6 +863,109 @@ def delete_attach(retailer: str, month: str):
 # ── Dashboard data ────────────────────────────────────────────────────────────
 
 
+@app.get("/api/model-insights")
+async def get_model_insights(retailer: str = ""):
+    """Return aggregated model and product subcategory sales for Samsung brand.
+    
+    Filters by Croma, Vijay Sales, or other retailer channels if specified.
+    """
+    db = get_db()
+    if db is None:
+        return []
+        
+    # 1. Determine matching stores for the retailer
+    store_filter = {}
+    if retailer:
+        r_lower = retailer.lower()
+        if r_lower == "croma":
+            store_filter["storeName"] = {"$regex": "croma", "$options": "i"}
+        elif r_lower == "vijaysales":
+            store_filter["storeName"] = {"$regex": "^vs\\b|^vijay\\s*sales\\b", "$options": "i"}
+        elif r_lower == "reliance":
+            store_filter["storeName"] = {"$regex": "reliance", "$options": "i"}
+        elif r_lower == "hotspot":
+            store_filter["storeName"] = {"$regex": "hotspot", "$options": "i"}
+        elif r_lower == "kore":
+            store_filter["storeName"] = {"$regex": "kore", "$options": "i"}
+        else:
+            store_filter["storeName"] = {"$regex": retailer, "$options": "i"}
+            
+    stores_cursor = db["Store"].find(store_filter, {"_id": 1, "state": 1})
+    stores_list = await stores_cursor.to_list(None)
+    store_state_map = {str(s["_id"]): s.get("state", "Unknown") for s in stores_list}
+    store_ids = list(store_state_map.keys())
+    
+    if not store_ids:
+        return []
+        
+    # 2. Get ProductSubCategory names mapping
+    psc_cursor = db["ProductSubCategory"].find()
+    psc_docs = await psc_cursor.to_list(None)
+    psc_names = {str(psc["_id"]): psc["name"] for psc in psc_docs}
+    
+    # 3. Retrieve Samsung brand granular sales records
+    sales_cursor = db["SalesRecord"].find({
+        "storeId": {"$in": store_ids},
+        "brandId": "brand_002"
+    })
+    sales_docs = await sales_cursor.to_list(None)
+    
+    _MONTH_MAP = {
+        1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+        7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
+    }
+    
+    # 4. Group metrics in Python
+    aggregated = {}
+    for d in sales_docs:
+        store_id = str(d.get("storeId", ""))
+        state = store_state_map.get(store_id, "Unknown")
+        subcat_id = d.get("productSubCategoryId")
+        subcat = psc_names.get(subcat_id, "Unknown") if subcat_id else "Unknown"
+        model = d.get("modelName") or "Unknown"
+        plan = d.get("planType") or "Unknown"
+        
+        # Skip monthly summary NA records from model analysis
+        if plan.upper() == "NA":
+            continue
+            
+        year = d.get("year", 2026)
+        
+        monthly = d.get("monthlySales", [])
+        for m_data in monthly:
+            month_num = m_data.get("month")
+            if not month_num:
+                continue
+            m_abbr = _MONTH_MAP.get(int(month_num))
+            if not m_abbr:
+                continue
+            month_label = f"{m_abbr}-{year}"
+            
+            plans_sold = int(m_data.get("planSales", 0) or 0)
+            revenue = float(m_data.get("revenue", 0) or 0)
+            
+            if plans_sold > 0 or revenue > 0:
+                key = (month_label, state, subcat, model, plan.strip().upper())
+                if key not in aggregated:
+                    aggregated[key] = {"plans_sold": 0, "revenue": 0.0}
+                aggregated[key]["plans_sold"] += plans_sold
+                aggregated[key]["revenue"] += revenue
+                
+    response_data = []
+    for (month, state, subcat, model, plan), metrics in aggregated.items():
+        response_data.append({
+            "month": month,
+            "state": state,
+            "subcat": subcat,
+            "model": model,
+            "plan": plan,
+            "plans_sold": metrics["plans_sold"],
+            "revenue": metrics["revenue"]
+        })
+        
+    return response_data
+
+
 @app.get("/api/data")
 async def get_dashboard_data(retailer: str = ""):
     """Return merged dashboard payload from MongoDB.

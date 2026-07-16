@@ -18,6 +18,7 @@ import TargetTrackerPage from './pages/TargetTrackerPage'
 import ExecutiveOverview from './components/tabs/ExecutiveOverview'
 import StoreJourneyMap from './components/tabs/StoreJourneyMap'
 import PlanLevelInsight from './components/tabs/PlanLevelInsight'
+import ModelInsights from './components/tabs/ModelInsights'
 import StoreDeepDive from './components/tabs/StoreDeepDive'
 import TargetCommandCenter from './components/tabs/TargetCommandCenter'
 import StateJourneyAnalysis from './components/tabs/StateJourneyAnalysis'
@@ -36,6 +37,7 @@ import { ScreenshotButton } from './components/ScreenshotButton'
 const TABS = [
   { id: 'executive',      label: 'Overview' },
   { id: 'plan_insights',  label: 'Plan Insights' },
+  { id: 'model_insights', label: 'Model Insights' },
   { id: 'attach_perf',   label: 'Attach Performance' },
   { id: 'state-journey', label: 'State Level Performance' },
   { id: 'store-journey', label: 'Store Level Insight' },
@@ -515,9 +517,10 @@ export default function App() {
 
   function renderTab() {
     switch (activeTab) {
-      case 'executive':     return <ExecutiveOverview filters={filters} />
-      case 'plan_insights': return <PlanLevelInsight filters={filters} />
-      case 'attach_perf':  return <AttachPerformance filters={filters} />
+      case 'executive':      return <ExecutiveOverview filters={filters} />
+      case 'plan_insights':  return <PlanLevelInsight filters={filters} />
+      case 'model_insights': return <ModelInsights filters={filters} />
+      case 'attach_perf':    return <AttachPerformance filters={filters} />
       case 'state-journey': return <StateJourneyAnalysis filters={filters} />
       case 'store-journey': return <StoreJourneyMap filters={filters} onNavigateToStore={handleNavigateToStore} initialCategory={journeyPrefilter} />
       default:              return <TabPlaceholder label={currentTab.label} filters={filters} />

@@ -284,3 +284,18 @@ export const getAnalysis = (sheet: string) =>
     bar_charts: Array<{ title: string; x: string[]; y: number[]; x_label: string; y_label: string }>
     distributions: Array<{ title: string; column: string; data: number[] }>
   }>(`/api/analysis/${encodeURIComponent(sheet)}`)
+
+// ── Model Insights ────────────────────────────────────────────────────────────
+
+export interface ModelInsightRecord {
+  month: string
+  state: string
+  subcat: string
+  model: string
+  plan: string
+  plans_sold: number
+  revenue: number
+}
+
+export const getModelInsights = (retailer?: string) =>
+  api.get<ModelInsightRecord[]>('/api/model-insights', { params: { retailer } })
