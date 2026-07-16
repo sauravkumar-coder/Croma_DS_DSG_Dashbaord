@@ -1112,8 +1112,12 @@ async def get_dashboard_data(retailer: str = ""):
                     if subcat_name:
                         subcat_revenue[subcat_name] = subcat_revenue.get(subcat_name, 0.0) + rev_val
         
+        is_croma_or_vs = "croma" in store_name.lower() or bool(re.search(r"^vs\b|^vijay\s*sales\b", store_name.lower()))
         for m in monthly_sales.keys():
-            plans = monthly_plans_na.get(m, 0) or monthly_plans_granular.get(m, 0)
+            if is_croma_or_vs:
+                plans = monthly_plans_na.get(m, 0)
+            else:
+                plans = monthly_plans_na.get(m, 0) or monthly_plans_granular.get(m, 0)
             monthly_plans[m] = plans
             devices = monthly_main.get(m, 0)
             if devices > 0:
